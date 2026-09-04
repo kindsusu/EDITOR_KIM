@@ -154,6 +154,14 @@ const server = http.createServer(async (req, res) => {
       entry.dirty = true;
       return json(res, 200, { results, fallbackFont: results.some((r) => r.fallbackFont), ...stacks(entry) });
     }
+    if (url.pathname === '/api/pdf/group' && req.method === 'POST') { // 상자 묶기(id 생략→새 그룹) / 풀기(id:null)
+      const { name, i, idxs, id } = JSON.parse(await body(req));
+      const entry = await getPdfDoc(name);
+      snapshot(entry, i);
+      const r = entry.doc.setGroup(i, idxs, id === undefined ? undefined : id);
+      entry.dirty = true;
+      return json(res, 200, { ...r, ...stacks(entry) });
+    }
     if (url.pathname === '/api/pdf/fit' && req.method === 'POST') { // 폭 맞춤 편집: wrap(줄바꿈) / shrink(축소) / none
       const { name, i, idx, text, maxWidth, mode } = JSON.parse(await body(req));
       const entry = await getPdfDoc(name);

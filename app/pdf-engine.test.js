@@ -254,7 +254,18 @@ const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     assert.ok(L[1].bounds.y1 < t2.bounds.y0 + 1 && L[2].bounds.y1 < L[1].bounds.y0 + 1, '각 줄이 앞 줄 아래에');
     assert.ok(Math.abs(L[1].bounds.x0 - L[0].bounds.x0) < 1, '왼쪽 정렬 유지');
     assert.ok(!d.pageText(0).includes('�'), '□ 없음');
-    console.log('줄바꿈 편집 OK', L.map((o) => `${o.text}@y${o.bounds.y0.toFixed(1)}`).join(' | '));
+    assert.ok(r.group && L.every((o) => o.group === r.group), '줄바꿈 줄들은 같은 그룹 마크');
+    assert.ok(after.filter((o) => o.group === r.group).length === 3, '그룹은 정확히 3개 객체');
+    // 그룹 마크 저장·재열기 유지, 사용자 그룹 설정/해제
+    const d2 = await open(d.save());
+    assert.strictEqual(d2.objects(0).filter((o) => o.group === r.group).length, 3, '저장 후에도 그룹 유지');
+    const g = d2.setGroup(0, [0, 1]); assert.ok(g.ok && g.id && g.count === 2);
+    assert.deepStrictEqual(d2.objects(0).slice(0, 2).map((o) => o.group), [g.id, g.id], '사용자 그룹 설정');
+    d2.setGroup(0, [0, 1], null);
+    assert.deepStrictEqual(d2.objects(0).slice(0, 2).map((o) => o.group), [null, null], '그룹 해제');
+    const s1 = d2.setText(0, 2, 'single'); assert.strictEqual(d2.objects(0)[2].group, null, '한 줄로 되돌리면 줄바꿈 그룹 표시 제거');
+    d2.close();
+    console.log('줄바꿈 편집 OK', L.map((o) => `${o.text}@y${o.bounds.y0.toFixed(1)}`).join(' | '), '| 그룹', r.group);
     d.close();
   }
 

@@ -201,8 +201,34 @@ async function open(buffer) {
     } finally { P.FPDFBitmap_Destroy(bmp); }
   };
 
+  // ── 그룹 마크: 줄바꿈 편집으로 만든 줄들, 사용자가 Shift 클릭으로 묶은 상자들을 콘텐츠 마크 DaepilGroup(id)로 표시. 저장 후에도 유지 ──
+  const findMark = (o, name) => { for (let k = 0, mc = P.FPDFPageObj_CountMarks(o); k < mc; k++) { const mk = P.FPDFPageObj_GetMark(o, k); if (mk && markName(mk) === name) return mk; } return 0; };
+  const markParam = (mk, key) => {
+    const n = mal(4);
+    try {
+      if (!P.FPDFPageObjMark_GetParamStringValue(mk, key, 0, 0, n) || !i32(n)) return null;
+      const len = i32(n), b = mal(len);
+      try { return P.FPDFPageObjMark_GetParamStringValue(mk, key, b, len, n) ? M.UTF16ToString(b) : null; } finally { free(b); }
+    } finally { free(n); }
+  };
+  const groupOf = (o) => { const mk = findMark(o, 'DaepilGroup'); return mk ? markParam(mk, 'id') : null; };
+  const tagGroup = (o, id) => { // id=null이면 해제
+    let mk; while ((mk = findMark(o, 'DaepilGroup'))) P.FPDFPageObj_RemoveMark(o, mk);
+    if (id) { mk = P.FPDFPageObj_AddMark(o, 'DaepilGroup'); if (mk) P.FPDFPageObjMark_SetStringParam(doc, o, mk, 'id', id); }
+  };
+  const newGroupId = () => 'g' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+
   const api = {
     get pageCount() { return P.FPDF_GetPageCount(doc); },
+
+    // 상자 묶기/풀기. idxs의 객체에 같은 그룹 id를 붙인다 (id 생략 시 새로 발급, null이면 해제)
+    setGroup(i, idxs, id) {
+      const p = page(i), gid = id === null ? null : id || newGroupId();
+      let n = 0;
+      for (const ix of [].concat(idxs)) { const o = P.FPDFPage_GetObject(p, ix); if (!o) continue; tagGroup(o, gid); n++; }
+      P.FPDFPage_GenerateContent(p);
+      return { ok: n > 0, id: gid, count: n };
+    },
 
     pageSize(i) {
       const p = page(i);
@@ -248,10 +274,8 @@ async function open(buffer) {
             text: null, font: null, size: null,
             bounds: null, color: [0, 0, 0, 255], mask: false,
           };
-          for (let k = 0, mc = P.FPDFPageObj_CountMarks(o); k < mc; k++) {
-            const mk = P.FPDFPageObj_GetMark(o, k);
-            if (mk && markName(mk) === 'DaepilMask') { item.mask = true; break; }
-          }
+          item.mask = !!findMark(o, 'DaepilMask');
+          item.group = groupOf(o); // 줄바꿈 줄들·사용자 그룹 (없으면 null)
           P.FPDFPageObj_GetBounds(o, scratch, scratch + 4, scratch + 8, scratch + 12);
           item.bounds = { x0: f32(scratch), y0: f32(scratch + 4), x1: f32(scratch + 8), y1: f32(scratch + 12) };
           if (P.FPDFPageObj_GetFillColor(o, scratch, scratch + 4, scratch + 8, scratch + 12)) {
@@ -287,8 +311,14 @@ async function open(buffer) {
       // 굵기는 원래 객체에서 읽어 둔다 — _setOne이 폴백으로 바꾸면 폰트 이름이 "Untitled"라 굵기를 잃는다
       const bold = orig && P.FPDFPageObj_GetType(orig) === OBJ_TEXT ? isBold(orig) : false;
       const r = api._setOne(i, idx, lines[0]);
-      if (!r.ok || lines.length < 2) return r;
-      const o = P.FPDFPage_GetObject(p, idx);
+      if (!r.ok) return r;
+      if (lines.length < 2) { // 한 줄로 돌아오면 줄바꿈 그룹 표시는 뗀다
+        const o1 = P.FPDFPage_GetObject(p, idx);
+        if (o1 && findMark(o1, 'DaepilGroup')) { tagGroup(o1, null); P.FPDFPage_GenerateContent(p); }
+        return r;
+      }
+      const o = P.FPDFPage_GetObject(p, idx), gid = newGroupId();
+      tagGroup(o, gid);
       const m = mal(24), c = mal(16);
       try {
         P.FPDFTextObj_GetFontSize(o, c); const size = f32(c);
@@ -309,11 +339,12 @@ async function open(buffer) {
           M.setValue(m + 16, e - k * lh * cc, 'float'); M.setValue(m + 20, f - k * lh * d, 'float'); P.FPDFPageObj_SetMatrix(neo, m);
           if (color) P.FPDFPageObj_SetFillColor(neo, color[0], color[1], color[2], color[3]);
           // 맨 뒤(가장 위 z-순서)에 넣는다. 원래 글자 바로 뒤에 끼우면 표 셀 배경 같은 뒤쪽 채움 도형이 새 줄을 덮어 글자가 사라진다
+          tagGroup(neo, gid);
           P.FPDFPage_InsertObject(p, neo);
           lineIdxs.push(P.FPDFPage_CountObjects(p) - 1); fallback = fallback || fb;
         }
         P.FPDFPage_GenerateContent(p);
-        return { ok: true, fallbackFont: fallback, inserted: lineIdxs.length - 1, lineIdxs };
+        return { ok: true, fallbackFont: fallback, inserted: lineIdxs.length - 1, lineIdxs, group: gid };
       } finally { free(m); free(c); }
     },
     // 폭 맞춤. 긴 글을 넣어도 옆 글자와 겹치지 않게:

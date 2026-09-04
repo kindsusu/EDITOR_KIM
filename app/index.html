@@ -28,6 +28,7 @@
   .pdfPage{position:relative;display:inline-block;background:#fff;box-shadow:0 2px 12px #0008;margin-bottom:16px}.pdfPage img{display:block;width:100%;height:100%}
   .pdfBox{position:absolute}.pdfBox:hover{outline:1px solid var(--acc)}
   .pdfBox.editing{outline:2px solid var(--acc)}
+  .pdfBox.multi{outline:2px solid #4c9be8;background:rgba(76,155,232,.12)}
   .pdfMask{border:1px dashed transparent;cursor:move}.pdfMask:hover{border-color:var(--acc)}
   .pdfMask.editing{background:rgba(255,255,255,.55)}
   .pdfEditor{position:absolute;z-index:6;min-width:340px;max-width:90%;background:var(--panel);border:1px solid var(--acc);border-radius:8px;padding:10px;box-shadow:0 6px 24px #0008;color:var(--fg);font:13px/1.5 system-ui,'Malgun Gothic',sans-serif}
@@ -318,35 +319,21 @@ async function renderPdfDoc(name) {
   rebuildDocText();
 }
 function rebuildDocText() { docText = pdfObjects.map((objs, i) => `[p.${i + 1}] ` + objs.filter((o) => o.type === 'text').map((o) => o.text).join(' ')).join('\n'); }
-// Word/Chromium 내보내기 PDF는 한 줄이 글자·단어별로 잘게 쪼개진 텍스트 객체 여러 개로 나뉜다.
-// 같은 베이스라인(y0 근접) + 인접한(x 간격 좁음) 조각들을 한 줄로 묶어 하나의 편집 박스로 보여준다.
+// 상자 = 텍스트 객체 하나. 자동으로 묶지 않는다(표의 옆 칸 같은 다른 상자를 잘못 묶던 문제).
+// 예외: 같은 그룹 마크(DaepilGroup)를 가진 객체들 — 줄바꿈 편집으로 생긴 줄들, 사용자가 Shift 클릭으로 묶은 상자들 — 은 상자 하나.
+// 그룹 안 텍스트는 위→아래, 왼→오른쪽 순서로 잇고, 기준선이 다르면 '\n', 같으면 그대로 이어붙인다(seps에 기록 → 가리기 범위 매핑에 사용).
 function groupLines(objs) {
-  const texts = objs.filter((o) => o.type === 'text' && o.bounds);
-  // 1) y0 기준으로 같은 줄(행)을 먼저 묶는다 — 글자별 베이스라인이 1~2pt씩 흔들리므로
-  //    (y0, x0) 복합 정렬을 한 번에 하면 행 안에서 순서가 뒤섞인다. 행을 먼저 고정하고 x0는 각 행 안에서만 정렬한다.
-  const byY = [...texts].sort((a, b) => b.bounds.y0 - a.bounds.y0);
-  const rows = [];
-  for (const o of byY) {
-    const row = rows.find((r) => Math.abs(o.bounds.y0 - r.anchorY0) < 0.3 * Math.max(o.size || 10, r.size || 10));
-    if (row) row.objs.push(o); else rows.push({ anchorY0: o.bounds.y0, size: o.size, objs: [o] });
-  }
-  // 2) 각 행을 x0로 정렬하고, 간격이 너무 벌어지면(가로로 떨어진 별도 텍스트) 다시 줄을 쪼갠다
-  const lines = [];
-  for (const row of rows) {
-    const byX = row.objs.sort((a, b) => a.bounds.x0 - b.bounds.x0);
-    let cur = [byX[0]];
-    for (let k = 1; k < byX.length; k++) {
-      const prev = cur[cur.length - 1], o = byX[k], tol = Math.max(o.size || 10, prev.size || 10);
-      if (o.bounds.x0 - prev.bounds.x1 < 1.5 * tol) cur.push(o); else { lines.push(cur); cur = [o]; }
-    }
-    lines.push(cur);
-  }
-  return lines.map((objs) => ({
-    objs,
-    text: objs.map((o) => o.text).join(''), // 조각을 그대로 이어붙임 (가리기 매핑을 위해 축약하지 않음)
-    size: objs[0].size, font: objs[0].font,
-    bounds: objs.reduce((b, o) => ({ x0: Math.min(b.x0, o.bounds.x0), y0: Math.min(b.y0, o.bounds.y0), x1: Math.max(b.x1, o.bounds.x1), y1: Math.max(b.y1, o.bounds.y1) }), { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity }),
-  }));
+  const all = objs.filter((o) => o.type === 'text' && o.bounds);
+  const groups = new Map();
+  for (const o of all) { const k = o.group || `_${o.idx}`; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(o); }
+  const union = (arr) => arr.reduce((b, o) => ({ x0: Math.min(b.x0, o.bounds.x0), y0: Math.min(b.y0, o.bounds.y0), x1: Math.max(b.x1, o.bounds.x1), y1: Math.max(b.y1, o.bounds.y1) }), { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity });
+  const sameRow = (a, b) => Math.abs(a.bounds.y0 - b.bounds.y0) < 0.3 * Math.max(a.size || 10, b.size || 10);
+  return [...groups.entries()].map(([k, members]) => {
+    const sorted = members.sort((a, b) => (sameRow(a, b) ? a.bounds.x0 - b.bounds.x0 : b.bounds.y0 - a.bounds.y0));
+    const seps = sorted.slice(1).map((o, j) => (sameRow(o, sorted[j]) ? '' : '\n'));
+    const text = sorted.map((o, j) => (j ? seps[j - 1] : '') + o.text).join('');
+    return { objs: sorted, seps, text, group: k.startsWith('_') ? null : k, size: sorted[0].size, font: sorted[0].font, bounds: union(sorted) };
+  });
 }
 function drawOverlay(wrap, i, objs, h) {
   const lines = groupLines(objs).map((line) => {
@@ -358,7 +345,7 @@ function drawOverlay(wrap, i, objs, h) {
       const idxs = line.objs.map((o) => o.idx);
       await pdfMutate('/api/pdf/move', { name: cur, i, idxs, dx, dy });
       await refreshPage(i);
-    }, () => selectLine(i, line, wrap, box));
+    }, (e) => (e && e.shiftKey ? toggleMulti(i, line, wrap, box) : (clearMulti(), selectLine(i, line, wrap, box)))); // Shift 클릭 = 여러 상자 선택
     wrap.appendChild(box);
     return { line, box };
   });
@@ -377,6 +364,36 @@ function drawOverlay(wrap, i, objs, h) {
     return { idx: o.idx, box };
   });
   return Object.assign(lines, { masks });
+}
+// ---- 여러 상자 선택(Shift 클릭) → 그룹 설정 / 선택 해제. 그룹은 PDF 안 마크(DaepilGroup)로 저장돼 다시 열어도 상자 하나로 다뤄진다 ----
+const multi = new Map(); // box → { i, line }
+function toggleMulti(i, line, wrap, box) {
+  closeAnyPanel();
+  if (multi.has(box)) { multi.delete(box); box.classList.remove('multi'); } else { multi.set(box, { i, line }); box.classList.add('multi'); }
+  renderMultiBar();
+}
+function clearMulti() { for (const b of multi.keys()) b.classList.remove('multi'); multi.clear(); renderMultiBar(); }
+function renderMultiBar() {
+  let bar = $('#multiBar');
+  if (!multi.size) { if (bar) bar.remove(); return; }
+  if (!bar) { bar = document.createElement('div'); bar.id = 'multiBar'; bar.className = 'pdfEditor'; bar.style.cssText = 'position:fixed;left:50%;bottom:24px;transform:translateX(-50%);min-width:0;display:flex;gap:8px;align-items:center;z-index:8'; document.body.appendChild(bar); }
+  bar.innerHTML = `<b>상자 ${multi.size}개 선택</b><span style="color:var(--mut);font-size:11px">Shift 클릭으로 추가/제외</span>`;
+  const g = document.createElement('button'); g.className = 'pri'; g.textContent = '그룹 설정'; g.disabled = multi.size < 2; g.onclick = groupSelected;
+  const c = document.createElement('button'); c.textContent = '선택 해제'; c.onclick = clearMulti;
+  bar.append(g, c);
+}
+async function groupSelected() {
+  const entries = [...multi.values()], i = entries[0].i;
+  if (entries.some((e) => e.i !== i)) return flash('같은 페이지의 상자만 묶을 수 있습니다');
+  const idxs = entries.flatMap((e) => e.line.objs.map((o) => o.idx));
+  await pdfMutate('/api/pdf/group', { name: cur, i, idxs });
+  clearMulti(); await refreshPage(i);
+  flash('그룹으로 묶었습니다 — 상자 하나로 편집·이동됩니다. 패널의 [그룹 해제]로 풉니다');
+}
+async function ungroup() {
+  const { i, objs } = selectedObj; closeAnyPanel();
+  await pdfMutate('/api/pdf/group', { name: cur, i, idxs: objs.map((o) => o.idx), id: null });
+  selectedObj = null; updateEditRadio(); await refreshPage(i); flash('그룹을 풀었습니다');
 }
 // 드래그 고스트: 박스가 덮는 페이지 이미지 영역을 캔버스에 그려 마우스를 따라가게 하고, 원래 자리는 흰색으로 덮어 글자가 "들리는" 것처럼 보이게 한다.
 // img의 실제 픽셀 크기와 표시 크기가 다를 수 있어(줌과 무관하게 서버가 다른 배율로 렌더할 수도 있음) 비율로 환산한다.
@@ -426,7 +443,7 @@ function attachDrag(box, onDrop, onClick, ghostOpacity) {
     };
     document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp); document.addEventListener('keydown', onKey);
   };
-  box.onclick = () => { if (box._dragged) return (box._dragged = false); onClick(); };
+  box.onclick = (e) => { if (box._dragged) return (box._dragged = false); onClick(e); };
 }
 // 가림 상자 패널: ◀▲▼▶ 이동(0.5pt, Shift 5pt) + 삭제 + 닫기(Esc). openInlineEditor와 같은 .pdfEditor 스타일 재사용.
 function openMaskPanel(i, o, wrap, box) {
@@ -477,10 +494,10 @@ function openMaskPanel(i, o, wrap, box) {
   }
 }
 // 선택 범위 [from,to)를 줄을 이루는 조각 객체별 {idx,from,to}로 분해 (line.text는 조각을 그대로 이은 것이라 인덱스가 맞아떨어진다)
-function mapRangeToParts(objs, from, to) {
+function mapRangeToParts(objs, from, to, seps = []) { // seps[j]: objs[j]와 objs[j+1] 사이에 끼운 구분 문자('' 또는 '\n')
   const parts = []; let off = 0;
-  for (const o of objs) {
-    const s = off, e = off + o.text.length; off = e;
+  for (const [j, o] of objs.entries()) {
+    const s = off, e = off + o.text.length; off = e + (seps[j] || '').length;
     const a = Math.max(from, s), b = Math.min(to, e);
     if (a < b) parts.push({ idx: o.idx, from: a - s, to: b - s });
   }
@@ -496,7 +513,7 @@ function checkOverflow(i, editedIdx, boxed) {
   if (tooWide || overlaps) { box.style.outline = '1px solid #e07a7a'; flash('글이 원래 자리보다 길어 오른쪽과 겹칩니다 — 줄여 보세요'); }
 }
 function selectLine(i, line, wrap, box) {
-  selectedObj = { i, objs: line.objs, text: line.text, wrap, box, size: line.size, font: line.font, bounds: line.bounds };
+  selectedObj = { i, objs: line.objs, seps: line.seps, text: line.text, wrap, box, size: line.size, font: line.font, bounds: line.bounds, group: line.group || null };
   updateEditRadio();
   openInlineEditor(line.text);
 }
@@ -539,7 +556,9 @@ function openInlineEditor(initialText) {
   const row = document.createElement('div'); row.className = 'row';
   const okBtn = document.createElement('button'); okBtn.className = 'pri'; okBtn.textContent = '적용 (Enter)';
   const cancelBtn = document.createElement('button'); cancelBtn.textContent = '취소 (Esc)';
-  row.append(okBtn, cancelBtn); panel.appendChild(row);
+  row.append(okBtn, cancelBtn);
+  if (selectedObj.group) { const ug = document.createElement('button'); ug.textContent = `그룹 해제 (${selectedObj.objs.length}개)`; ug.onclick = ungroup; row.appendChild(ug); }
+  panel.appendChild(row);
 
   // 가리기: 텍스트가 원문 그대로일 때만(선택 매핑이 정확하도록)
   const maskRow = document.createElement('div'); maskRow.className = 'row';
@@ -577,7 +596,13 @@ function openInlineEditor(initialText) {
     const { i, objs, text, bounds: oldBounds } = selectedObj;
     close();
     if (newText === text) return; // 변경 없으면 그대로 둔다
-    const idxs = objs.map((o) => o.idx);
+    let idxs = objs.map((o) => o.idx);
+    if (selectedObj.group) {
+      // 그룹(줄바꿈 줄들·사용자 묶음): 첫 객체(가장 작은 idx)만 남기고 나머지는 지운 뒤 첫 객체에 전체 텍스트를 다시 넣는다 (뒤 idx부터 지워 앞 idx가 안 밀리게)
+      const first = objs.reduce((a, o) => (o.idx < a.idx ? o : a));
+      for (const o of objs.filter((o) => o !== first).sort((a, b) => b.idx - a.idx)) await pdfMutate('/api/pdf/remove', { name: cur, i, idx: o.idx });
+      objs.splice(0, objs.length, first); idxs = [first.idx];
+    }
     // 줄을 이루는 조각 객체 중 첫 조각에 전체 텍스트를 넣고 나머지는 비운다 (원본 폰트 유지, idx는 편집 후에도 안정적)
     // 빈 문자열("")로 SetText하면 PDFium(WASM)이 unreachable로 죽는다 — 대신 공백 하나로 채운다 (원래도 조각 사이에 공백이 섞여 있어 시각적으로 동일)
     // 나머지 조각을 먼저 비우고 첫 조각을 마지막에: 여러 줄 텍스트면 첫 조각 뒤에 줄 객체가 끼어들어 뒤 인덱스가 밀리기 때문
@@ -645,11 +670,12 @@ function openInlineEditor(initialText) {
   maskSelBtn.onclick = () => {
     const from = ta.selectionStart, to = ta.selectionEnd;
     if (from === to) return flash('가릴 범위를 선택하세요');
-    maskParts(mapRangeToParts(selectedObj.objs, from, to), ta.value.slice(from, to));
+    maskParts(mapRangeToParts(selectedObj.objs, from, to, selectedObj.seps), ta.value.slice(from, to));
   };
   maskLineBtn.onclick = () => maskParts(selectedObj.objs.map((o) => ({ idx: o.idx, from: 0, to: o.text.length })), selectedObj.text);
 }
 async function refreshPage(i, editedIdx) {
+  clearMulti(); // 상자를 다시 그리므로 다중 선택은 해제
   const wrap = $('#pdf').children[i];
   wrap.querySelector('img').src = pageUrl(cur, i);
   const objs = await (await fetch(`/api/pdf/objects?name=${encodeURIComponent(cur)}&i=${i}`)).json();
