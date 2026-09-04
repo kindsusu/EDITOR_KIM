@@ -151,6 +151,7 @@ async function open(buffer) {
     if (process.env.DAEPIL_DEBUG) console.error('[fallbackFont]', key, path.split(/[\\/]/).pop(), 'chars', chars.size, 'bytes', data.length, 'font', font);
     if (!font) return 0;
     fb[key] = { font, chars };
+    fbBold.set(font, !!bold);
     return font;
   }
 
@@ -188,7 +189,16 @@ async function open(buffer) {
     return true;
   };
 
-  const isBold = (o) => { const nb = mal(256); const r = !!(P.FPDFFont_GetBaseFontName(P.FPDFTextObj_GetFont(o), nb, 256) && /bold|black|heavy/i.test(M.UTF8ToString(nb))); free(nb); return r; };
+  // 굵기 판정: 우리가 올린 대체 폰트는 이름이 "Untitled"라 이름으로 알 수 없다 → 올릴 때 기억한 굵기(fbBold)를 쓴다.
+  // 그 외에는 이름(Bold/Black/Heavy) 또는 PDFium이 읽은 weight(≥600). 이 판정이 틀리면 폭 맞춤의 두 번째 SetText에서 굵은 글자가 보통 굵기로 떨어진다(사용자 보고).
+  const fbBold = new Map(); // 폰트 핸들 → bold
+  const isBold = (o) => {
+    const font = P.FPDFTextObj_GetFont(o);
+    if (fbBold.has(font)) return fbBold.get(font);
+    const nb = mal(256); const name = P.FPDFFont_GetBaseFontName(font, nb, 256) ? M.UTF8ToString(nb) : ''; free(nb);
+    const w = P.FPDFFont_GetWeight ? P.FPDFFont_GetWeight(font) : 0;
+    return /bold|black|heavy/i.test(name) || w >= 600;
+  };
 
   const withBitmap = (i, scale, fn) => {
     const { w, h } = api.pageSize(i);
@@ -403,8 +413,22 @@ async function open(buffer) {
       const hidden = !!(o0 && P.FPDFPageObj_GetType(o0) === OBJ_TEXT && [3, 7].includes(P.FPDFTextObj_GetTextRenderMode(o0)) || (o0 && (() => { const c = mal(16); try { return P.FPDFPageObj_GetFillColor(o0, c, c + 4, c + 8, c + 12) && i32(c + 12) === 0; } finally { free(c); } })()));
       let cover = null, ink = null;
       if (hidden) { // 편집 전에 재야 한다: 그림(보이는 글자)이 아직 있을 때 배경색·글자색을 뽑는다
-        const b = api.objects(i)[idx].bounds, pad = 3; // 그림으로 그려진 글자는 텍스트 상자보다 조금 넓다(효과·안티앨리어싱)
+        const all = api.objects(i), b = all[idx].bounds, pad = 3;
         cover = { x0: b.x0 - pad, y0: b.y0 - pad, x1: b.x1 + pad, y1: b.y1 + pad };
+        // 보이는 글자는 그림 타일이고, 타일은 투명 텍스트 상자와 어긋나 있다(PowerPoint: 한 조각의 타일이 옆 조각 자리까지 걸침).
+        // 텍스트 상자와 세로로 절반 이상 겹치고 가로로 겹치거나 맞닿은(2pt) 이미지 타일을 모두 덮는 범위에 넣는다.
+        const th = b.y1 - b.y0;
+        for (const o of all) {
+          if (o.type !== 'image' || !o.bounds) continue;
+          const vy = Math.min(o.bounds.y1, b.y1) - Math.max(o.bounds.y0, b.y0);
+          const hx = Math.min(o.bounds.x1, b.x1) - Math.max(o.bounds.x0, b.x0);
+          const tw = o.bounds.x1 - o.bounds.x0;
+          // 가로로 '실질적으로' 겹치는 타일만(겹침 폭이 타일·텍스트 중 좁은 쪽의 절반 이상). 맞닿기만 한 옆 조각 타일은 제외
+          if (vy > 0.5 * th && hx > 0.5 * Math.min(tw, b.x1 - b.x0)) cover = { x0: Math.min(cover.x0, o.bounds.x0), y0: Math.min(cover.y0, o.bounds.y0), x1: Math.max(cover.x1, o.bounds.x1), y1: Math.max(cover.y1, o.bounds.y1) };
+        }
+        // 타일은 옆 단어까지 걸치므로, 타일 범위 안에서 '이 단어의 잉크가 이어지는 가로 구간'만 덮는다:
+        // 텍스트 상자 가운데에서 좌우로 나가며 잉크 없는 빈 열이 gap(글자 크기의 0.25) 이상 이어지면 멈춘다
+        cover = api._inkExtent(i, cover, b);
         ink = api.sampleInk(i, cover);
         api.addRect(i, cover, api.sampleColor(i, cover));
       }
@@ -562,6 +586,22 @@ async function open(buffer) {
       let best = null; for (const a of buckets.values()) if (!best || a[3] > best[3]) best = a;
       if (!best) return [255, 255, 255, 255];
       return [Math.round(best[0] / best[3]), Math.round(best[1] / best[3]), Math.round(best[2] / best[3]), 255];
+    },
+
+    // region 안에서 seed(텍스트 상자) 가운데를 기준으로 잉크가 이어지는 가로 구간을 찾는다 (2배 렌더, 배경과 다른 픽셀 = 잉크)
+    _inkExtent(i, region, seed) {
+      const s = 2, { h: ph } = api.pageSize(i), raw = api._renderRaw(i, s), bg = api.sampleColor(i, region);
+      const x0 = Math.max(0, Math.floor(region.x0 * s)), x1 = Math.min(raw.w - 1, Math.ceil(region.x1 * s));
+      const y0 = Math.max(0, Math.floor((ph - region.y1) * s)), y1 = Math.min(raw.h - 1, Math.ceil((ph - region.y0) * s));
+      const inkCol = (x) => { for (let y = y0; y <= y1; y++) { const p = y * raw.stride + x * 4; if (Math.abs(raw.data[p] - bg[0]) + Math.abs(raw.data[p + 1] - bg[1]) + Math.abs(raw.data[p + 2] - bg[2]) >= 120) return true; } return false; };
+      const gap = Math.max(3, Math.round(0.25 * (seed.y1 - seed.y0) * s));
+      const cx = Math.round((seed.x0 + seed.x1) / 2 * s);
+      let L = cx, R = cx;
+      for (let x = cx, blank = 0; x >= x0; x--) { if (inkCol(x)) { blank = 0; L = x; } else if (++blank >= gap) break; }
+      for (let x = cx, blank = 0; x <= x1; x++) { if (inkCol(x)) { blank = 0; R = x; } else if (++blank >= gap) break; }
+      if (R - L < 4) return region; // 잉크를 못 찾으면(이미 덮였거나 비어 있음) 그대로
+      const pad = 1.5;
+      return { x0: Math.max(region.x0, L / s - pad), x1: Math.min(region.x1, R / s + pad), y0: region.y0, y1: region.y1 };
     },
 
     // 시험용: 객체 채움색 강제 (알파 0 → 투명 글자 재현)
