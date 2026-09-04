@@ -82,5 +82,45 @@ const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     } else { console.log('[회의록_초안.pdf] 한글 텍스트 객체 없음'); d.close(); }
   } else console.log('[회의록_초안.pdf] 없음 — 건너뜀');
 
+  // --- D: 폴백 폰트 서브셋 — 폴백 편집이 파일을 MB 단위로 불리지 않아야 한다 ---
+  // (원본 회의록_초안.pdf는 건드리지 않는다. 저장본은 메모리에서만 검사)
+  if (fs.existsSync(ko)) {
+    const koBuf = fs.readFileSync(ko);
+    const d = await open(koBuf);
+    const ts = d.objects(0).filter((o) => o.type === 'text' && (o.text || '').trim());
+    assert.ok(ts.length >= 2, '텍스트 객체 2개 이상');
+
+    const NEW1 = '대필 검수 테스트';
+    const e1 = d.setText(0, ts[0].idx, NEW1);
+    assert.deepStrictEqual(e1, { ok: true, fallbackFont: true }, '서브셋에 없는 한글 → 폴백');
+    const s1 = d.save();
+    const g1 = s1.length - koBuf.length;
+    console.log(`[서브셋] 원본 ${koBuf.length} → 폴백 1회 ${s1.length} (+${g1})`);
+    assert.ok(g1 < 150000, `폴백 1회 증가가 150KB 미만이어야 함 (실제 +${g1})`);
+
+    // 두 번째 폴백 편집(다른 객체·다른 글자) — 합집합 서브셋이라 증가가 계속 작아야 한다
+    const e2 = d.setText(0, ts[1].idx, '쀍뷁쭶 두 번째 폴백');
+    assert.strictEqual(e2.ok, true);
+    const s2 = d.save();
+    const g2 = s2.length - koBuf.length;
+    console.log(`[서브셋] 폴백 2회 ${s2.length} (+${g2}) fallbackFont=${e2.fallbackFont}`);
+    assert.ok(g2 < 150000, `폴백 2회 증가가 150KB 미만이어야 함 (실제 +${g2})`);
+    d.close();
+
+    // 저장본 재열기 → 텍스트 + 실제로 그려졌는지(픽셀) 확인
+    const d2 = await open(s2);
+    const edited = d2.objects(0).find((o) => (o.text || '').includes(NEW1));
+    assert.ok(edited, '저장본에서 편집한 텍스트를 다시 읽을 수 있어야 함');
+    const { h } = d2.pageSize(0);
+    const raw = d2._renderRaw(0, 1);
+    const x0 = Math.max(0, Math.floor(edited.bounds.x0)), x1 = Math.min(raw.w, Math.ceil(edited.bounds.x1));
+    const y0 = Math.max(0, Math.floor(h - edited.bounds.y1)), y1 = Math.min(raw.h, Math.ceil(h - edited.bounds.y0));
+    let dark = 0;
+    for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) if (raw.data[y * raw.stride + x * 4] < 200) dark++;
+    console.log(`[서브셋] 편집 영역 ${x1 - x0}x${y1 - y0}px, 진한 픽셀 ${dark}`);
+    assert.ok(dark > 20, '편집한 글자가 실제로 렌더돼야 함(빈 칸/투명 아님)');
+    d2.close();
+  }
+
   console.log('\nOK — 모든 검사 통과');
 })().catch((e) => { console.error('FAIL', e); process.exit(1); });
