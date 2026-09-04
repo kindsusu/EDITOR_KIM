@@ -293,9 +293,10 @@ async function open(buffer) {
       try {
         P.FPDFTextObj_GetFontSize(o, c); const size = f32(c);
         if (!P.FPDFPageObj_GetMatrix(o, m)) return r;
-        const b = f32(m + 4), cc = f32(m + 8), d = f32(m + 12), f = f32(m + 20);
-        if (Math.abs(b) > 0.01 || Math.abs(cc) > 0.01) return r; // 회전 텍스트는 첫 줄만
-        const lh = LINE_HEIGHT * size * (d || 1); // ponytail: 행간은 PDFium이 알려주지 않는다 → 글자 크기의 1.2배. 문서에 안 맞으면 LINE_HEIGHT 조정
+        // 행간 이동을 행렬(a b c d e f)에 통과시킨다: 텍스트 공간의 (0, −lh)는 사용자 공간에서 (−lh·c, −lh·d).
+        // 기울임(synthetic italic, c≠0)·회전(b,c≠0) 텍스트도 같은 식으로 줄이 따라간다 — 계약서의 이탤릭 날짜 셀에서 둘째 줄이 사라지던 원인
+        const cc = f32(m + 8), d = f32(m + 12), e = f32(m + 16), f = f32(m + 20);
+        const lh = LINE_HEIGHT * size; // ponytail: 행간은 PDFium이 알려주지 않는다 → 글자 크기의 1.2배(텍스트 공간). 문서에 안 맞으면 LINE_HEIGHT 조정
         const color = P.FPDFPageObj_GetFillColor(o, c, c + 4, c + 8, c + 12) ? [i32(c), i32(c + 4), i32(c + 8), i32(c + 12)] : null;
         let fallback = r.fallbackFont; const lineIdxs = [idx];
         for (let k = 1; k < lines.length; k++) {
@@ -305,7 +306,7 @@ async function open(buffer) {
           const neo = P.FPDFPageObj_CreateTextObj(doc, font, size);
           const u = utf16(text); const ok = neo && P.FPDFText_SetText(neo, u); free(u);
           if (!ok) { if (neo) P.FPDFPageObj_Destroy(neo); continue; }
-          M.setValue(m + 20, f - k * lh, 'float'); P.FPDFPageObj_SetMatrix(neo, m);
+          M.setValue(m + 16, e - k * lh * cc, 'float'); M.setValue(m + 20, f - k * lh * d, 'float'); P.FPDFPageObj_SetMatrix(neo, m);
           if (color) P.FPDFPageObj_SetFillColor(neo, color[0], color[1], color[2], color[3]);
           // 맨 뒤(가장 위 z-순서)에 넣는다. 원래 글자 바로 뒤에 끼우면 표 셀 배경 같은 뒤쪽 채움 도형이 새 줄을 덮어 글자가 사라진다
           P.FPDFPage_InsertObject(p, neo);

@@ -7,6 +7,8 @@
 <style>
   :root{--bg:#1b1b1f;--panel:#232329;--line:#33333b;--fg:#e8e8ec;--mut:#9a9aa6;--acc:#d97757;--add:#1f4d2e;--del:#5a2323}
   *{box-sizing:border-box}body{margin:0;height:100vh;display:grid;grid-template-columns:220px 1fr 380px;grid-template-rows:40px minmax(0,1fr);font:13px/1.5 system-ui,'Malgun Gothic',sans-serif;background:var(--bg);color:var(--fg)}
+  body.ai-collapsed{grid-template-columns:220px 1fr 0}body.ai-collapsed .ai{display:none}
+  #aiToggle{background:#2e2e37}#aiToggle.on{background:var(--acc);border-color:var(--acc);color:#fff}
   header{grid-column:1/-1;display:flex;align-items:center;gap:12px;padding:0 14px;border-bottom:1px solid var(--line);background:var(--panel)}
   header b{color:var(--acc);font-size:15px}header span{color:var(--mut)}header .sp{flex:1}
   aside{border-right:1px solid var(--line);background:var(--panel);padding:8px;overflow:auto;display:flex;flex-direction:column;gap:4px;min-height:0}
@@ -51,7 +53,7 @@
 </style>
 </head>
 <body>
-<header><b>대필</b><span id="ver" style="color:var(--acc);opacity:.8"></span><span>PDF · Markdown 편집기</span><span class="sp"></span><span id="status">Claude Code 로그인 사용 · API 키 없음</span></header>
+<header><b>대필</b><span id="ver" style="color:var(--acc);opacity:.8"></span><span>PDF · Markdown 편집기</span><span class="sp"></span><span id="status">Claude Code 로그인 사용 · API 키 없음</span><button id="aiToggle" title="Claude 패널 열기/닫기 (Ctrl+J)">💬 Claude</button></header>
 <aside>
   <button id="openFiles" hidden>📂 파일 열기</button>
   <button id="openFolder" hidden>📁 폴더 열기</button>
@@ -95,6 +97,11 @@
 
 <script type="module">
 const $ = (s) => document.querySelector(s);
+// Claude 패널은 평소 접힘. 버튼 또는 Ctrl+J로 열고 닫는다 (선택 기억)
+function setAiOpen(open) { document.body.classList.toggle('ai-collapsed', !open); $('#aiToggle').classList.toggle('on', open); localStorage.setItem('daepil.ai', open ? '1' : '0'); }
+setAiOpen(localStorage.getItem('daepil.ai') === '1');
+$('#aiToggle').onclick = () => setAiOpen(document.body.classList.contains('ai-collapsed'));
+document.addEventListener('keydown', (e) => { if (e.ctrlKey && e.key.toLowerCase() === 'j') { e.preventDefault(); $('#aiToggle').click(); } });
 let cur = null, docText = '', savedText = '', pending = null;
 let pdfPages = [], pdfObjects = [], pdfScale = 1.5, pdfDirty = false, selectedObj = null, selectedMask = null;
 let rectMode = false, rectDrag = null;
