@@ -6,13 +6,15 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/15.0.7/marked.min.js"></script>
 <style>
   :root{--bg:#1b1b1f;--panel:#232329;--line:#33333b;--fg:#e8e8ec;--mut:#9a9aa6;--acc:#d97757;--add:#1f4d2e;--del:#5a2323}
-  *{box-sizing:border-box}body{margin:0;height:100vh;display:grid;grid-template-columns:220px 1fr 380px;grid-template-rows:40px 1fr;font:13px/1.5 system-ui,'Malgun Gothic',sans-serif;background:var(--bg);color:var(--fg)}
+  *{box-sizing:border-box}body{margin:0;height:100vh;display:grid;grid-template-columns:220px 1fr 380px;grid-template-rows:40px minmax(0,1fr);font:13px/1.5 system-ui,'Malgun Gothic',sans-serif;background:var(--bg);color:var(--fg)}
   header{grid-column:1/-1;display:flex;align-items:center;gap:12px;padding:0 14px;border-bottom:1px solid var(--line);background:var(--panel)}
   header b{color:var(--acc);font-size:15px}header span{color:var(--mut)}header .sp{flex:1}
-  aside{border-right:1px solid var(--line);background:var(--panel);padding:8px;overflow:auto;display:flex;flex-direction:column;gap:4px}
+  aside{border-right:1px solid var(--line);background:var(--panel);padding:8px;overflow:auto;display:flex;flex-direction:column;gap:4px;min-height:0}
   aside h4{margin:4px 6px;color:var(--mut);font-weight:500;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  aside .f{padding:6px 8px;border-radius:6px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}aside .f:hover{background:#2c2c34}aside .f.on{background:#34343e}
-  main{display:flex;flex-direction:column;min-width:0}
+  aside .f{position:relative;padding:6px 22px 6px 8px;border-radius:6px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}aside .f:hover{background:#2c2c34}aside .f.on{background:#34343e}
+  aside .f .x{display:none;position:absolute;right:4px;top:50%;transform:translateY(-50%);color:var(--mut);padding:0 4px}
+  aside .f:hover .x{display:inline}aside .f .x:hover{color:var(--fg)}
+  main{display:flex;flex-direction:column;min-width:0;min-height:0}
   .bar{display:flex;gap:8px;align-items:center;padding:6px 12px;border-bottom:1px solid var(--line);color:var(--mut)}.bar .sp{flex:1}
   button{background:#2e2e37;color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:5px 10px;cursor:pointer;font:inherit}button:hover{background:#3a3a45}button.pri{background:var(--acc);border-color:var(--acc);color:#fff}button:disabled{opacity:.5;cursor:default}
   select{background:#2e2e37;color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:4px;font:inherit}
@@ -22,9 +24,13 @@
   .pdf{flex:1;overflow:auto;background:#3a3a40;padding:20px;text-align:center}
   .pdfPage{position:relative;display:inline-block;background:#fff;box-shadow:0 2px 12px #0008;margin-bottom:16px}.pdfPage img{display:block;width:100%;height:100%}
   .pdfBox{position:absolute}.pdfBox:hover{outline:1px solid var(--acc)}
-  .pdfEdit{position:absolute;z-index:5;line-height:1.2}
-  textarea.pdfEdit{background:#fff;color:#222;border:1px solid var(--acc);padding:0;margin:0;resize:none;outline:none;white-space:pre;overflow:auto}
-  button.pdfEdit{padding:0 4px;font-size:12px;line-height:1.6}
+  .pdfBox.editing{outline:2px solid var(--acc)}
+  .pdfEditor{position:absolute;z-index:6;min-width:340px;max-width:90%;background:var(--panel);border:1px solid var(--acc);border-radius:8px;padding:10px;box-shadow:0 6px 24px #0008;color:var(--fg);font:13px/1.5 system-ui,'Malgun Gothic',sans-serif}
+  .pdfEditor h5{margin:0 0 2px;font-size:13px;font-weight:600}
+  .pdfEditor .hint2{color:var(--mut);font-size:11px;margin-bottom:8px}
+  .pdfEditor textarea{width:100%;min-height:2.6em;resize:vertical;border:1px solid var(--line);border-radius:6px;padding:6px 8px;font:13px/1.4 system-ui,'Malgun Gothic',sans-serif;background:#fff;color:#222}
+  .pdfEditor .row{display:flex;gap:6px;margin-top:8px;align-items:center}
+  .pdfEditor .tip{color:var(--mut);font-size:11px;margin-top:6px}
   .diff{flex:1;overflow:auto;padding:12px 18px;font:12px/1.5 Consolas,monospace;white-space:pre-wrap}.diff .a{background:var(--add)}.diff .d{background:var(--del);text-decoration:line-through;opacity:.8}
   .ai{border-left:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;min-height:0}
   .ai .bar b{color:var(--fg)}
@@ -44,6 +50,7 @@
 <body>
 <header><b>대필</b><span>PDF · Markdown 편집기</span><span class="sp"></span><span id="status">Claude Code 로그인 사용 · API 키 없음</span></header>
 <aside>
+  <button id="openFiles" hidden>📂 파일 열기</button>
   <button id="openFolder" hidden>📁 폴더 열기</button>
   <h4 id="wsPath" title=""></h4>
   <div id="files"></div>
@@ -105,25 +112,61 @@ $('#btnLogin').onclick = () => fetch('/api/setup/login');
 $('#btnRecheck').onclick = checkHealth;
 $('#btnSkip').onclick = () => { $('#setup').hidden = true; };
 
-// ---- 작업 폴더 · 파일 ----
-async function loadFiles() {
-  const ws = await (await fetch('/api/workspace')).json();
-  $('#wsPath').textContent = ws.path.split(/[\\/]/).pop(); $('#wsPath').title = ws.path;
-  const fs = await (await fetch('/api/files')).json();
-  $('#files').innerHTML = fs.map((f) => `<div class="f" data-f="${f}">${f.endsWith('.pdf') ? '📄' : '📝'} ${f}</div>`).join('') || '<div class="f" style="color:var(--mut)">.md / .pdf 파일 없음</div>';
+// ---- 열어 둔 파일 목록 (절대경로, localStorage에 저장) ----
+let files = [];
+const basename = (p) => p.split(/[\\/]/).pop();
+const loadFilesLS = () => { try { files = JSON.parse(localStorage.getItem('daepil.files') || '[]'); } catch { files = []; } };
+const saveFilesLS = () => localStorage.setItem('daepil.files', JSON.stringify(files));
+function pushRecent(p) {
+  let r = []; try { r = JSON.parse(localStorage.getItem('daepil.recent') || '[]'); } catch {}
+  localStorage.setItem('daepil.recent', JSON.stringify([p, ...r.filter((x) => x !== p)].slice(0, 20)));
 }
-$('#files').onclick = (e) => e.target.dataset.f && open(e.target.dataset.f);
-if (window.daepil) { $('#openFolder').hidden = false; $('#openFolder').onclick = async () => {
-  const p = await window.daepil.openFolder(); if (!p) return;
-  await fetch('/api/workspace', { method: 'POST', body: JSON.stringify({ path: p }) }); cur = null; $('#fname').textContent = '파일을 선택하세요'; $('#md').hidden = $('#pdf').hidden = true; loadFiles();
-}; }
+function renderFiles() {
+  $('#files').innerHTML = files.map((f) => `<div class="f${f === cur ? ' on' : ''}" data-f="${f}" title="${f}">${f.endsWith('.pdf') ? '📄' : '📝'} ${basename(f)}<span class="x" data-x="${f}" title="목록에서 제거">×</span></div>`).join('') || '<div class="f" style="color:var(--mut)">.md / .pdf 파일 없음</div>';
+}
+function addFiles(paths) {
+  if (!paths || !paths.length) return;
+  for (const p of paths) if (!files.includes(p)) files.push(p);
+  saveFilesLS(); renderFiles(); open(paths[0]);
+}
+function removeFile(p) {
+  files = files.filter((f) => f !== p); saveFilesLS();
+  if (cur === p) {
+    cur = null; docText = savedText = ''; selectedObj = null; pdfDirty = false;
+    $('#fname').textContent = '파일을 선택하세요'; $('#fname').title = '';
+    $('#md').hidden = $('#pdf').hidden = $('#diff').hidden = $('#diffbar').hidden = true;
+    $('#save').hidden = $('#pdfZoom').hidden = $('#dirty').hidden = true; $('#send').disabled = true;
+  }
+  renderFiles();
+}
+async function initFiles() {
+  if (window.daepil) {
+    $('#openFiles').hidden = false; $('#openFolder').hidden = false;
+    $('#openFiles').onclick = async () => addFiles(await window.daepil.openFiles());
+    $('#openFolder').onclick = async () => {
+      const p = await window.daepil.openFolder(); if (!p) return;
+      addFiles(await (await fetch('/api/files?dir=' + encodeURIComponent(p))).json());
+    };
+    loadFilesLS(); renderFiles();
+    if (files.length) open(files[0]);
+  } else {
+    const ws = await (await fetch('/api/workspace')).json();
+    $('#wsPath').textContent = ws.path.split(/[\\/]/).pop(); $('#wsPath').title = ws.path;
+    files = await (await fetch('/api/files')).json();
+    renderFiles();
+  }
+}
+$('#files').onclick = (e) => {
+  const x = e.target.closest('[data-x]'); if (x) return removeFile(x.dataset.x);
+  const f = e.target.closest('[data-f]'); if (f) open(f.dataset.f);
+};
 
 async function open(name) {
   if (dirty() && !confirm('저장하지 않은 변경이 있습니다. 버리고 다른 파일을 열까요?')) return;
   if (cur && cur.endsWith('.pdf') && pdfDirty) await fetch('/api/pdf/close', { method: 'POST', body: JSON.stringify({ name: cur }) });
   cur = name; pending = null; docText = ''; selectedObj = null; pdfDirty = false; $('#send').disabled = true;
-  [...$('#files').children].forEach((d) => d.classList.toggle('on', d.dataset.f === name));
-  $('#fname').textContent = name; $('#diff').hidden = true; $('#diffbar').hidden = true;
+  pushRecent(name); renderFiles();
+  $('#fname').textContent = basename(name); $('#fname').title = name; $('#diff').hidden = true; $('#diffbar').hidden = true;
   const isPdf = name.endsWith('.pdf');
   $('#md').hidden = isPdf; $('#pdf').hidden = !isPdf; $('#save').hidden = false; $('#pdfZoom').hidden = !isPdf;
   if (isPdf) { document.querySelector('[value=chat]').checked = true; await renderPdfDoc(name); }
@@ -216,21 +259,41 @@ function selectLine(i, line, wrap, box) {
   updateEditRadio();
   openInlineEditor(line.text);
 }
+// 줄 아래에 뜨는 편집 패널. 페이지 바닥을 넘으면 줄 위로 뒤집고, 페이지 폭 안으로 clamp한다.
 function openInlineEditor(initialText) {
   const { wrap, box, size, font } = selectedObj;
-  wrap.querySelectorAll('.pdfEdit').forEach((el) => el.remove());
+  $('#pdf').querySelectorAll('.pdfEditor').forEach((el) => el.remove());
+  $('#pdf').querySelectorAll('.pdfBox.editing').forEach((el) => el.classList.remove('editing'));
+  box.classList.add('editing');
+  const fontName = (font || '').replace(/^[A-Z]+\+/, '') || '기본 글꼴';
+  const panel = document.createElement('div');
+  panel.className = 'pdfEditor';
+  panel.innerHTML = `<h5>이 줄 고치기</h5><div class="hint2">${fontName} · ${Math.round(size)}pt</div>`;
   const ta = document.createElement('textarea');
-  ta.className = 'pdfEdit'; ta.value = initialText;
-  ta.style.left = box.style.left; ta.style.top = box.style.top; ta.style.width = box.style.width; ta.style.height = box.style.height;
-  ta.style.fontSize = (size * pdfScale) + 'px'; ta.style.fontFamily = `'${(font || '').replace(/^[A-Z]+\+/, '')}', 'Malgun Gothic', sans-serif`;
-  wrap.appendChild(ta); ta.focus(); ta.select(); requestAnimationFrame(() => (ta.scrollLeft = 0));
-  const ok = document.createElement('button');
-  ok.className = 'pdfEdit'; ok.textContent = '✔';
-  ok.style.left = (box.offsetLeft + box.offsetWidth + 2) + 'px'; ok.style.top = box.offsetTop + 'px';
-  wrap.appendChild(ok);
+  ta.value = initialText; ta.rows = 2;
+  ta.oninput = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 180) + 'px'; };
+  panel.appendChild(ta);
+  const row = document.createElement('div'); row.className = 'row';
+  const okBtn = document.createElement('button'); okBtn.className = 'pri'; okBtn.textContent = '적용 (Enter)';
+  const cancelBtn = document.createElement('button'); cancelBtn.textContent = '취소 (Esc)';
+  row.append(okBtn, cancelBtn); panel.appendChild(row);
+  const tip = document.createElement('div'); tip.className = 'tip'; tip.textContent = 'Claude에게 맡기려면 오른쪽 패널에서 "편집(선택 객체)" 모드로 지시하세요.';
+  panel.appendChild(tip);
+  panel.style.visibility = 'hidden';
+  wrap.appendChild(panel);
+  requestAnimationFrame(() => {
+    const pw = panel.offsetWidth, ph = panel.offsetHeight, pageW = wrap.offsetWidth, pageH = wrap.offsetHeight;
+    let left = Math.max(4, Math.min(box.offsetLeft, pageW - pw - 4));
+    let top = box.offsetTop + box.offsetHeight + 6;
+    if (top + ph > pageH - 4) top = box.offsetTop - ph - 6; // 아래로 넘치면 줄 위로 뒤집기
+    top = Math.max(4, top);
+    panel.style.left = left + 'px'; panel.style.top = top + 'px'; panel.style.visibility = 'visible';
+  });
+  ta.focus(); ta.select();
+  const close = () => { panel.remove(); box.classList.remove('editing'); };
   const commit = async () => {
     const newText = ta.value || ' ', { i, objs, text } = selectedObj; // 빈 문자열은 PDFium을 죽이므로 공백으로 대체
-    ta.remove(); ok.remove();
+    close();
     if (newText === text) return; // 변경 없으면 그대로 둔다
     // 줄을 이루는 조각 객체 중 첫 조각에 전체 텍스트를 넣고 나머지는 비운다 (원본 폰트 유지, idx는 편집 후에도 안정적)
     // 빈 문자열("")로 SetText하면 PDFium(WASM)이 unreachable로 죽는다 — 대신 공백 하나로 채운다 (원래도 조각 사이에 공백이 섞여 있어 시각적으로 동일)
@@ -240,10 +303,11 @@ function openInlineEditor(initialText) {
     await refreshPage(i, objs[0].idx);
     flash(r.fallbackFont ? '원본 폰트에 없는 글자라 맑은 고딕으로 대체됨' : '저장 전 (Ctrl+S)');
   };
-  ok.onclick = commit;
+  okBtn.onclick = commit;
+  cancelBtn.onclick = close;
   ta.onkeydown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); commit(); }
-    else if (e.key === 'Escape') { ta.remove(); ok.remove(); }
+    else if (e.key === 'Escape') { e.preventDefault(); close(); }
   };
 }
 async function refreshPage(i, editedIdx) {
@@ -251,7 +315,7 @@ async function refreshPage(i, editedIdx) {
   wrap.querySelector('img').src = pageUrl(cur, i);
   const objs = await (await fetch(`/api/pdf/objects?name=${encodeURIComponent(cur)}&i=${i}`)).json();
   pdfObjects[i] = objs;
-  wrap.querySelectorAll('.pdfBox, .pdfEdit').forEach((el) => el.remove());
+  wrap.querySelectorAll('.pdfBox, .pdfEditor').forEach((el) => el.remove());
   const boxed = drawOverlay(wrap, i, objs, pdfPages[i].h);
   rebuildDocText();
   if (editedIdx != null) checkOverflow(i, editedIdx, boxed);
@@ -321,7 +385,7 @@ $('#accept').onclick = () => { $('#src').value = docText = pending; preview(); c
 $('#reject').onclick = closeDiff;
 function closeDiff() { pending = null; $('#diff').hidden = true; $('#diffbar').hidden = true; $('#md').hidden = false; }
 
-checkHealth(); loadFiles();
+checkHealth(); initFiles();
 </script>
 </body>
 </html>

@@ -27,7 +27,11 @@ async function getPdfDoc(name) {
   return (pdfDocs[name] = { doc, mtimeMs, dirty: false });
 }
 
-const safe = (p) => { const abs = path.resolve(WS, p || ''); if (!abs.startsWith(WS)) throw new Error('bad path'); return abs; };
+// 절대경로는 그대로 씀 (로컬 단일 사용자 데스크톱 앱, OS 파일 대화상자에서 온 경로). 상대경로는 여전히 WS 안으로 제한.
+const safe = (p) => {
+  if (p && path.isAbsolute(p)) return path.resolve(p);
+  const abs = path.resolve(WS, p || ''); if (!abs.startsWith(WS)) throw new Error('bad path'); return abs;
+};
 const json = (res, code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(obj)); };
 const body = (req) => new Promise((r) => { let b = ''; req.on('data', (c) => (b += c)); req.on('end', () => r(b)); });
 // claude 실행 파일 위치 (설치 후 [다시 확인] 시 재탐색). npm 설치본은 .cmd라 shell 필요
@@ -97,7 +101,11 @@ const server = http.createServer(async (req, res) => {
       if (!fs.existsSync(p)) return json(res, 400, { error: '폴더 없음' });
       WS = path.resolve(p); fs.writeFileSync(CONF, JSON.stringify({ ...conf, workspace: WS })); return json(res, 200, { path: WS });
     }
-    if (url.pathname === '/api/files') return json(res, 200, fs.readdirSync(WS).filter((f) => /\.(md|pdf)$/i.test(f)).sort());
+    if (url.pathname === '/api/files') {
+      const dir = url.searchParams.get('dir');
+      if (dir) return json(res, 200, fs.readdirSync(dir).filter((f) => /\.(md|pdf)$/i.test(f)).sort().map((f) => path.join(dir, f)));
+      return json(res, 200, fs.readdirSync(WS).filter((f) => /\.(md|pdf)$/i.test(f)).sort());
+    }
     if (url.pathname === '/api/file' && req.method === 'GET') {
       const p = safe(url.searchParams.get('name'));
       res.writeHead(200, { 'Content-Type': p.endsWith('.pdf') ? 'application/pdf' : 'text/plain; charset=utf-8' });

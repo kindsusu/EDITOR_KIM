@@ -16,6 +16,11 @@ app.whenReady().then(() => {
     return r.canceled ? null : r.filePaths[0];
   });
 
+  ipcMain.handle('openFiles', async () => {
+    const r = await dialog.showOpenDialog(win, { properties: ['openFile', 'multiSelections'], filters: [{ name: 'PDF · Markdown', extensions: ['pdf', 'md'] }], title: '파일 열기' });
+    return r.canceled ? [] : r.filePaths;
+  });
+
   // 닫을 때 미저장 경고
   let allowClose = false;
   win.on('close', async (e) => {
