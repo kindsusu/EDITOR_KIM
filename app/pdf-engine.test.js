@@ -300,9 +300,22 @@ const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     assert.ok(r.ok && r.idx != null, `투명 글자 편집: ${JSON.stringify(r)}`);
     const after = d.objects(0), last = after[after.length - 1];
     assert.strictEqual(last.text, 'REVEALED', '편집된 글자가 맨 위 객체');
-    assert.strictEqual(last.color[3], 255, '알파 255로 보이게');
+    assert.ok(last.color[3] >= 250, `보이는 알파(254: PDFium이 1.0은 기록하지 않아 254로 둔다): ${last.color[3]}`);
     assert.ok(dark(last.bounds) > 20, '편집 후: 글자가 실제로 그려짐');
-    console.log('투명 글자 드러내기 OK, 진한 픽셀', dark(last.bounds));
+    // 저장·재열기(=실행 취소 경로) 후에도 보여야 한다 — PDFium이 알파 1.0을 기록하지 않아 투명으로 되돌아가던 버그
+    const d2 = await open(d.save());
+    const again = d2.objects(0).find((o) => o.text === 'REVEALED');
+    assert.ok(again && !again.hidden && again.color[3] >= 250, `재열기 후 여전히 보임: ${JSON.stringify(again && again.color)}`);
+    // 재열기 뒤 그 객체를 다시 고치면(대체 폰트 "Untitled") 제자리 SetText가 아니라 새 서브셋 객체로 다시 만들어야 글자가 안 깨진다
+    const re = d2.setText(0, again.idx, 'REVEALED 다시');
+    assert.ok(re.ok && re.fallbackFont, `재열기 후 재편집은 대체 경로: ${JSON.stringify(re)}`);
+    const reObj = d2.objects(0).find((o) => o.text === 'REVEALED 다시');
+    const fresh = await open(src); const fr = fresh.setText(0, 1, 'REVEALED 다시'); const frObj = fresh.objects(0)[fr.idx != null ? fr.idx : 1];
+    const w1 = reObj.bounds.x1 - reObj.bounds.x0, w2 = frObj.bounds.x1 - frObj.bounds.x0;
+    assert.ok(Math.abs(w1 - w2) < 1, `재편집 글자 폭이 새 문서 편집과 같아야 함(대체 폰트 유지): ${w1.toFixed(1)} vs ${w2.toFixed(1)}`);
+    fresh.close();
+    d2.close();
+    console.log('투명 글자 드러내기 OK, 진한 픽셀', dark(last.bounds), '· 재열기 후 알파', again.color[3]);
     d.close();
   }
 

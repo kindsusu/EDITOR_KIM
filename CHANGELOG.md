@@ -4,6 +4,10 @@ All notable changes to DAEPIL are recorded here. The format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Fixed
+- Revealed (formerly invisible) text turned invisible again after save or undo: PDFium does not record an alpha of exactly 1.0, so the original transparency came back. The text is now written with alpha 254.
+- Re-editing text that already uses the fallback font in a reopened document rendered thin, widely spaced glyphs (PDFium substituted a system font). Such objects are now always rebuilt with a fresh subset instead of edited in place.
+
 - PDF → Markdown conversion (PDFium text extraction, structure restored by Claude)
 - "Export as PDF" button for Markdown documents (the `md2pdf` tool exists; the UI button does not yet)
 - One-click prompts in the Claude panel (formal tone, 3-line summary, typo pass, table)

@@ -148,6 +148,7 @@ async function open(buffer) {
     heap().set(data, ptr);
     fbPtrs.push(ptr);
     const font = P.FPDFText_LoadFont(doc, ptr, data.length, FPDF_FONT_TRUETYPE, true);
+    if (process.env.DAEPIL_DEBUG) console.error('[fallbackFont]', key, path.split(/[\\/]/).pop(), 'chars', chars.size, 'bytes', data.length, 'font', font);
     if (!font) return 0;
     fb[key] = { font, chars };
     return font;
@@ -407,17 +408,19 @@ async function open(buffer) {
         ink = api.sampleInk(i, cover);
         api.addRect(i, cover, api.sampleColor(i, cover));
       }
-      const r = api._setOneRaw(i, idx, newText);
+      // 투명 글자는 항상 새 객체로 다시 만든다(forceNew): 제자리 SetText면 옛 객체의 ExtGState(ca 0)가 저장 시 그대로 기록돼 다시 투명해진다
+      const r = api._setOneRaw(i, idx, newText, hidden);
       if (!r.ok || !hidden) return r;
       const o = P.FPDFPage_GetObject(p, idx);
       P.FPDFTextObj_SetTextRenderMode(o, 0);
-      P.FPDFPageObj_SetFillColor(o, ink[0], ink[1], ink[2], 255);
+      // 알파 254: PDFium은 알파가 정확히 1.0이면 gs를 안 써서 원래의 ca 0(투명)이 저장 후 되살아난다. 1.0이 아닌 값이어야 명시적으로 기록된다
+      P.FPDFPageObj_SetFillColor(o, ink[0], ink[1], ink[2], 254);
       P.FPDFPage_RemoveObject(p, o); P.FPDFPage_InsertObject(p, o); // 맨 위(z-순서)로
       P.FPDFPage_GenerateContent(p);
       return { ...r, idx: P.FPDFPage_CountObjects(p) - 1, revealed: true, ink };
     },
 
-    _setOneRaw(i, idx, newText) {
+    _setOneRaw(i, idx, newText, forceNew = false) {
       if (!newText) newText = ' '; // 빈 문자열로 SetText하면 PDFium(WASM)이 unreachable 트랩으로 죽는다
       const p = page(i);
       const o = P.FPDFPage_GetObject(p, idx);
@@ -428,14 +431,20 @@ async function open(buffer) {
       try {
         P.FPDFTextObj_GetFontSize(o, scratch);
         const size = f32(scratch);
-        if (canRender(P.FPDFTextObj_GetFont(o), newText, size)) {
+        // 우리가 넣은 대체 폰트("Untitled")는 제자리 SetText를 하지 않는다: 저장·재열기(실행 취소) 뒤에 그 객체를 다시 SetText하면
+        // PDFium이 임베드 폰트 대신 시스템 폰트로 대체해 가늘고 벌어진 글자가 된다(사용자 보고). 항상 새 서브셋으로 객체를 다시 만든다.
+        const nb0 = mal(256); const fname = P.FPDFFont_GetBaseFontName(P.FPDFTextObj_GetFont(o), nb0, 256) ? M.UTF8ToString(nb0) : ''; free(nb0);
+        const origOk = fname !== 'Untitled' && canRender(P.FPDFTextObj_GetFont(o), newText, size);
+        if (origOk && !forceNew) {
           const ok = !!P.FPDFText_SetText(o, u16);
           if (ok) P.FPDFPage_GenerateContent(p);
           return { ok, fallbackFont: false };
         }
 
         const bold = isBold(o);
-        const font = fallbackFont(bold, newText);
+        // forceNew이고 원본 폰트로 그릴 수 있으면 원본 폰트로 새 객체(폰트 보존), 아니면 대체 폰트
+        const usingOrig = origOk && forceNew;
+        const font = usingOrig ? P.FPDFTextObj_GetFont(o) : fallbackFont(bold, newText);
         // 시스템 한글 폰트가 없거나, 서브셋에도 없는 글자(폰트 자체에 글리프 없음)면 두부(□)로 그려질 테니 거절
         if (!font || !canRender(font, newText, size)) return { ok: false, fallbackFont: false };
 
@@ -453,7 +462,7 @@ async function open(buffer) {
         P.FPDFPage_RemoveObject(p, o);
         P.FPDFPageObj_Destroy(o); // 페이지에서 뗀 객체는 직접 해제해야 샘 안 남
         P.FPDFPage_GenerateContent(p);
-        return { ok: true, fallbackFont: true };
+        return { ok: true, fallbackFont: !usingOrig };
       } finally { free(u16); free(scratch); }
     },
 
