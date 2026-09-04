@@ -9,8 +9,8 @@ jobs:
   syntax:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with: { node-version: 22 }
       - run: for f in app/main.js app/server.js app/ai-providers.js app/ai-providers.test.js app/pdf-engine.js app/pdf-engine.test.js tools/md2pdf.js tools/demo-assets.js; do node --check "$f"; done
 
@@ -18,8 +18,8 @@ jobs:
     # Windows runner: the engine's Hangul fallback font is C:\Windows\Fonts\malgun.ttf and the test asserts that path.
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with: { node-version: 22, cache: npm }
       - run: npm ci
       - run: npm test
