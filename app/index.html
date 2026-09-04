@@ -14,6 +14,7 @@
   aside .f{position:relative;padding:6px 22px 6px 8px;border-radius:6px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}aside .f:hover{background:#2c2c34}aside .f.on{background:#34343e}
   aside .f .x{display:none;position:absolute;right:4px;top:50%;transform:translateY(-50%);color:var(--mut);padding:0 4px}
   aside .f:hover .x{display:inline}aside .f .x:hover{color:var(--fg)}
+  aside details{margin:2px 6px}aside summary{cursor:pointer;color:var(--mut);font-size:11px;padding:4px 2px;list-style-position:outside}
   main{display:flex;flex-direction:column;min-width:0;min-height:0}
   .bar{display:flex;gap:8px;align-items:center;padding:6px 12px;border-bottom:1px solid var(--line);color:var(--mut)}.bar .sp{flex:1}
   button{background:#2e2e37;color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:5px 10px;cursor:pointer;font:inherit}button:hover{background:#3a3a45}button.pri{background:var(--acc);border-color:var(--acc);color:#fff}button:disabled{opacity:.5;cursor:default}
@@ -26,6 +27,7 @@
   .pdfBox{position:absolute}.pdfBox:hover{outline:1px solid var(--acc)}
   .pdfBox.editing{outline:2px solid var(--acc)}
   .pdfMask{border:1px dashed transparent;cursor:move}.pdfMask:hover{border-color:var(--acc)}
+  .pdfMask.editing{background:rgba(255,255,255,.55)}
   .pdfEditor{position:absolute;z-index:6;min-width:340px;max-width:90%;background:var(--panel);border:1px solid var(--acc);border-radius:8px;padding:10px;box-shadow:0 6px 24px #0008;color:var(--fg);font:13px/1.5 system-ui,'Malgun Gothic',sans-serif}
   .pdfEditor h5{margin:0 0 2px;font-size:13px;font-weight:600}
   .pdfEditor .hint2{color:var(--mut);font-size:11px;margin-bottom:8px}
@@ -53,6 +55,7 @@
 <aside>
   <button id="openFiles" hidden>📂 파일 열기</button>
   <button id="openFolder" hidden>📁 폴더 열기</button>
+  <details id="recentDetails" hidden><summary>최근 파일</summary><div id="recentList"></div></details>
   <h4 id="wsPath" title=""></h4>
   <div id="files"></div>
 </aside>
@@ -122,11 +125,37 @@ $('#btnSkip').onclick = () => { $('#setup').hidden = true; };
 // ---- 열어 둔 파일 목록 (절대경로, localStorage에 저장) ----
 let files = [];
 const basename = (p) => p.split(/[\\/]/).pop();
-const loadFilesLS = () => { try { files = JSON.parse(localStorage.getItem('daepil.files') || '[]'); } catch { files = []; } };
-const saveFilesLS = () => localStorage.setItem('daepil.files', JSON.stringify(files));
+// daepil.files는 sessionStorage에만 둔다(같은 실행 중 새로고침만 유지, 앱 재시작 시 자동으로 비워짐) — P2-O
+const loadFilesLS = () => { try { files = JSON.parse(sessionStorage.getItem('daepil.files') || '[]'); } catch { files = []; } };
+const saveFilesLS = () => sessionStorage.setItem('daepil.files', JSON.stringify(files));
+function loadRecent() { try { return JSON.parse(localStorage.getItem('daepil.recent') || '[]'); } catch { return []; } }
 function pushRecent(p) {
-  let r = []; try { r = JSON.parse(localStorage.getItem('daepil.recent') || '[]'); } catch {}
+  const r = loadRecent();
   localStorage.setItem('daepil.recent', JSON.stringify([p, ...r.filter((x) => x !== p)].slice(0, 20)));
+  renderRecent();
+}
+function removeRecentEntry(p) {
+  localStorage.setItem('daepil.recent', JSON.stringify(loadRecent().filter((x) => x !== p)));
+  renderRecent();
+}
+function renderRecent() {
+  if (!window.daepil) return;
+  const r = loadRecent();
+  $('#recentDetails').hidden = !r.length;
+  $('#recentList').innerHTML = r.map((p) => `<div class="f" data-r="${p}" title="${p}">${p.endsWith('.pdf') ? '📄' : '📝'} ${basename(p)}</div>`).join('');
+}
+$('#recentList').onclick = (e) => { const el = e.target.closest('[data-r]'); if (el) openRecent(el.dataset.r); };
+// 서버는 고칠 수 없어 존재 확인은 실제 fetch로 한다. /api/file은 없는 파일이면 헤더만 쓰고 스트림 에러로 응답이 끝나지 않을 수 있어 타임아웃을 둔다.
+async function fileExists(p) {
+  const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), 4000);
+  try {
+    const url = (p.endsWith('.pdf') ? '/api/pdf/info?name=' : '/api/file?name=') + encodeURIComponent(p);
+    return (await fetch(url, { signal: ctrl.signal })).ok;
+  } catch { return false; } finally { clearTimeout(t); }
+}
+async function openRecent(p) {
+  if (await fileExists(p)) addFiles([p]);
+  else { flash('파일을 찾을 수 없습니다'); removeRecentEntry(p); }
 }
 function renderFiles() {
   $('#files').innerHTML = files.map((f) => `<div class="f${f === cur ? ' on' : ''}" data-f="${f}" title="${f}">${f.endsWith('.pdf') ? '📄' : '📝'} ${basename(f)}<span class="x" data-x="${f}" title="목록에서 제거">×</span></div>`).join('') || '<div class="f" style="color:var(--mut)">.md / .pdf 파일 없음</div>';
@@ -156,7 +185,7 @@ async function initFiles() {
       const p = await window.daepil.openFolder(); if (!p) return;
       addFiles(await (await fetch('/api/files?dir=' + encodeURIComponent(p))).json());
     };
-    loadFilesLS(); renderFiles();
+    loadFilesLS(); renderFiles(); renderRecent();
     if (files.length) open(files[0]);
   } else {
     const ws = await (await fetch('/api/workspace')).json();
@@ -335,32 +364,59 @@ function drawOverlay(wrap, i, objs, h) {
     attachDrag(box, async (dx, dy) => {
       await pdfMutate('/api/pdf/move', { name: cur, i, idxs: [o.idx], dx, dy });
       await refreshPage(i);
-    }, () => openMaskPanel(i, o, wrap, box));
+    }, () => openMaskPanel(i, o, wrap, box), .6);
     wrap.appendChild(box);
     return { idx: o.idx, box };
   });
   return Object.assign(lines, { masks });
 }
+// 드래그 고스트: 박스가 덮는 페이지 이미지 영역을 캔버스에 그려 마우스를 따라가게 하고, 원래 자리는 흰색으로 덮어 글자가 "들리는" 것처럼 보이게 한다.
+// img의 실제 픽셀 크기와 표시 크기가 다를 수 있어(줌과 무관하게 서버가 다른 배율로 렌더할 수도 있음) 비율로 환산한다.
+function makeGhost(box, wrap, opacity) {
+  const img = wrap.querySelector('img');
+  const rx = img.naturalWidth / wrap.offsetWidth, ry = img.naturalHeight / wrap.offsetHeight;
+  const w = box.offsetWidth, h = box.offsetHeight, left = box.offsetLeft, top = box.offsetTop;
+  const canvas = document.createElement('canvas');
+  canvas.width = w; canvas.height = h;
+  canvas.style.cssText = `position:absolute;left:${left}px;top:${top}px;width:${w}px;height:${h}px;pointer-events:none;z-index:7;opacity:${opacity}`;
+  canvas.getContext('2d').drawImage(img, left * rx, top * ry, w * rx, h * ry, 0, 0, w, h);
+  const patch = document.createElement('div');
+  patch.style.cssText = `position:absolute;left:${left}px;top:${top}px;width:${w}px;height:${h}px;background:#fff;z-index:4`;
+  wrap.append(canvas, patch);
+  return { canvas, patch };
+}
 // 공통 드래그: 3px 넘게 끌면 드래그(pt 단위 dx,dy로 onDrop 호출), 안 끌면 onClick. rectMode 중에는 사각형 도구에 넘긴다(버블링).
-function attachDrag(box, onDrop, onClick) {
+// ghostOpacity: 텍스트 줄은 기본(1), 가림 상자는 0.6로 호출한다.
+function attachDrag(box, onDrop, onClick, ghostOpacity) {
   box.onmousedown = (e) => {
     if (rectMode || e.button !== 0) return;
     e.preventDefault();
+    const wrap = box.parentElement;
     const startX = e.clientX, startY = e.clientY, left0 = box.offsetLeft, top0 = box.offsetTop;
-    let dragged = false;
+    let dragged = false, cancelled = false, ghost = null;
     const onMove = (e2) => {
       const dx = e2.clientX - startX, dy = e2.clientY - startY;
-      if (!dragged && Math.hypot(dx, dy) > 3) dragged = true;
-      if (dragged) { box.style.left = (left0 + dx) + 'px'; box.style.top = (top0 + dy) + 'px'; }
+      if (!dragged && Math.hypot(dx, dy) > 3) { dragged = true; ghost = makeGhost(box, wrap, ghostOpacity ?? 1); }
+      if (dragged && !cancelled) {
+        box.style.left = ghost.canvas.style.left = (left0 + dx) + 'px';
+        box.style.top = ghost.canvas.style.top = (top0 + dy) + 'px';
+      }
+    };
+    const onKey = (e2) => {
+      if (e2.key !== 'Escape' || !dragged || cancelled) return;
+      cancelled = true;
+      box.style.left = left0 + 'px'; box.style.top = top0 + 'px';
+      if (ghost) { ghost.canvas.remove(); ghost.patch.remove(); }
     };
     const onUp = async (e2) => {
-      document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp);
-      if (!dragged) return;
+      document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); document.removeEventListener('keydown', onKey);
+      if (ghost) { ghost.canvas.remove(); ghost.patch.remove(); }
+      if (!dragged || cancelled) return;
       box._dragged = true;
       const dx = (e2.clientX - startX) / pdfScale, dy = -(e2.clientY - startY) / pdfScale;
       await onDrop(dx, dy);
     };
-    document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp);
+    document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp); document.addEventListener('keydown', onKey);
   };
   box.onclick = () => { if (box._dragged) return (box._dragged = false); onClick(); };
 }

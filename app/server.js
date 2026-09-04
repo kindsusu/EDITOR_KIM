@@ -118,8 +118,9 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/file' && req.method === 'GET') {
       const p = safe(url.searchParams.get('name'));
+      if (!fs.existsSync(p)) return json(res, 404, { error: '파일 없음' }); // 헤더 전송 후 스트림 오류가 나면 프로세스가 죽는다 → 먼저 확인
       res.writeHead(200, { 'Content-Type': p.endsWith('.pdf') ? 'application/pdf' : 'text/plain; charset=utf-8' });
-      return fs.createReadStream(p).pipe(res);
+      return fs.createReadStream(p).on('error', () => res.destroy()).pipe(res);
     }
     if (url.pathname === '/api/file' && req.method === 'PUT') { fs.writeFileSync(safe(url.searchParams.get('name')), await body(req)); return json(res, 200, { ok: true }); }
     if (url.pathname === '/api/session/reset' && req.method === 'POST') { delete sessions[JSON.parse(await body(req)).name]; return json(res, 200, { ok: true }); }
