@@ -21,6 +21,13 @@ app.whenReady().then(() => {
     return r.canceled ? [] : r.filePaths;
   });
 
+  ipcMain.handle('saveAs', async (_e, defaultPath) => {
+    const isPdf = /\.pdf$/i.test(defaultPath || '');
+    const filters = isPdf ? [{ name: 'PDF', extensions: ['pdf'] }] : [{ name: 'Markdown', extensions: ['md'] }];
+    const r = await dialog.showSaveDialog(win, { defaultPath, filters, title: '다른 이름으로 저장' });
+    return r.canceled ? null : r.filePath;
+  });
+
   // 닫을 때 미저장 경고
   let allowClose = false;
   win.on('close', async (e) => {

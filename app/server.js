@@ -148,6 +148,15 @@ const server = http.createServer(async (req, res) => {
       entry.mtimeMs = fs.statSync(p).mtimeMs; entry.dirty = false;
       return json(res, 200, { ok: true });
     }
+    if (url.pathname === '/api/pdf/saveas' && req.method === 'POST') {
+      const { name, to } = JSON.parse(await body(req));
+      const entry = await getPdfDoc(name);
+      const p = safe(to), tmp = p + '.tmp';
+      fs.writeFileSync(tmp, entry.doc.save()); fs.renameSync(tmp, p);
+      entry.mtimeMs = fs.statSync(p).mtimeMs; entry.dirty = false;
+      if (name !== to) { delete pdfDocs[name]; pdfDocs[to] = entry; }
+      return json(res, 200, { ok: true, path: to });
+    }
     if (url.pathname === '/api/pdf/close' && req.method === 'POST') {
       const { name } = JSON.parse(await body(req));
       if (pdfDocs[name]) { pdfDocs[name].doc.close(); delete pdfDocs[name]; }

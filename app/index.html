@@ -59,6 +59,7 @@
   <div class="bar"><span id="fname">파일을 선택하세요</span><span id="dirty" hidden>●</span><span class="sp"></span>
     <span id="pdfZoom" hidden><button id="zoomOut">−</button> <span id="zoomPct">150%</span> <button id="zoomIn">+</button></span>
     <button id="save" hidden>저장 (Ctrl+S)</button>
+    <button id="saveAs" hidden>다른 이름으로 저장 (Ctrl+Shift+S)</button>
     <span id="diffbar" hidden><button id="reject">취소</button> <button id="accept" class="pri">변경 적용</button></span>
   </div>
   <div class="split" id="md" hidden><textarea id="src" spellcheck="false"></textarea><div class="prev" id="prev"></div></div>
@@ -135,7 +136,7 @@ function removeFile(p) {
     cur = null; docText = savedText = ''; selectedObj = null; pdfDirty = false;
     $('#fname').textContent = '파일을 선택하세요'; $('#fname').title = '';
     $('#md').hidden = $('#pdf').hidden = $('#diff').hidden = $('#diffbar').hidden = true;
-    $('#save').hidden = $('#pdfZoom').hidden = $('#dirty').hidden = true; $('#send').disabled = true;
+    $('#save').hidden = $('#saveAs').hidden = $('#pdfZoom').hidden = $('#dirty').hidden = true; $('#send').disabled = true;
   }
   renderFiles();
 }
@@ -168,7 +169,7 @@ async function open(name) {
   pushRecent(name); renderFiles();
   $('#fname').textContent = basename(name); $('#fname').title = name; $('#diff').hidden = true; $('#diffbar').hidden = true;
   const isPdf = name.endsWith('.pdf');
-  $('#md').hidden = isPdf; $('#pdf').hidden = !isPdf; $('#save').hidden = false; $('#pdfZoom').hidden = !isPdf;
+  $('#md').hidden = isPdf; $('#pdf').hidden = !isPdf; $('#save').hidden = false; $('#saveAs').hidden = !window.daepil; $('#pdfZoom').hidden = !isPdf;
   if (isPdf) { document.querySelector('[value=chat]').checked = true; await renderPdfDoc(name); }
   else { docText = savedText = await (await fetch('/api/file?name=' + encodeURIComponent(name))).text(); $('#src').value = docText; preview(); }
   updateEditRadio(); showDirty(); $('#send').disabled = $('#setup').hidden === false;
@@ -182,7 +183,22 @@ async function save() {
   showDirty(); flash('저장됨');
 }
 $('#save').onclick = save;
-document.addEventListener('keydown', (e) => { if (e.ctrlKey && e.key === 's') { e.preventDefault(); save(); } });
+async function saveAs() {
+  if (!cur || !window.daepil) return;
+  const to = await window.daepil.saveAs(cur);
+  if (!to) return;
+  if (cur.endsWith('.pdf')) { await fetch('/api/pdf/saveas', { method: 'POST', body: JSON.stringify({ name: cur, to }) }); pdfDirty = false; }
+  else { await fetch('/api/file?name=' + encodeURIComponent(to), { method: 'PUT', body: $('#src').value }); savedText = docText; }
+  if (!files.includes(to)) files.push(to);
+  saveFilesLS(); cur = to; pushRecent(to); renderFiles();
+  $('#fname').textContent = basename(to); $('#fname').title = to;
+  showDirty(); flash('다른 이름으로 저장됨');
+}
+$('#saveAs').onclick = saveAs;
+document.addEventListener('keydown', (e) => {
+  if (!e.ctrlKey || e.key.toLowerCase() !== 's') return;
+  e.preventDefault(); e.shiftKey ? saveAs() : save();
+});
 window.onbeforeunload = (e) => { if (dirty() && !window.daepil) { e.preventDefault(); e.returnValue = ''; } };
 
 // ---- PDF 뷰(PDFium 서버 렌더) ----
