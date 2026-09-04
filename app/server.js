@@ -9,10 +9,23 @@ const ROOT = __dirname;
 const PORT = 4747;
 const CONF = path.join(os.homedir(), '.su-daepil.json');
 const ENV = { ...process.env, CLAUDECODE: '' }; // 중첩 세션 검사 회피
+const pdfEngine = require('./pdf-engine');
 
 let conf = {}; try { conf = JSON.parse(fs.readFileSync(CONF, 'utf8')); } catch {}
 let WS = conf.workspace && fs.existsSync(conf.workspace) ? conf.workspace : path.join(ROOT, '..', 'workspace');
 const sessions = {}; // 문서명 → claude 세션 ID (대화 이어가기)
+const pdfDocs = {}; // 파일명 → { doc, mtimeMs, dirty }
+
+// 캐시된 PDF 문서를 반환. 없거나 디스크에서 파일이 바뀌었으면 (다시) 연다 — 미저장 편집은 버려짐.
+async function getPdfDoc(name) {
+  const p = safe(name);
+  const mtimeMs = fs.statSync(p).mtimeMs;
+  const cached = pdfDocs[name];
+  if (cached && cached.mtimeMs === mtimeMs) return cached;
+  if (cached) cached.doc.close();
+  const doc = await pdfEngine.open(fs.readFileSync(p));
+  return (pdfDocs[name] = { doc, mtimeMs, dirty: false });
+}
 
 const safe = (p) => { const abs = path.resolve(WS, p || ''); if (!abs.startsWith(WS)) throw new Error('bad path'); return abs; };
 const json = (res, code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(obj)); };
@@ -68,6 +81,7 @@ const PROMPTS = {
   chat: (doc, name, q) => `아래는 사용자가 열어둔 문서 "${name}"의 내용이다. 문서에 근거해 한국어로 간결하게 답하라. 도구는 쓰지 말 것.\n\n<document>\n${doc}\n</document>\n\n질문: ${q}`,
   chatMore: (_doc, _name, q) => q, // 같은 세션의 후속 질문: 문서는 이미 대화에 있음
   edit: (doc, name, q) => `아래 Markdown 문서 "${name}"를 지시대로 수정하라. 출력은 수정된 문서 전체만, 코드펜스나 설명 없이 그대로 출력할 것. 지시와 무관한 부분은 바꾸지 말 것. 도구는 쓰지 말 것.\n\n<document>\n${doc}\n</document>\n\n지시: ${q}`,
+  editText: (doc, name, q) => `아래 텍스트를 지시대로 고쳐라. 출력은 고친 텍스트만, 설명 없이.\n\n<text>\n${doc}\n</text>\n\n지시: ${q}`,
 };
 
 const server = http.createServer(async (req, res) => {
@@ -91,6 +105,39 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/file' && req.method === 'PUT') { fs.writeFileSync(safe(url.searchParams.get('name')), await body(req)); return json(res, 200, { ok: true }); }
     if (url.pathname === '/api/session/reset' && req.method === 'POST') { delete sessions[JSON.parse(await body(req)).name]; return json(res, 200, { ok: true }); }
+    if (url.pathname === '/api/pdf/info' && req.method === 'GET') {
+      const { doc } = await getPdfDoc(url.searchParams.get('name'));
+      return json(res, 200, { pages: Array.from({ length: doc.pageCount }, (_, i) => doc.pageSize(i)) });
+    }
+    if (url.pathname === '/api/pdf/page' && req.method === 'GET') {
+      const { doc } = await getPdfDoc(url.searchParams.get('name'));
+      const png = await doc.render(+url.searchParams.get('i'), +(url.searchParams.get('scale') || 1.5));
+      res.writeHead(200, { 'Content-Type': 'image/png' }); return res.end(png);
+    }
+    if (url.pathname === '/api/pdf/objects' && req.method === 'GET') {
+      const { doc } = await getPdfDoc(url.searchParams.get('name'));
+      return json(res, 200, doc.objects(+url.searchParams.get('i')));
+    }
+    if (url.pathname === '/api/pdf/edit' && req.method === 'POST') {
+      const { name, i, idx, text } = JSON.parse(await body(req));
+      const entry = await getPdfDoc(name);
+      const r = entry.doc.setText(i, idx, text);
+      entry.dirty = true;
+      return json(res, 200, r);
+    }
+    if (url.pathname === '/api/pdf/save' && req.method === 'POST') {
+      const { name } = JSON.parse(await body(req));
+      const entry = await getPdfDoc(name);
+      const p = safe(name), tmp = p + '.tmp';
+      fs.writeFileSync(tmp, entry.doc.save()); fs.renameSync(tmp, p); // 크래시로 원본이 잘리지 않도록 임시파일 경유
+      entry.mtimeMs = fs.statSync(p).mtimeMs; entry.dirty = false;
+      return json(res, 200, { ok: true });
+    }
+    if (url.pathname === '/api/pdf/close' && req.method === 'POST') {
+      const { name } = JSON.parse(await body(req));
+      if (pdfDocs[name]) { pdfDocs[name].doc.close(); delete pdfDocs[name]; }
+      return json(res, 200, { ok: true });
+    }
     if (url.pathname === '/api/chat' && req.method === 'POST') {
       const { mode, doc, name, q, model } = JSON.parse(await body(req));
       res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache' });

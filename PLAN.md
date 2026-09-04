@@ -61,10 +61,16 @@ doc.close();
 
 **서버 엔드포인트 (B):** `GET /api/pdf/info?name` · `GET /api/pdf/page?name&i&scale` (PNG) · `GET /api/pdf/objects?name&i` · `POST /api/pdf/edit {name,i,idx,text}` · `POST /api/pdf/save {name}` · `POST /api/pdf/close {name}`. 문서는 서버 메모리에 name별 캐시.
 
-- [ ] A 엔진
-- [ ] B UI·서버
-- [ ] C MD→PDF 도구 + 한글 테스트 PDF
-- [ ] 검수: 한글 PDF에서 원본 폰트 유지 편집 / 서브셋 폴백 / 저장 후 Acrobat·Edge에서 열림
+- [x] A 엔진 (Opus, 2026-09-04) — 글리프 검사는 `FPDFFont_GetGlyphPath`의 notdef 포인터 비교. PNG는 `EPDF_PNG_EncodeRGBA`. 검수 후 보강: 굵은 원본이면 `malgunbd.ttf` 폴백, 빈 문자열 가드
+- [x] B UI·서버 (Sonnet, 2026-09-04) — 조각 객체를 기준선·인접성으로 한 줄로 묶어 편집. 확정 시 첫 조각에 전체 텍스트, 나머지는 공백
+- [x] C MD→PDF 도구 + 한글 테스트 PDF (Sonnet, 2026-09-04)
+- [x] 검수 (Fable): 회의록 PDF 제목을 브라우저에서 고쳐 Ctrl+S → 재열기 시 반영 확인. 원본 서브셋에 있는 글자는 원본 폰트, 없는 글자는 맑은 고딕(굵기 일치)으로 같은 자리에 렌더
+- [ ] Edge·Acrobat에서 저장본 열어 육안 확인 (사용자)
+
+**검수에서 드러난 다음 과제**
+- [ ] **D 폴백 폰트 서브셋 (Opus).** 폴백이 한 번이라도 쓰이면 저장 파일이 7.5MB 커진다(맑은 고딕 전체 임베드). 편집에 쓰인 글자만 담은 서브셋 TTF를 만들어 `FPDFText_LoadFont`에 넘긴다. fontkit(순수 JS) `createSubset` 검토. 목표: 편집 1건당 수십 KB
+- [ ] 여러 조각을 지울 때 편집 요청이 조각 수만큼 나간다(제목 23건). 서버에 일괄 편집 엔드포인트 하나 추가
+- [ ] 한 줄 안에서 글자 폭이 달라져도 다음 줄과 겹치지 않게 — 줄 폭 초과 시 경고
 
 ### P2-후속 — 문서 기능
 - [ ] UI에 "PDF로 내보내기" 버튼 (C의 도구를 연결)

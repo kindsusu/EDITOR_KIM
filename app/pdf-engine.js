@@ -166,6 +166,7 @@ async function open(buffer) {
     // 1) 원본 폰트로 그릴 수 있으면 그대로 SetText (폰트·모양 보존)
     // 2) 글리프가 없으면 시스템 한글 폰트로 새 객체를 만들어 자리 바꿔치기
     setText(i, idx, newText) {
+      if (!newText) newText = ' '; // 빈 문자열로 SetText하면 PDFium(WASM)이 unreachable 트랩으로 죽는다
       const p = page(i);
       const o = P.FPDFPage_GetObject(p, idx);
       if (!o || P.FPDFPageObj_GetType(o) !== OBJ_TEXT) return { ok: false, fallbackFont: false };
