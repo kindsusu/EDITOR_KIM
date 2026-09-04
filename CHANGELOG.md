@@ -5,6 +5,7 @@ All notable changes to DAEPIL are recorded here. The format follows [Keep a Chan
 ## [Unreleased]
 
 ### Fixed
+- Editing invisible text left the old picture of the word behind (a duplicate): the cover rectangle now spans the actual ink extent of the edited word within the overlapping image tiles, without touching neighbouring words. Bold weight is remembered so re-edited fallback text stays bold.
 - Revealed (formerly invisible) text turned invisible again after save or undo: PDFium does not record an alpha of exactly 1.0, so the original transparency came back. The text is now written with alpha 254.
 - Re-editing text that already uses the fallback font in a reopened document rendered thin, widely spaced glyphs (PDFium substituted a system font). Such objects are now always rebuilt with a fresh subset instead of edited in place.
 
