@@ -10,6 +10,10 @@ All notable changes to DAEPIL are recorded here. The format follows [Keep a Chan
 - Windows installer via electron-builder
 - Font subsetting for the fallback font is per document; a future version may dedupe glyphs across edits
 
+## [0.2.1] - 2026-09-04
+
+- Version bump only, no functional change: aligns the app header, window title, README badges and git tag at 0.2.1.
+
 ## [0.2.0] - 2026-09-04
 
 Feedback round on a real 10-page contract PDF (Word/Excel export, subset Malgun Gothic, tables).
