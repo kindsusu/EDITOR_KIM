@@ -10,7 +10,7 @@
     "dist": "electron-builder --win",
     "md2pdf": "electron tools/md2pdf.js"
   },
-  "license": "MIT",
+  "license": "SEE LICENSE IN LICENSE",
   "private": true,
   "devDependencies": {
     "electron": "^44.1.1"

@@ -1,0 +1,27 @@
+DAEPIL License / 대필 사용 허가
+
+Copyright (c) 2026 kindsusu
+
+## 한국어
+
+1. 개인 용도 — 개인이 비상업적 목적으로 사용, 복제, 수정, 실행하는 것을 무료로 허용합니다.
+2. 기업·상업 용도 — 회사, 기관, 단체가 업무에 쓰거나 상업적 목적으로 사용하는 것은 원칙적으로 금지합니다. 저작권자(kindsusu)의 사전 서면 승인을 받은 경우에만 허용하며, 승인 조건은 개별 협의합니다.
+3. 재배포 — 개인 용도 범위에서 원본 또는 수정본을 재배포할 수 있으나, 이 허가문과 저작권 표시를 함께 포함해야 합니다. 수정본은 수정 사실을 표시합니다.
+4. 이름 — "대필", "DAEPIL" 이름과 로고는 저작권자의 것입니다. 수정본을 배포할 때는 다른 이름을 쓰십시오.
+5. 전제 — 이 소프트웨어는 Anthropic Claude Code를 사용자의 계정으로 실행합니다. Claude Code와 Claude 서비스의 이용은 Anthropic의 약관을 따르며, 그 준수 책임은 사용자에게 있습니다.
+6. 무보증 — 이 소프트웨어는 "있는 그대로" 제공됩니다. 문서 손상, 마스킹 누락, 데이터 유출 등 어떠한 결과에 대해서도 저작권자는 책임지지 않습니다. 중요한 문서는 반드시 사본으로 작업하고 결과를 직접 확인하십시오.
+7. 제3자 구성요소 — PDFium(Apache-2.0), @embedpdf/pdfium(MIT), fontkit(MIT), Electron(MIT) 등 포함된 구성요소는 각자의 라이선스를 따릅니다.
+
+승인 문의: GitHub https://github.com/kindsusu
+
+## English
+
+1. Personal use — Individuals may use, copy, modify and run this software free of charge for non-commercial purposes.
+2. Business / commercial use — Use by companies, institutions or organizations for their work, or any commercial use, is prohibited by default. It is permitted only with prior written approval from the copyright holder (kindsusu); terms are agreed case by case.
+3. Redistribution — Within personal use you may redistribute the original or a modified version, provided this license and the copyright notice are included. Modified versions must be marked as modified.
+4. Names — The names "대필" and "DAEPIL" and any logo belong to the copyright holder. Distribute modified versions under a different name.
+5. Prerequisite — This software runs Anthropic Claude Code under the user's own account. Use of Claude Code and Claude services is governed by Anthropic's terms; compliance is the user's responsibility.
+6. No warranty — Provided "as is". The copyright holder is not liable for any outcome, including document corruption, incomplete masking or data exposure. Work on copies of important documents and verify results yourself.
+7. Third-party components — PDFium (Apache-2.0), @embedpdf/pdfium (MIT), fontkit (MIT), Electron (MIT) and other bundled components remain under their own licenses.
+
+Approval requests: GitHub https://github.com/kindsusu
