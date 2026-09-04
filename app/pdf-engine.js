@@ -55,16 +55,19 @@ async function open(buffer) {
   // ponytail: PDFium은 FPDFText_LoadFont로 넣은 폰트를 서브셋하지 않는다 →
   //   폴백이 한 번이라도 쓰이면 저장 파일이 malgun.ttf(약 7.5MB)만큼 커진다.
   //   문제가 되면 저장 시 폰트 서브셋(예: fontkit/subset-font)을 붙인다.
-  let fbFont = 0, fbFontData = 0; // 폴백 폰트 (doc당 1회 로드)
-  function fallbackFont() {
-    if (fbFont) return fbFont;
-    const path = FALLBACK_FONTS.find((p) => fs.existsSync(p));
+  const fb = { regular: null, bold: null }; // 폴백 폰트 (doc당 굵기별 1회 로드) { font, data }
+  function fallbackFont(bold) {
+    const key = bold ? 'bold' : 'regular';
+    if (fb[key]) return fb[key].font;
+    const cands = bold ? ['C:\\Windows\\Fonts\\malgunbd.ttf', ...FALLBACK_FONTS] : FALLBACK_FONTS;
+    const path = cands.find((p) => fs.existsSync(p));
     if (!path) return 0;
     const data = fs.readFileSync(path);
-    fbFontData = mal(data.length);
-    heap().set(data, fbFontData);
-    fbFont = P.FPDFText_LoadFont(doc, fbFontData, data.length, FPDF_FONT_TRUETYPE, true);
-    return fbFont;
+    const ptr = mal(data.length);
+    heap().set(data, ptr);
+    const font = P.FPDFText_LoadFont(doc, ptr, data.length, FPDF_FONT_TRUETYPE, true);
+    fb[key] = { font, data: ptr };
+    return font;
   }
 
   // 글리프 존재 확인 (실측으로 고른 방법):
@@ -178,7 +181,10 @@ async function open(buffer) {
           return { ok, fallbackFont: false };
         }
 
-        const font = fallbackFont();
+        const nb = mal(256);
+        const bold = P.FPDFFont_GetBaseFontName(P.FPDFTextObj_GetFont(o), nb, 256) && /bold|black|heavy/i.test(M.UTF8ToString(nb));
+        free(nb);
+        const font = fallbackFont(bold);
         if (!font) return { ok: false, fallbackFont: false }; // 시스템 한글 폰트 없음
 
         const neo = P.FPDFPageObj_CreateTextObj(doc, font, size);
@@ -217,8 +223,7 @@ async function open(buffer) {
       pages.clear();
       P.FPDF_CloseDocument(doc);
       free(srcPtr);
-      if (fbFontData) free(fbFontData);
-      fbFontData = fbFont = 0;
+      for (const k of Object.keys(fb)) { if (fb[k]) free(fb[k].data); fb[k] = null; }
     },
   };
   return api;
