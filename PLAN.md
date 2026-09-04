@@ -77,6 +77,29 @@ doc.close();
 - [x] **레이아웃.** `grid-template-rows:40px minmax(0,1fr)` + 각 열 `min-height:0`. 64개 항목으로 확인
 - [x] **편집 패널.** 줄 아래 떠 있는 "이 줄 고치기" 패널로 교체. 검수에서 육안 확인
 
+### P2-G/H/I — 다른 이름으로 저장 · 위치 이동 · 마스킹 (2026-09-04 사용자 요청 "전부 진행")
+
+| WP | 담당 | 내용 |
+|---|---|---|
+| G | Sonnet | **다른 이름으로 저장.** Electron 저장 대화상자 → `POST /api/pdf/saveas {name,to}` / MD도 동일. 저장 후 새 경로가 현재 문서·목록에 추가 |
+| H | Opus | **엔진 확장** (`pdf-engine.js`): `charBoxes` · `move` · `addRect` · `redact` · `pageText`. 마스킹은 글자를 실제로 제거하고 그 자리에 검은 사각형 |
+| I | Sonnet | **UI·서버** (G·H 완료 후): 편집 패널에 정렬 유지(왼/가운데/오른쪽)·화살표 이동·드래그, 글자 범위 선택 후 "가리기", 사각형 드래그 가리기, 저장 후 텍스트 잔존 검사 |
+
+**엔진 계약 추가 (H가 구현, I가 사용):**
+```js
+doc.charBoxes(i, idx)                   // [{ch, x0,y0,x1,y1}]  텍스트 객체 idx의 글자별 상자 (PDF pt)
+doc.move(i, idxs, dx, dy)               // {ok}  객체들을 평행이동 (FPDFPageObj_Transform)
+doc.addRect(i, {x0,y0,x1,y1}, [r,g,b,a]) // {idx}  채운 사각형 객체 추가
+doc.redact(i, idx, from, to)            // {ok, rects:[{x0,y0,x1,y1}]}  글자 [from,to)를 텍스트에서 제거하고 검은 사각형으로 덮음. 앞뒤 글자는 제자리 유지
+doc.pageText(i)                         // string  검증용 페이지 전체 텍스트
+```
+마스킹 원칙: 검은 사각형만 얹으면 글자가 밑에 남아 복사·검색된다. 반드시 텍스트를 제거한다. 이미지(스캔본)는 덮기만 되므로 경고.
+
+- [ ] G
+- [ ] H
+- [ ] I
+- [ ] 검수
+
 ### P2-후속 — 문서 기능
 - [ ] UI에 "PDF로 내보내기" 버튼 (C의 도구를 연결)
 - [ ] PDF → MD 변환 (PDFium 텍스트 추출 → Claude로 제목·표 구조 복원)
