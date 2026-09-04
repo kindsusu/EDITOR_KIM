@@ -68,6 +68,7 @@
     <button id="undoBtn" hidden disabled>↶ 실행 취소</button>
     <button id="redoBtn" hidden disabled>↷ 다시 실행</button>
     <button id="rectTool" hidden>▭ 사각형 가리기</button>
+    <select id="maskColor" hidden title="가림 색: 검정 또는 그 자리의 배경색을 자동 추출"><option value="black">가림: 검정</option><option value="auto">가림: 배경색</option></select>
     <button id="save" hidden>저장 (Ctrl+S)</button>
     <button id="saveAs" hidden>다른 이름으로 저장 (Ctrl+Shift+S)</button>
     <span id="diffbar" hidden><button id="reject">취소</button> <button id="accept" class="pri">변경 적용</button></span>
@@ -181,7 +182,7 @@ function removeFile(p) {
     $('#fname').textContent = '파일을 선택하세요'; $('#fname').title = '';
     $('#md').hidden = $('#pdf').hidden = $('#diff').hidden = $('#diffbar').hidden = true;
     $('#save').hidden = $('#saveAs').hidden = $('#pdfZoom').hidden = $('#dirty').hidden = true; $('#send').disabled = true;
-    $('#rectTool').hidden = true; setRectMode(false);
+    $('#rectTool').hidden = true; $('#maskColor').hidden = true; setRectMode(false);
     $('#undoBtn').hidden = $('#redoBtn').hidden = true;
   }
   renderFiles();
@@ -216,7 +217,7 @@ async function open(name) {
   $('#fname').textContent = basename(name); $('#fname').title = name; $('#diff').hidden = true; $('#diffbar').hidden = true;
   const isPdf = name.endsWith('.pdf');
   setRectMode(false);
-  $('#md').hidden = isPdf; $('#pdf').hidden = !isPdf; $('#save').hidden = false; $('#saveAs').hidden = !window.daepil; $('#pdfZoom').hidden = !isPdf; $('#rectTool').hidden = !isPdf;
+  $('#md').hidden = isPdf; $('#pdf').hidden = !isPdf; $('#save').hidden = false; $('#saveAs').hidden = !window.daepil; $('#pdfZoom').hidden = !isPdf; $('#rectTool').hidden = !isPdf; $('#maskColor').hidden = !isPdf;
   $('#undoBtn').hidden = $('#redoBtn').hidden = !isPdf;
   const st = pdfStacks[name] || { undoLeft: 0, redoLeft: 0 };
   setUndoRedoState(st.undoLeft, st.redoLeft);
@@ -660,7 +661,7 @@ function openInlineEditor(initialText) {
 
   async function maskParts(parts, maskedText) {
     const { i } = selectedObj;
-    const r = await pdfMutate('/api/pdf/mask', { name: cur, i, parts });
+    const r = await pdfMutate('/api/pdf/mask', { name: cur, i, parts, color: maskColor() });
     selectedObj = null; updateEditRadio();
     await refreshPage(i);
     close();
@@ -703,6 +704,11 @@ function setRectMode(on) {
   $('#pdf').style.cursor = on ? 'crosshair' : '';
 }
 $('#rectTool').onclick = () => setRectMode(!rectMode);
+// 가림 색: 'black' → [0,0,0,255], 'auto' → 서버가 그 자리 배경색을 추출. 선택 기억
+const maskColor = () => ($('#maskColor').value === 'auto' ? 'auto' : [0, 0, 0, 255]);
+const hex = (c) => '#' + c.slice(0, 3).map((v) => v.toString(16).padStart(2, '0')).join('');
+$('#maskColor').value = localStorage.getItem('daepil.maskColor') || 'black';
+$('#maskColor').onchange = () => localStorage.setItem('daepil.maskColor', $('#maskColor').value);
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && rectMode) setRectMode(false); });
 $('#pdf').addEventListener('mousedown', (e) => {
   if (!rectMode) return;
@@ -737,7 +743,8 @@ document.addEventListener('mouseup', async (e) => {
   const bounds = { x0: left / pdfScale, x1: (left + w) / pdfScale, y0: hpt - (top + h) / pdfScale, y1: hpt - top / pdfScale };
   const overImage = (pdfObjects[i] || []).some((o) => o.type === 'image' && o.bounds &&
     !(bounds.x1 < o.bounds.x0 || bounds.x0 > o.bounds.x1 || bounds.y1 < o.bounds.y0 || bounds.y0 > o.bounds.y1));
-  await pdfMutate('/api/pdf/rect', { name: cur, i, bounds, color: [0, 0, 0, 255] });
+  const rr = await pdfMutate('/api/pdf/rect', { name: cur, i, bounds, color: maskColor() });
+  if (rr.color && maskColor() === 'auto') flash(`배경색 ${hex(rr.color)}으로 가렸습니다`);
   await refreshPage(i);
   if (overImage) flash('이미지 위에 덮기만 했습니다 (이미지 안 글자는 남습니다)');
 });

@@ -511,7 +511,26 @@ async function open(buffer) {
 
     // 글자 [from,to)를 텍스트에서 실제로 지우고 그 자리에 검은 사각형을 덮는다.
     // 뒤쪽 글자는 새 텍스트 객체로 분리해 원래 위치에 다시 놓는다(idx+1에 삽입 → 뒤 인덱스가 1씩 밀린다).
-    redact(i, idx, from, to) {
+    // 영역의 배경색 추출: 페이지를 1배로 렌더해 영역 픽셀을 32단계로 양자화, 가장 많은 색 묶음의 평균 → [r,g,b,255]
+    // 글자·선은 소수라 최빈색은 배경(흰색, 셀 색, 슬라이드 배경)이 된다. 영역이 이미지 한가운데면 이미지의 주 색이 나온다.
+    sampleColor(i, b) {
+      const { w: pw, h: ph } = api.pageSize(i);
+      const raw = api._renderRaw(i, 1);
+      const x0 = Math.max(0, Math.floor(Math.min(b.x0, b.x1))), x1 = Math.min(raw.w - 1, Math.ceil(Math.max(b.x0, b.x1)));
+      const y0 = Math.max(0, Math.floor(ph - Math.max(b.y0, b.y1))), y1 = Math.min(raw.h - 1, Math.ceil(ph - Math.min(b.y0, b.y1)));
+      const buckets = new Map();
+      for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+        const p = y * raw.stride + x * 4, r = raw.data[p], g = raw.data[p + 1], bl = raw.data[p + 2];
+        const key = ((r >> 3) << 10) | ((g >> 3) << 5) | (bl >> 3);
+        const acc = buckets.get(key) || [0, 0, 0, 0]; acc[0] += r; acc[1] += g; acc[2] += bl; acc[3]++; buckets.set(key, acc);
+      }
+      let best = null; for (const a of buckets.values()) if (!best || a[3] > best[3]) best = a;
+      if (!best) return [255, 255, 255, 255];
+      return [Math.round(best[0] / best[3]), Math.round(best[1] / best[3]), Math.round(best[2] / best[3]), 255];
+    },
+
+    // color: [r,g,b,a] | 'auto'(배경색 추출) | 생략(검정)
+    redact(i, idx, from, to, color) {
       const p = page(i);
       const o = P.FPDFPage_GetObject(p, idx);
       if (!o || P.FPDFPageObj_GetType(o) !== OBJ_TEXT) return { ok: false, reason: 'not-text' };
@@ -573,7 +592,7 @@ async function open(buffer) {
         free(pre);
         if (!okPre) return { ok: false, reason: 'prefix' };
 
-        api.addRect(i, cover, [0, 0, 0, 255]);
+        api.addRect(i, cover, color === 'auto' ? api.sampleColor(i, cover) : (color || [0, 0, 0, 255]));
         P.FPDFPage_GenerateContent(p);
         return { ok: true, rects: [cover], inserted };
       } finally { free(scratch); }

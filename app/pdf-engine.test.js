@@ -269,6 +269,23 @@ const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     d.close();
   }
 
+  // 배경색 추출: 흰 페이지의 글자 영역은 흰색, 검은 사각형 위는 검정, 'auto' 마스킹은 그 색으로 덮는다
+  {
+    const d = await open(src);
+    const t = d.objects(0)[5];
+    const white = d.sampleColor(0, t.bounds);
+    assert.ok(white.slice(0, 3).every((v) => v >= 250), `흰 배경 추출: ${white}`);
+    d.addRect(0, { x0: 300, y0: 300, x1: 400, y1: 340 }, [0, 0, 0, 255]);
+    const black = d.sampleColor(0, { x0: 310, y0: 305, x1: 390, y1: 335 });
+    assert.ok(black.slice(0, 3).every((v) => v <= 5), `검정 추출: ${black}`);
+    const rr = d.redact(0, 5, 3, 10, 'auto');
+    assert.ok(rr.ok, 'auto 색 마스킹');
+    const objs = d.objects(0), last = objs[objs.length - 1];
+    assert.ok(last.mask && last.color.slice(0, 3).every((v) => v >= 250), `auto 마스킹 사각형은 배경색(흰색): ${last.color}`);
+    console.log('배경색 추출 OK 흰', white.slice(0, 3), '검', black.slice(0, 3));
+    d.close();
+  }
+
   // 폭 맞춤: 긴 글이 maxWidth 안에서 줄바꿈되거나(wrap) 축소돼야(shrink) 한다
   {
     const long = 'This sentence is deliberately much longer than the original line so that it must wrap into several lines.';

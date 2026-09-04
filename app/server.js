@@ -186,9 +186,10 @@ const server = http.createServer(async (req, res) => {
       const { name, i, bounds, color } = JSON.parse(await body(req));
       const entry = await getPdfDoc(name);
       snapshot(entry, i);
-      const r = entry.doc.addRect(i, bounds, color || [0, 0, 0, 255]);
+      const col = color === 'auto' ? entry.doc.sampleColor(i, bounds) : (color || [0, 0, 0, 255]); // 'auto' = 그 자리 배경색
+      const r = entry.doc.addRect(i, bounds, col);
       entry.dirty = true;
-      return json(res, 200, { ...r, ...stacks(entry) });
+      return json(res, 200, { ...r, color: col, ...stacks(entry) });
     }
     if (url.pathname === '/api/pdf/remove' && req.method === 'POST') {
       const { name, i, idx } = JSON.parse(await body(req));
@@ -207,22 +208,24 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ...r, ...stacks(entry) });
     }
     if (url.pathname === '/api/pdf/mask' && req.method === 'POST') {
-      const { name, i, parts, fallbackRects } = JSON.parse(await body(req));
+      const { name, i, parts, fallbackRects, color } = JSON.parse(await body(req));
       const entry = await getPdfDoc(name);
       snapshot(entry, i);
       const rects = [];
+      const colFor = (b) => (color === 'auto' ? entry.doc.sampleColor(i, b) : (color || [0, 0, 0, 255])); // 'auto' = 그 자리 배경색
       // redact가 idx+1에 새 텍스트 객체를 끼워넣어 뒤 인덱스를 밀어내므로, 앞 인덱스가 안 밀리도록 뒤에서부터 처리
       const sorted = [...parts].sort((a, b) => b.idx - a.idx);
       for (const { idx, from, to } of sorted) {
-        const r = entry.doc.redact(i, idx, from, to);
-        if (r.ok) { rects.push(...r.rects); continue; } // redact가 이미 검은 사각형을 얹었다
+        const r = entry.doc.redact(i, idx, from, to, color === 'auto' ? 'auto' : (color || undefined));
+        if (r.ok) { rects.push(...r.rects); continue; } // redact가 이미 사각형을 얹었다
         if (r.reason === 'charmap') { // 조각 텍스트: 문자맵 매칭이 안 되니 공백으로 지우고 사각형은 따로 덮는다
           const obj = entry.doc.objects(i)[idx];
+          const col = obj && obj.bounds ? colFor(obj.bounds) : null; // 글자를 지우기 전에 색을 잰다
           entry.doc.setText(i, idx, ' ');
-          if (obj && obj.bounds) { entry.doc.addRect(i, obj.bounds, [0, 0, 0, 255]); rects.push(obj.bounds); }
+          if (obj && obj.bounds) { entry.doc.addRect(i, obj.bounds, col); rects.push(obj.bounds); }
         }
       }
-      for (const b of (fallbackRects || [])) { entry.doc.addRect(i, b, [0, 0, 0, 255]); rects.push(b); }
+      for (const b of (fallbackRects || [])) { entry.doc.addRect(i, b, colFor(b)); rects.push(b); }
       entry.dirty = true;
       return json(res, 200, { ok: true, rects, textLeft: entry.doc.pageText(i), ...stacks(entry) });
     }
