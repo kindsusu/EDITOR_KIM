@@ -122,5 +122,126 @@ const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     d2.close();
   }
 
+  // --- H: charBoxes / move / addRect / redact / pageText ---
+  {
+    const d = await open(src);
+    const o0 = d.objects(0)[0];
+
+    // charBoxes: 글자 수가 문자열 길이와 같고, x0가 오름차순, 객체 bounds 안
+    // (공백도 상자를 받는다 — 높이 0의 얇은 상자. 인덱스를 문자열과 맞추려면 그대로 두는 게 맞다)
+    const cb = d.charBoxes(0, 0);
+    assert.strictEqual(cb.length, o0.text.length, 'charBoxes 개수 = 글자 수');
+    assert.strictEqual(cb.length, 37);
+    assert.strictEqual(cb.map((c) => c.ch).join(''), o0.text, 'charBoxes 순서 = 문자열 순서');
+    for (let k = 1; k < cb.length; k++) assert.ok(cb[k].x0 > cb[k - 1].x0, `x0 오름차순 (${k})`);
+    for (const c of cb) {
+      assert.ok(c.x0 >= o0.bounds.x0 - 1 && c.x1 <= o0.bounds.x1 + 1, 'x가 bounds 안');
+      assert.ok(c.y0 >= o0.bounds.y0 - 1 && c.y1 <= o0.bounds.y1 + 1, 'y가 bounds 안');
+    }
+    console.log('charBoxes', cb.length, JSON.stringify(cb[0]));
+
+    // move
+    const b0 = d.objects(0)[1].bounds;
+    assert.deepStrictEqual(d.move(0, [1], 20, -10), { ok: true, moved: 1 });
+    const b1 = d.objects(0)[1].bounds;
+    for (const [k, dv] of [['x0', 20], ['x1', 20], ['y0', -10], ['y1', -10]]) {
+      assert.ok(Math.abs(b1[k] - (b0[k] + dv)) < 0.01, `move ${k}: ${b0[k]} → ${b1[k]}`);
+    }
+    assert.deepStrictEqual(d.move(0, [999], 1, 1), { ok: false, moved: 0 }, '범위 밖 idx는 무시');
+    console.log('move', b0.x0.toFixed(2), '→', b1.x0.toFixed(2));
+
+    // addRect
+    const nBefore = d.objects(0).length;
+    const rect = { x0: 100, y0: 100, x1: 200, y1: 130 };
+    const { idx: rIdx } = d.addRect(0, rect, [0, 0, 0, 255]);
+    const ro = d.objects(0);
+    assert.strictEqual(ro.length, nBefore + 1, '객체 1개 늘어남');
+    assert.strictEqual(ro[rIdx].type, 'path');
+    for (const k of ['x0', 'y0', 'x1', 'y1']) assert.ok(Math.abs(ro[rIdx].bounds[k] - rect[k]) < 0.01, `rect ${k}`);
+    console.log('addRect idx', rIdx, JSON.stringify(ro[rIdx].bounds));
+    d.close();
+  }
+
+  // redact — 글자가 실제로 사라지고, 앞뒤는 제자리, 검은 사각형이 덮는다
+  {
+    const d = await open(src);
+    const line = d.objects(0)[5].text;
+    assert.strictEqual(line, '1. Editing is local; only the AI call leaves the machine.');
+    const from = line.indexOf('local');
+    const boxesBefore = d.charBoxes(0, 5);
+    const r = d.redact(0, 5, from, from + 5);
+    console.log('redact', JSON.stringify(r));
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(r.inserted, 6);
+    assert.strictEqual(r.rects.length, 1);
+
+    const pt = d.pageText(0);
+    assert.ok(!pt.includes('local'), '"local"이 페이지 텍스트에 남으면 안 됨');
+    assert.ok(pt.includes('1. Editing is '), '앞부분 유지');
+    assert.ok(pt.includes('; only the AI call'), '뒷부분 유지');
+
+    const objs = d.objects(0);
+    assert.strictEqual(objs[5].text, '1. Editing is ');
+    assert.strictEqual(objs[6].text, '; only the AI call leaves the machine.');
+
+    // 뒷부분이 원래 자리에 남았는지 (상자 기준 이동이라 lsb 차이만큼만 어긋난다)
+    const suffixBoxes = d.charBoxes(0, 6);
+    const err = suffixBoxes[0].x0 - boxesBefore[from + 5].x0;
+    console.log('suffix 위치 오차', err.toFixed(3), 'pt');
+    assert.ok(Math.abs(err) < 0.5, `뒷부분이 0.5pt 안에서 제자리 (실제 ${err})`);
+    assert.ok(Math.abs(suffixBoxes[0].y0 - boxesBefore[from + 5].y0) < 0.01, '세로 위치 유지');
+
+    // 픽셀: 사각형 영역은 거의 전부 검고, 뒷부분 영역에는 글자 픽셀이 남아 있다
+    const { h } = d.pageSize(0);
+    const raw = d._renderRaw(0, 1);
+    const darkFrac = (b, lim = 60) => {
+      const x0 = Math.max(0, Math.ceil(b.x0 + 1)), x1 = Math.min(raw.w, Math.floor(b.x1 - 1));
+      const y0 = Math.max(0, Math.ceil(h - b.y1 + 1)), y1 = Math.min(raw.h, Math.floor(h - b.y0 - 1));
+      let dark = 0, n = 0;
+      for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++, n++) if (raw.data[y * raw.stride + x * 4] < lim) dark++;
+      return { dark, n, frac: n ? dark / n : 0 };
+    };
+    const inRect = darkFrac(r.rects[0]);
+    console.log('사각형 영역', JSON.stringify(inRect));
+    assert.ok(inRect.n > 50 && inRect.frac > 0.95, `가린 자리는 거의 전부 검어야 함 (${inRect.frac})`);
+    const sufBox = { x0: suffixBoxes[0].x0, y0: objs[6].bounds.y0, x1: suffixBoxes[8].x1, y1: objs[6].bounds.y1 };
+    const inSuf = darkFrac(sufBox, 200);
+    console.log('뒷부분 영역', JSON.stringify(inSuf));
+    assert.ok(inSuf.dark > 20 && inSuf.frac < 0.6, '뒷부분은 글자로 남아 있어야 함(검은 칠 아님)');
+
+    // 저장 → 재열기: 마스킹이 살아남는다
+    const s = d.save();
+    d.close();
+    const d2 = await open(s);
+    const pt2 = d2.pageText(0);
+    assert.ok(!pt2.includes('local'), '저장본에도 "local"이 없어야 함');
+    assert.ok(pt2.includes('; only the AI call'), '저장본에 뒷부분 유지');
+    console.log('저장 후 재열기 OK', s.length, 'bytes');
+    d2.close();
+  }
+
+  // redact — 한글(서브셋 폰트, Chromium이 조각낸 텍스트 객체)
+  if (fs.existsSync(ko)) {
+    const koBuf = fs.readFileSync(ko);
+    const d = await open(koBuf);
+    // 조각 중 3글자 이상인 것 하나 (charBoxes와 글자 수가 맞는 것)
+    const frag = d.objects(0).find((o) => o.type === 'text' && (o.text || '').trim().length >= 3
+      && d.charBoxes(0, o.idx).length === o.text.length);
+    assert.ok(frag, '3글자 이상 텍스트 조각이 있어야 함');
+    assert.ok(d.pageText(0).includes(frag.text), '원래 페이지 텍스트에 조각이 있음');
+    const mid = Math.floor(frag.text.length / 2);
+    const r = d.redact(0, frag.idx, mid, mid + 1);
+    console.log(`[회의록] ${JSON.stringify(frag.text)} 중 ${JSON.stringify(frag.text[mid])} 가리기 → ${JSON.stringify(r)}`);
+    assert.strictEqual(r.ok, true);
+    assert.ok(!d.pageText(0).includes(frag.text), '가린 뒤에는 원래 조각 문자열이 없어야 함');
+    const s = d.save();
+    assert.ok(s.length > 0);
+    d.close();
+    const d2 = await open(s);
+    assert.ok(!d2.pageText(0).includes(frag.text), '저장본에도 없음');
+    d2.close();
+    console.log('[회의록] 마스킹 저장·재열기 OK', s.length, 'bytes');
+  }
+
   console.log('\nOK — 모든 검사 통과');
 })().catch((e) => { console.error('FAIL', e); process.exit(1); });

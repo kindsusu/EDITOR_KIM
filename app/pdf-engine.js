@@ -109,6 +109,7 @@ async function open(buffer) {
   const free = (p) => M._free(p);
   const f32 = (p) => M.getValue(p, 'float');
   const i32 = (p) => M.getValue(p, 'i32');
+  const f64 = (p) => M.getValue(p, 'double');
   const utf16 = (s) => { const p = mal((s.length + 1) * 2); M.stringToUTF16(s, p, (s.length + 1) * 2); return p; };
 
   // FPDF_LoadMemDocument는 버퍼를 복사하지 않는다 → close()까지 살려둔다.
@@ -300,6 +301,141 @@ async function open(buffer) {
         P.FPDFPage_GenerateContent(p);
         return { ok: true, fallbackFont: true };
       } finally { free(u16); free(scratch); }
+    },
+
+    // ── H: 글자 상자 / 이동 / 사각형 / 마스킹 ──────────────────────────────
+    // 텍스트 페이지의 글자 인덱스는 페이지 전체 기준이라 객체별로 나눠야 한다.
+    // FPDFText_GetTextObject(tp, c)가 그 글자를 그린 페이지 객체 포인터를 그대로 준다
+    // → 좌표 허용오차나 유니코드 대조 없이 정확히 매칭된다.
+    //   (객체 사이에 끼는 합성 \r\n 은 포인터 0 이라 자동으로 걸러진다)
+    charBoxes(i, idx) {
+      const p = page(i);
+      const o = P.FPDFPage_GetObject(p, idx);
+      if (!o || P.FPDFPageObj_GetType(o) !== OBJ_TEXT) return [];
+      const tp = P.FPDFText_LoadPage(p);
+      const s = mal(32); // double 4개: left, right, bottom, top
+      try {
+        const out = [];
+        for (let c = 0, n = P.FPDFText_CountChars(tp); c < n; c++) {
+          if (P.FPDFText_GetTextObject(tp, c) !== o) continue;
+          const ch = String.fromCharCode(P.FPDFText_GetUnicode(tp, c));
+          // 공백은 PDFium이 빈 상자(0,0,0,0)를 줄 수 있다. 문자열과 길이를 맞춰야 하므로 그대로 담는다.
+          const ok = P.FPDFText_GetCharBox(tp, c, s, s + 8, s + 16, s + 24);
+          out.push(ok
+            ? { ch, x0: f64(s), y0: f64(s + 16), x1: f64(s + 8), y1: f64(s + 24) }
+            : { ch, x0: 0, y0: 0, x1: 0, y1: 0 });
+        }
+        return out;
+      } finally { free(s); P.FPDFText_ClosePage(tp); }
+    },
+
+    move(i, idxs, dx, dy) {
+      const p = page(i), n = P.FPDFPage_CountObjects(p);
+      let moved = 0;
+      for (const idx of [].concat(idxs)) {
+        if (!(idx >= 0 && idx < n)) continue;
+        const o = P.FPDFPage_GetObject(p, idx);
+        if (!o) continue;
+        P.FPDFPageObj_Transform(o, 1, 0, 0, 1, dx, dy);
+        moved++;
+      }
+      if (moved) P.FPDFPage_GenerateContent(p);
+      return { ok: moved > 0, moved };
+    },
+
+    // FPDFPageObj_CreateNewRect(x, y, w, h) — x1,y1 이 아니라 폭·높이다
+    addRect(i, r, color = [0, 0, 0, 255]) {
+      const p = page(i);
+      const o = P.FPDFPageObj_CreateNewRect(r.x0, r.y0, r.x1 - r.x0, r.y1 - r.y0);
+      if (!o) return { idx: -1 };
+      P.FPDFPageObj_SetFillColor(o, color[0], color[1], color[2], color[3] == null ? 255 : color[3]);
+      P.FPDFPath_SetDrawMode(o, 1, false); // FPDF_FILLMODE_WINDING, stroke=false
+      P.FPDFPage_InsertObject(p, o);       // 맨 위에 얹는다
+      P.FPDFPage_GenerateContent(p);
+      return { idx: P.FPDFPage_CountObjects(p) - 1 };
+    },
+
+    // 글자 [from,to)를 텍스트에서 실제로 지우고 그 자리에 검은 사각형을 덮는다.
+    // 뒤쪽 글자는 새 텍스트 객체로 분리해 원래 위치에 다시 놓는다(idx+1에 삽입 → 뒤 인덱스가 1씩 밀린다).
+    redact(i, idx, from, to) {
+      const p = page(i);
+      const o = P.FPDFPage_GetObject(p, idx);
+      if (!o || P.FPDFPageObj_GetType(o) !== OBJ_TEXT) return { ok: false, reason: 'not-text' };
+
+      const item = api.objects(i)[idx];
+      const text = item.text || '';
+      from = Math.max(0, Math.min(from | 0, text.length));
+      to = Math.max(from, Math.min(to | 0, text.length));
+      if (from === to) return { ok: false, reason: 'empty' };
+
+      const boxes = api.charBoxes(i, idx);
+      if (boxes.length !== text.length) return { ok: false, reason: 'charmap' };
+
+      const scratch = mal(24);
+      try {
+        if (!P.FPDFPageObj_GetMatrix(o, scratch)) return { ok: false, reason: 'matrix' };
+        const m = [0, 4, 8, 12, 16, 20].map((k) => f32(scratch + k)); // a b c d e f
+        if (Math.abs(m[1]) > 0.01 || Math.abs(m[2]) > 0.01) return { ok: false, reason: 'rotated' };
+
+        // 가릴 영역: 지워지는 글자 상자들의 합집합 (빈 상자는 무시), 없으면 객체 전체
+        let cover = null;
+        for (let k = from; k < to; k++) {
+          const b = boxes[k];
+          if (b.x1 <= b.x0) continue;
+          cover = cover
+            ? { x0: Math.min(cover.x0, b.x0), y0: Math.min(cover.y0, b.y0), x1: Math.max(cover.x1, b.x1), y1: Math.max(cover.y1, b.y1) }
+            : { ...b };
+        }
+        if (!cover) cover = { ...item.bounds };
+        const PAD = 0.5;
+        cover = { x0: cover.x0 - PAD, y0: cover.y0 - PAD, x1: cover.x1 + PAD, y1: cover.y1 + PAD };
+
+        const prefix = text.slice(0, from), suffix = text.slice(to);
+        let inserted = -1;
+
+        if (suffix) {
+          const font = P.FPDFTextObj_GetFont(o);
+          const neo = font ? P.FPDFPageObj_CreateTextObj(doc, font, item.size || 12) : 0;
+          const u16 = neo ? utf16(suffix) : 0;
+          if (!neo || !P.FPDFText_SetText(neo, u16)) {
+            if (u16) free(u16);
+            if (neo) P.FPDFPageObj_Destroy(neo);
+            return { ok: false, reason: 'suffix-font' };
+          }
+          free(u16);
+          // 상자 기준 상대 이동량. e 는 펜 시작점이라 첫 글자 상자 x0 와 lsb 만큼 어긋나므로
+          // 절대값이 아니라 (지운 뒤 첫 글자 − 원래 첫 글자) 차이를 쓴다.
+          const dx = (boxes[to] && boxes[to].x1 > boxes[to].x0 ? boxes[to].x0 : cover.x1 + PAD) - boxes[0].x0;
+          M.setValue(scratch + 16, m[4] + dx, 'float'); // scratch에는 아직 원본 행렬이 들어 있다
+          P.FPDFPageObj_SetMatrix(neo, scratch);
+          P.FPDFPageObj_SetFillColor(neo, item.color[0], item.color[1], item.color[2], item.color[3]);
+          if (P.FPDFPage_InsertObjectAtIndex(p, neo, idx + 1)) inserted = idx + 1;
+          else { P.FPDFPage_InsertObject(p, neo); inserted = P.FPDFPage_CountObjects(p) - 1; }
+        }
+
+        // 빈 문자열로 SetText 하면 PDFium이 트랩으로 죽는다 → 공백 하나 (민감한 글자는 남지 않는다)
+        const pre = utf16(prefix || ' ');
+        const okPre = !!P.FPDFText_SetText(o, pre);
+        free(pre);
+        if (!okPre) return { ok: false, reason: 'prefix' };
+
+        api.addRect(i, cover, [0, 0, 0, 255]);
+        P.FPDFPage_GenerateContent(p);
+        return { ok: true, rects: [cover], inserted };
+      } finally { free(scratch); }
+    },
+
+    pageText(i) {
+      const tp = P.FPDFText_LoadPage(page(i));
+      try {
+        const n = P.FPDFText_CountChars(tp);
+        if (n <= 0) return '';
+        const buf = mal((n + 1) * 2);
+        P.FPDFText_GetText(tp, 0, n, buf);
+        const s = M.UTF16ToString(buf);
+        free(buf);
+        return s;
+      } finally { P.FPDFText_ClosePage(tp); }
     },
 
     save() {
