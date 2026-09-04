@@ -187,7 +187,7 @@ doc.pageText(i)                         // string  검증용 페이지 전체 �
 - [x] 가림 색은 실행 때마다 검정 기본(기억 안 함, `daepil.maskColor` localStorage 제거). 버튼 "사각형 가리기" → "마스킹 삽입"
 - [x] 메인 이미지 = `assets/Editor_Kim.png` → hero.png 교체 (기존 hero.png 대체)
 - [x] 검수: `npm test` 통과, 브라우저에서 헤더/제목 EDITOR_KIM v0.4.0, 버튼 "마스킹 삽입", 새로고침 후에도 가림 색 검정 확인
-- [ ] 0.4.0 태그·푸시 (검수 후)
+- [x] 0.4.0 태그·푸시 (검수 후, 2026-09-04)
 
 ### P2-후속 — 문서 기능
 - [ ] UI에 "PDF로 내보내기" 버튼 (C의 도구를 연결)
