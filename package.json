@@ -2,14 +2,22 @@
   "name": "su-daepil",
   "productName": "대필",
   "version": "0.1.0",
-  "description": "PDF·Markdown editor with Claude (via Claude Code subscription, no API key)",
+  "description": "Local PDF & Markdown editor with true PDF text editing and redaction — PDFium (WASM) + Claude Code, no API key",
   "main": "app/main.js",
   "scripts": {
     "start": "electron .",
     "serve": "node app/server.js",
+    "test": "node app/pdf-engine.test.js",
     "dist": "electron-builder --win",
-    "md2pdf": "electron tools/md2pdf.js"
+    "md2pdf": "electron tools/md2pdf.js",
+    "assets": "node tools/demo-assets.js"
   },
+  "repository": { "type": "git", "url": "https://github.com/kindsusu/DAEPIL.git" },
+  "homepage": "https://github.com/kindsusu/DAEPIL",
+  "bugs": "https://github.com/kindsusu/DAEPIL/issues",
+  "author": "kindsusu",
+  "keywords": ["pdf", "pdf-editor", "redaction", "pdfium", "electron", "markdown", "claude-code"],
+  "engines": { "node": ">=22" },
   "license": "SEE LICENSE IN LICENSE",
   "private": true,
   "devDependencies": {

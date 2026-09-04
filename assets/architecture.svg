@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="380" viewBox="0 0 1100 380" font-family="system-ui, -apple-system, 'Segoe UI', 'Malgun Gothic', sans-serif">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#9a9aa6"/>
+    </marker>
+  </defs>
+  <rect width="1100" height="380" fill="#1b1b1f"/>
+
+  <!-- machine boundary -->
+  <rect x="24" y="28" width="760" height="324" rx="14" fill="none" stroke="#33333b" stroke-dasharray="6 6"/>
+  <text x="40" y="54" font-size="13" fill="#9a9aa6">Your machine — documents never leave it</text>
+
+  <!-- Electron window -->
+  <g transform="translate(48 84)">
+    <rect width="200" height="120" rx="10" fill="#232329" stroke="#33333b"/>
+    <text x="16" y="30" font-size="15" font-weight="700" fill="#e8e8ec">Electron window</text>
+    <text x="16" y="54" font-size="12" fill="#9a9aa6">app/index.html</text>
+    <text x="16" y="74" font-size="12" fill="#e8e8ec">PDF pages as PNG</text>
+    <text x="16" y="92" font-size="12" fill="#e8e8ec">clickable text lines</text>
+    <text x="16" y="110" font-size="12" fill="#e8e8ec">Markdown + Claude panel</text>
+  </g>
+
+  <!-- server -->
+  <g transform="translate(320 84)">
+    <rect width="200" height="120" rx="10" fill="#232329" stroke="#33333b"/>
+    <text x="16" y="30" font-size="15" font-weight="700" fill="#e8e8ec">Local server</text>
+    <text x="16" y="54" font-size="12" fill="#9a9aa6">app/server.js · Node built-ins</text>
+    <text x="16" y="74" font-size="12" fill="#e8e8ec">file I/O · PDF endpoints</text>
+    <text x="16" y="92" font-size="12" fill="#e8e8ec">undo snapshots</text>
+    <text x="16" y="110" font-size="12" fill="#e8e8ec">Claude Code check</text>
+  </g>
+
+  <!-- engine -->
+  <g transform="translate(320 232)">
+    <rect width="200" height="96" rx="10" fill="#232329" stroke="#d97757"/>
+    <text x="16" y="28" font-size="15" font-weight="700" fill="#d97757">pdf-engine.js</text>
+    <text x="16" y="50" font-size="12" fill="#9a9aa6">PDFium compiled to WASM</text>
+    <text x="16" y="70" font-size="12" fill="#e8e8ec">render · objects · setText</text>
+    <text x="16" y="88" font-size="12" fill="#e8e8ec">redact · move · save</text>
+  </g>
+
+  <!-- claude cli -->
+  <g transform="translate(580 84)">
+    <rect width="180" height="120" rx="10" fill="#232329" stroke="#33333b"/>
+    <text x="16" y="30" font-size="15" font-weight="700" fill="#e8e8ec">claude -p</text>
+    <text x="16" y="54" font-size="12" fill="#9a9aa6">Claude Code CLI</text>
+    <text x="16" y="74" font-size="12" fill="#e8e8ec">your own login</text>
+    <text x="16" y="92" font-size="12" fill="#e8e8ec">prompt on stdin</text>
+    <text x="16" y="110" font-size="12" fill="#e8e8ec">stream-json out</text>
+  </g>
+
+  <!-- fonts -->
+  <g transform="translate(580 232)">
+    <rect width="180" height="96" rx="10" fill="#232329" stroke="#33333b"/>
+    <text x="16" y="28" font-size="15" font-weight="700" fill="#e8e8ec">System fonts</text>
+    <text x="16" y="50" font-size="12" fill="#9a9aa6">C:\Windows\Fonts\malgun*.ttf</text>
+    <text x="16" y="70" font-size="12" fill="#e8e8ec">subset per document</text>
+    <text x="16" y="88" font-size="12" fill="#e8e8ec">(fontkit + cmap)</text>
+  </g>
+
+  <!-- arrows -->
+  <g stroke="#9a9aa6" stroke-width="1.6" fill="none" marker-end="url(#a)" marker-start="url(#a)">
+    <line x1="250" y1="144" x2="318" y2="144"/>
+    <line x1="420" y1="206" x2="420" y2="230"/>
+    <line x1="522" y1="144" x2="578" y2="144"/>
+    <line x1="522" y1="280" x2="578" y2="280"/>
+  </g>
+  <g font-size="11" fill="#9a9aa6">
+    <text x="252" y="134">HTTP · SSE</text>
+    <text x="428" y="222">in-process</text>
+    <text x="524" y="134">stdin / stdout</text>
+  </g>
+
+  <!-- outside -->
+  <g transform="translate(830 84)">
+    <rect width="240" height="120" rx="10" fill="#1b1b1f" stroke="#33333b"/>
+    <text x="16" y="30" font-size="15" font-weight="700" fill="#e8e8ec">Anthropic</text>
+    <text x="16" y="54" font-size="12" fill="#9a9aa6">only what Claude Code sends</text>
+    <text x="16" y="76" font-size="12" fill="#e8e8ec">the prompt and the document text</text>
+    <text x="16" y="94" font-size="12" fill="#e8e8ec">you chose to ask about</text>
+    <text x="16" y="112" font-size="12" fill="#d97757">no key or token stored by DAEPIL</text>
+  </g>
+  <line x1="762" y1="144" x2="828" y2="144" stroke="#9a9aa6" stroke-width="1.6" stroke-dasharray="5 5" marker-end="url(#a)"/>
+</svg>

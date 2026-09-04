@@ -1,54 +1,223 @@
-# 대필 (DAEPIL)
+# DAEPIL (대필)
 
-PDF·Markdown 편집기. AI 기능은 API 키 대신 **Claude Code 로그인(Claude 구독)** 으로 호출합니다. 문서는 로컬에만 있고, AI 호출만 밖으로 나갑니다.
+![DAEPIL — true PDF text editing and redaction, on your machine](assets/hero.svg)
 
-## 할 수 있는 것
+> a PDF & Markdown editor that runs Claude through your own Claude Code login, by **su** ([kindsusu](https://github.com/kindsusu))
 
-- **PDF 직접 편집** — 글자 줄을 클릭해 고치고 저장. 원본 폰트를 유지하며, 원본 폰트에 없는 글자는 맑은 고딕으로 대체 (PDFium 엔진, [@embedpdf/pdfium](https://github.com/embedpdf/embed-pdf-viewer))
-- **위치 이동** — 정렬 유지(왼쪽/가운데/오른쪽), 화살표 미세 이동, 드래그
-- **마스킹** — 글자 범위를 골라 가리기. 검은 사각형만 얹는 게 아니라 텍스트를 실제로 제거하고, 가린 뒤 잔존 여부를 자동 검사. 스캔본은 사각형 도구로 덮기만 가능
-- **Markdown** — 편집·미리보기, Claude에게 지시하면 수정안을 줄 단위 diff로 보여주고 적용/취소
-- **Claude 패널** — 문서 질문(대화 이어짐), 선택한 줄 고쳐 달라고 지시. 기본 모델 Sonnet 5, Opus 5 선택
-- 다른 이름으로 저장(Ctrl+Shift+S), 파일·폴더 열기, 최근 파일
+<p align="center">
+  <a href="README.md"><b>English</b></a> ·
+  <a href="README.ko.md">한국어</a>
+</p>
 
-## 필요한 것
+<p align="center">
+  <a href="https://github.com/kindsusu/DAEPIL/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/kindsusu/DAEPIL/actions/workflows/ci.yml/badge.svg"></a>
+  <img alt="version 0.1.0" src="https://img.shields.io/badge/version-0.1.0-d97757">
+  <img alt="engine PDFium (WASM)" src="https://img.shields.io/badge/engine-PDFium%20(WASM)-1A2B28">
+  <img alt="no API key" src="https://img.shields.io/badge/API%20key-none-2C7A4B">
+  <img alt="Node 22+" src="https://img.shields.io/badge/node-22%2B-0E6B5C">
+  <img alt="Windows" src="https://img.shields.io/badge/platform-Windows-0078D4">
+  <a href="LICENSE"><img alt="License: personal use free, commercial by approval" src="https://img.shields.io/badge/license-personal%20use%20%C2%B7%20commercial%20by%20approval-A96A00"></a>
+  <img alt="Korean-first" src="https://img.shields.io/badge/Korean-first-B3372B">
+</p>
 
-- Windows 10 이상 (macOS·Linux는 미검증. 폴백 폰트 경로가 Windows 기준)
-- [Claude Code](https://code.claude.com/docs/en/setup) 설치 + 로그인 (Pro·Max·Team 계정). 앱이 첫 실행 때 검사하고 없으면 설치 화면을 띄웁니다
-- Node.js 22 이상
+**A local desktop editor that edits the text inside a PDF — in the original font — and redacts it for real.**
 
-## 실행
+Most "PDF editors" draw over the page. The text underneath stays in the file, so a black bar over a national ID number still leaks it to Ctrl+F, to copy-paste, and to every text extractor. DAEPIL rewrites the page content stream instead: it changes the text object, keeps the embedded font, splits the object around the characters you redact, and then **re-extracts the page text to prove they are gone**. The AI panel does not need an API key — the app spawns the Claude Code CLI under the login you already have, so a Pro or Max subscription is enough.
+
+## Contents
+
+- [Before / after](#before--after)
+- [How it works](#how-it-works)
+- [True redaction](#true-redaction)
+- [Quick start](#quick-start)
+- [Sample output](#sample-output)
+- [Who it's for](#who-its-for)
+- [Method](#method)
+- [What's inside](#whats-inside)
+- [Compared to the alternatives](#compared-to-the-alternatives)
+- [Limits](#limits)
+- [Requirements](#requirements)
+- [Contributors](#contributors) · [License](#license)
+
+---
+
+## Before / after
+
+Fictional meeting minutes exported from Chromium, so every line is split into per-glyph text objects with a subset Malgun Gothic Bold font — the hard case. Rendered by DAEPIL's own engine, not a screenshot of another viewer.
+
+<table>
+<tr><th>before</th><th>after</th></tr>
+<tr>
+<td><img src="assets/edit-before.png" alt="Original page: heading ends in (초안), attendee list intact"></td>
+<td><img src="assets/edit-after.png" alt="Edited page: heading now ends in (확정) in the original bold font; one attendee name replaced by a black bar"></td>
+</tr>
+</table>
+
+Two edits happened on the right. The heading changed from *(초안)* to *(확정)* through `FPDFText_SetText` on the original font object — no fallback font, no re-layout. The name *재무팀장* in the attendee line was redacted: its four glyph objects were removed from the content stream and a single black rectangle was added over their union. Reproduce it with `npm run assets`.
+
+---
+
+## How it works
+
+![Architecture: Electron window, local server, PDFium engine, Claude Code CLI; documents stay on the machine](assets/architecture.svg)
+
+Three processes, one machine. The Electron window talks to a local HTTP/SSE server written with Node built-ins. The server owns the PDF engine — PDFium compiled to WebAssembly via [`@embedpdf/pdfium`](https://www.npmjs.com/package/@embedpdf/pdfium) — and renders pages to PNG, enumerates text objects, applies edits and saves through PDFium's own writer. No pdf.js, no pdf-lib.
+
+For AI, the server runs `claude -p --output-format stream-json` with the prompt on stdin and streams the tokens back. Nothing is stored: not a key, not a token. Whether the call is billed is between you and Anthropic — on a Pro/Max plan it is covered by the subscription, and the panel shows the API-equivalent cost so you can see what you are not paying.
+
+---
+
+## True redaction
+
+![Redaction pipeline: select, split the text object, add a marked black rectangle, verify by re-extracting page text](assets/redaction.svg)
+
+The redact call is the reason this project exists. Given a text object and a character range it:
+
+1. reads per-character boxes from PDFium (`FPDFText_GetTextObject` maps every character on the page back to the object that drew it — no coordinate heuristics);
+2. sets the object's text to the prefix, creates a new object for the suffix with the same font, size, color and matrix, and shifts it by the distance between character boxes (measured error: 0.17 pt);
+3. adds a filled black path over the union of the removed boxes, tagged with the PDFium content mark `DaepilMask` so the box remains a selectable, movable, deletable object after save and reload;
+4. re-extracts the page text and refuses to call it done if the removed string is still present.
+
+Scanned pages are different: there is no text to remove, so the rectangle tool only covers pixels, and the UI says so.
+
+---
+
+## Quick start
+
+Requires [Claude Code](https://code.claude.com/docs/en/setup) installed and logged in (Pro, Max or Team — the free plan cannot use Claude Code). The app checks on startup and offers to install (`irm https://claude.ai/install.ps1 | iex`) and log in (`claude auth login`) in a separate PowerShell window.
 
 ```bash
+git clone https://github.com/kindsusu/DAEPIL.git
+cd DAEPIL
 npm install
 npm start
 ```
 
-브라우저로만 볼 때는 `npm run serve` 후 http://localhost:4747 (파일 열기 버튼 없음, `workspace/` 폴더만 표시).
+Then: **📂 파일 열기** → pick a PDF → hover a line, click it → type → Enter → Ctrl+S. Keys that matter:
 
-Markdown → PDF 변환 도구: `npm run md2pdf -- in.md out.pdf`
+| key | does |
+|---|---|
+| Enter / Esc | apply / cancel the line edit |
+| Ctrl+S / Ctrl+Shift+S | save / save as |
+| Ctrl+Z / Ctrl+Y | undo / redo (20 snapshots per document) |
+| ◀ ▲ ▼ ▶ (Shift) | nudge the line 0.5 pt (5 pt) · or drag it |
+| 선택 글자 가리기 | redact the characters selected in the panel |
+| ▭ 사각형 가리기 | rectangle cover for scanned pages |
 
-## 구조
+Browser only, no Electron: `npm run serve` and open http://localhost:4747 (no file dialogs; lists `workspace/`). Markdown → PDF with embedded subset fonts: `npm run md2pdf -- in.md out.pdf`.
+
+---
+
+## Sample output
+
+The engine self-test, `npm test`, on the fixtures in `workspace/`:
+
+```console
+$ npm test
+
+pageSize { w: 595, h: 842 }
+objects[0] {"idx":0,"type":"text","text":"GenOffice-lite prototype - sample PDF","font":"Helvetica","size":12, ...}
+render bytes 36162
+setText(한글) { ok: true, fallbackFont: true }
+setText(라틴) { ok: true, fallbackFont: false }
+[회의록_초안.pdf] font=AAAAAA+MalgunGothicBold "월 " → {"ok":true,"fallbackFont":true} (폴백 폰트)
+[회의록_초안.pdf] 원본 글자 재입력 → {"ok":true,"fallbackFont":false}
+charBoxes 37 {"ch":"G","x0":60.576,"y0":739.784,"x1":68.448,"y1":748.844}
+redact {"ok":true,"rects":[{"x0":125.668,"y0":627.332,"x1":149.732,"y1":637.116}],"inserted":6}
+suffix 위치 오차 -0.168 pt
+사각형 영역 {"dark":147,"n":147,"frac":1}
+[회의록] 마스킹 저장·재열기 OK 57751 bytes
+
+OK — 모든 검사 통과
+```
+
+`frac: 1` means every pixel inside the redaction rectangle rendered black; the line below it checks that the suffix still renders as text. The Korean fixture is fictional and generated by `tools/md2pdf.js`.
+
+---
+
+## Who it's for
+
+- **People who handle other people's documents** — HR, admin, legal — and need to fix a date on a signed PDF or black out an ID number without sending the file to a web service.
+- **Korean-first users.** Word and HWP exports embed subset fonts; DAEPIL detects missing glyphs correctly on those fonts and falls back to Malgun Gothic (bold when the original is bold), subsetting the fallback so a 51 KB file grows by ~8 KB, not 7.5 MB.
+- **Claude subscribers** who want document AI without an API bill.
+
+It is not for teams (single user, no server), not for scanned-only archives (cover only), and not yet for macOS or Linux (untested; the fallback font path is Windows).
+
+---
+
+## Method
+
+The project was built in one working day as a set of reviewed work packages: Claude Fable 5.1 wrote the plan and the engine contract, reviewed every package and ran the integration checks; Claude Opus 5 built the engine; Claude Sonnet 5 built the UI, server and tooling. [`PLAN.md`](PLAN.md) is the running log — decisions, contracts, the checks each package had to pass, and the traps found on the way. A few of those traps shaped the design:
+
+- **Subset CID fonts do not say "no glyph".** `FPDFFont_GetGlyphPath` returns the `.notdef` path for missing characters, and every missing character shares that pointer. DAEPIL probes two Private Use Area code points to learn the notdef pointer and compares against it. `FPDFFont_GetGlyphWidth` is useless here — it returns a default width.
+- **fontkit's TTF subset has no `cmap`.** pdfkit draws by glyph ID and never needed one; PDFium maps Unicode through the cmap and renders tofu without it. DAEPIL writes a format 4 cmap and splices it into the sfnt directory. `name`, `OS/2` and `post` are not required.
+- **Chromium splits every line into one-glyph text objects.** Editing a fragment overlaps its neighbours, so the UI groups objects by baseline and adjacency into one line, puts the new text into the first fragment and blanks the rest.
+- **`FPDFText_SetText(obj, "")` traps the WASM module.** Empty text is replaced by a single space at the engine boundary, so every caller is safe.
+
+---
+
+## What's inside
 
 ```
-Electron 창 (app/index.html)
-   ↕ HTTP/SSE
-app/server.js   — 파일 I/O, PDF 엔드포인트, Claude 호출 (Node 내장 모듈)
-   ↕
-app/pdf-engine.js — PDFium(WASM) 래퍼: 렌더·객체·텍스트 교체·이동·마스킹·저장
-   ↕ stdin/stdout
-claude -p       — Claude Code CLI, 사용자 로그인 그대로
+app/
+  main.js            Electron shell: window, file/save dialogs, four-way close dialog
+  preload.js         window.daepil bridge (openFiles, openFolder, saveAs)
+  server.js          local HTTP/SSE: files, PDF endpoints, undo snapshots, Claude Code spawn
+  pdf-engine.js      PDFium wrapper: open · render · objects · setText · charBoxes · move · addRect · redact · pageText · save
+  pdf-engine.test.js plain Node asserts, run by CI on windows-latest
+  index.html         the whole UI, no framework
+tools/
+  md2pdf.js          Markdown → PDF through Chromium printToPDF (embedded subset fonts)
+  demo-assets.js     regenerates assets/edit-before.png and edit-after.png with the engine
+workspace/           fictional fixtures: 회의록_초안.md / .pdf, sample.pdf
+PLAN.md              the working plan and review log
 ```
 
-엔진 자체 검사: `node app/pdf-engine.test.js`
+Dependencies: `@embedpdf/pdfium` (engine), `fontkit` (fallback subsetting), `electron` (dev). Everything else is Node built-ins.
 
-## 라이선스
+---
 
-개인 용도는 무료입니다. 기업·상업 용도는 원칙적으로 불가하며, 저작권자의 사전 승인을 받은 경우에만 가능합니다. 자세한 내용은 [LICENSE](LICENSE).
+## Compared to the alternatives
 
-## 주의
+| | DAEPIL | GenOffice | Adobe Acrobat | pdf.js-based editors | Stirling-PDF |
+|---|---|---|---|---|---|
+| edits text in the original font | yes (PDFium) | yes (same PDFium approach) | yes | no — annotations over the page | no |
+| redaction removes the text | yes, verified by re-extraction | — | yes | no (cover-up) | partial (page flatten) |
+| where the document goes | stays local | local | local / cloud | local | your server |
+| AI | Claude Code login, no key | BYOK or Genspark login | Adobe AI (paid) | — | — |
+| scope | PDF + Markdown | Word · Excel · PowerPoint · PDF · MD | PDF | PDF | PDF utilities |
+| platform | Windows (tested) | Win · macOS · Linux | Win · macOS | any | Docker |
+| license | personal free · commercial by approval | Apache-2.0 | commercial | mostly open | MIT |
 
-- 앱은 토큰이나 키를 저장하지 않습니다. Claude Code를 자식 프로세스로 실행할 뿐입니다.
-- 개인 사용 기준으로 만들었습니다. 타인에게 배포하는 것은 Anthropic 약관상 확인이 필요합니다.
-- 저장은 원본을 덮어씁니다. 중요한 문서는 "다른 이름으로 저장"으로 사본에 작업하세요.
-- 계획·진행 기록은 [PLAN.md](PLAN.md).
+GenOffice is the closest relative — DAEPIL took the engine choice from it and left the office suite behind.
+
+---
+
+## Limits
+
+- **Windows only, so far.** The fallback font is read from `C:\Windows\Fonts`. macOS/Linux need a font path and a test run.
+- **Rotated text is not edited.** `redact` returns `reason: 'rotated'` rather than guessing.
+- **Scanned pages are covered, not redacted.** Removing pixels from the underlying image is future work.
+- **Undo snapshots are whole documents.** 20 × a 600 KB PDF is 12 MB of memory per open file; fine for office documents, not for 200-page scans.
+- **The server trusts absolute paths.** It is a local, single-user app; paths only ever come from the OS file dialog. Do not expose port 4747.
+- **Distribution is a gray area.** Running Claude Code under your own login for your own use is what the tool is for. Shipping DAEPIL to third parties is an Anthropic terms question, and the license reflects that.
+
+---
+
+## Requirements
+
+- Windows 10 or later (tested on Windows 11)
+- Node.js 22+ (tested on 24), Electron 44 (installed by `npm install`)
+- Claude Code, installed and logged in — Pro, Max or Team
+- Malgun Gothic (ships with Windows) for the Hangul fallback
+
+---
+
+## Contributors
+
+- **su / [kindsusu](https://github.com/kindsusu)** — direction, product decisions, testing on real documents
+- Claude Fable 5.1 — plan, contracts, review · Claude Opus 5 — PDF engine · Claude Sonnet 5 — UI, server, tools
+
+## License
+
+Free for personal use. Business or commercial use is prohibited unless approved in writing by the author — see [`LICENSE`](LICENSE). Bundled components keep their own licenses: PDFium (Apache-2.0), @embedpdf/pdfium (MIT), fontkit (MIT), Electron (MIT).

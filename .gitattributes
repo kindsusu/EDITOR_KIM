@@ -1,2 +1,4 @@
 *.pdf binary
 *.wasm binary
+*.png binary
+*.svg text eol=lf
