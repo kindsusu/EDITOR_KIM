@@ -125,6 +125,13 @@ const server = http.createServer(async (req, res) => {
       entry.dirty = true;
       return json(res, 200, r);
     }
+    if (url.pathname === '/api/pdf/edits' && req.method === 'POST') {
+      const { name, i, edits } = JSON.parse(await body(req));
+      const entry = await getPdfDoc(name);
+      const results = edits.map(({ idx, text }) => entry.doc.setText(i, idx, text));
+      entry.dirty = true;
+      return json(res, 200, { results, fallbackFont: results.some((r) => r.fallbackFont) });
+    }
     if (url.pathname === '/api/pdf/save' && req.method === 'POST') {
       const { name } = JSON.parse(await body(req));
       const entry = await getPdfDoc(name);

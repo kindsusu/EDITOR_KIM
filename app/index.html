@@ -192,14 +192,24 @@ function groupLines(objs) {
   }));
 }
 function drawOverlay(wrap, i, objs, h) {
-  groupLines(objs).forEach((line) => {
+  return groupLines(objs).map((line) => {
     const b = line.bounds, box = document.createElement('div');
     box.className = 'pdfBox';
     box.style.left = (b.x0 * pdfScale) + 'px'; box.style.top = ((h - b.y1) * pdfScale) + 'px';
     box.style.width = ((b.x1 - b.x0) * pdfScale) + 'px'; box.style.height = ((b.y1 - b.y0) * pdfScale) + 'px';
     box.onclick = () => selectLine(i, line, wrap, box);
     wrap.appendChild(box);
+    return { line, box };
   });
+}
+// 방금 고친 줄이 페이지 폭을 넘거나 같은 행의 다른 줄과 겹치면 경고 (재배치는 하지 않음, 다음 편집 전까지 빨간 테두리)
+function checkOverflow(i, editedIdx, boxed) {
+  const hit = boxed.find(({ line }) => line.objs.some((o) => o.idx === editedIdx));
+  if (!hit) return;
+  const { line, box } = hit, b = line.bounds, size = line.size || 10;
+  const tooWide = b.x1 > pdfPages[i].w - 10;
+  const overlaps = boxed.some(({ line: o }) => o !== line && Math.abs(o.bounds.y0 - b.y0) < 0.3 * size && b.x0 < o.bounds.x1 && b.x1 > o.bounds.x0);
+  if (tooWide || overlaps) { box.style.outline = '1px solid #e07a7a'; flash('글이 원래 자리보다 길어 오른쪽과 겹칩니다 — 줄여 보세요'); }
 }
 function selectLine(i, line, wrap, box) {
   selectedObj = { i, objs: line.objs, text: line.text, wrap, box, size: line.size, font: line.font };
@@ -224,10 +234,10 @@ function openInlineEditor(initialText) {
     if (newText === text) return; // 변경 없으면 그대로 둔다
     // 줄을 이루는 조각 객체 중 첫 조각에 전체 텍스트를 넣고 나머지는 비운다 (원본 폰트 유지, idx는 편집 후에도 안정적)
     // 빈 문자열("")로 SetText하면 PDFium(WASM)이 unreachable로 죽는다 — 대신 공백 하나로 채운다 (원래도 조각 사이에 공백이 섞여 있어 시각적으로 동일)
-    const r = await (await fetch('/api/pdf/edit', { method: 'POST', body: JSON.stringify({ name: cur, i, idx: objs[0].idx, text: newText }) })).json();
-    for (let k = 1; k < objs.length; k++) await fetch('/api/pdf/edit', { method: 'POST', body: JSON.stringify({ name: cur, i, idx: objs[k].idx, text: ' ' }) });
+    const edits = [{ idx: objs[0].idx, text: newText }, ...objs.slice(1).map((o) => ({ idx: o.idx, text: ' ' }))];
+    const r = await (await fetch('/api/pdf/edits', { method: 'POST', body: JSON.stringify({ name: cur, i, edits }) })).json();
     pdfDirty = true; selectedObj = null; updateEditRadio(); showDirty();
-    await refreshPage(i);
+    await refreshPage(i, objs[0].idx);
     flash(r.fallbackFont ? '원본 폰트에 없는 글자라 맑은 고딕으로 대체됨' : '저장 전 (Ctrl+S)');
   };
   ok.onclick = commit;
@@ -236,14 +246,15 @@ function openInlineEditor(initialText) {
     else if (e.key === 'Escape') { ta.remove(); ok.remove(); }
   };
 }
-async function refreshPage(i) {
+async function refreshPage(i, editedIdx) {
   const wrap = $('#pdf').children[i];
   wrap.querySelector('img').src = pageUrl(cur, i);
   const objs = await (await fetch(`/api/pdf/objects?name=${encodeURIComponent(cur)}&i=${i}`)).json();
   pdfObjects[i] = objs;
   wrap.querySelectorAll('.pdfBox, .pdfEdit').forEach((el) => el.remove());
-  drawOverlay(wrap, i, objs, pdfPages[i].h);
+  const boxed = drawOverlay(wrap, i, objs, pdfPages[i].h);
   rebuildDocText();
+  if (editedIdx != null) checkOverflow(i, editedIdx, boxed);
 }
 function setZoom(s) { pdfScale = Math.max(0.5, Math.min(3, s)); $('#zoomPct').textContent = Math.round(pdfScale * 100) + '%'; if (cur && cur.endsWith('.pdf')) renderPdfDoc(cur); }
 $('#zoomIn').onclick = () => setZoom(pdfScale + 0.25);
