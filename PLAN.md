@@ -181,6 +181,14 @@ doc.pageText(i)                         // string  검증용 페이지 전체 �
 - [x] 굵기 기억(`fbBold`): 대체 폰트는 이름이 Untitled라 굵기를 못 읽음 → 올릴 때 굵기를 기억해 재편집(두 번째 SetText)에서도 굵게 유지. weight≥600도 굵게 판정
 - 검수: 자막 첫 단어를 "너만의"로 → 옛 "나만의" 그림 사라지고 겹침 없음. 중간 단어도 옆 안 건드리고 교체
 
+### P4 — 이름 변경 EDITOR_KIM · 마스킹 기본값 (2026-09-04 사용자 지시)
+- [x] GitHub 저장소 DAEPIL → EDITOR_KIM (`gh repo rename`, 옛 URL은 리다이렉트). 로컬 원격 갱신
+- [x] 프로그램 이름·헤더·창 제목·package.json·README·LICENSE·bat → EDITOR_KIM (Sonnet). `run-daepil.bat` → `run-editor-kim.bat`(git mv), 버전 0.4.0
+- [x] 가림 색은 실행 때마다 검정 기본(기억 안 함, `daepil.maskColor` localStorage 제거). 버튼 "사각형 가리기" → "마스킹 삽입"
+- [x] 메인 이미지 = `assets/Editor_Kim.png` → hero.png 교체 (기존 hero.png 대체)
+- [x] 검수: `npm test` 통과, 브라우저에서 헤더/제목 EDITOR_KIM v0.4.0, 버튼 "마스킹 삽입", 새로고침 후에도 가림 색 검정 확인
+- [ ] 0.4.0 태그·푸시 (검수 후)
+
 ### P2-후속 — 문서 기능
 - [ ] UI에 "PDF로 내보내기" 버튼 (C의 도구를 연결)
 - [ ] PDF → MD 변환 (PDFium 텍스트 추출 → Claude로 제목·표 구조 복원)

@@ -294,5 +294,5 @@ const server = http.createServer(async (req, res) => {
   } catch (e) { json(res, 500, { error: e.message }); }
 });
 server.on('error', (e) => console.error('server:', e.message));
-server.listen(PORT, '127.0.0.1', () => console.log(`대필 → http://localhost:${PORT}  workspace=${WS}`));
+server.listen(PORT, '127.0.0.1', () => console.log(`EDITOR_KIM → http://localhost:${PORT}  workspace=${WS}`));
 module.exports = { PORT };

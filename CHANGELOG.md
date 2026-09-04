@@ -1,19 +1,28 @@
 # Changelog
 
-All notable changes to DAEPIL are recorded here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+All notable changes to EDITOR_KIM are recorded here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
-
-### Fixed
-- Editing invisible text left the old picture of the word behind (a duplicate): the cover rectangle now spans the actual ink extent of the edited word within the overlapping image tiles, without touching neighbouring words. Bold weight is remembered so re-edited fallback text stays bold.
-- Revealed (formerly invisible) text turned invisible again after save or undo: PDFium does not record an alpha of exactly 1.0, so the original transparency came back. The text is now written with alpha 254.
-- Re-editing text that already uses the fallback font in a reopened document rendered thin, widely spaced glyphs (PDFium substituted a system font). Such objects are now always rebuilt with a fresh subset instead of edited in place.
 
 - PDF → Markdown conversion (PDFium text extraction, structure restored by Claude)
 - "Export as PDF" button for Markdown documents (the `md2pdf` tool exists; the UI button does not yet)
 - One-click prompts in the Claude panel (formal tone, 3-line summary, typo pass, table)
 - Installers built by CI on tag push
 - Font subsetting for the fallback font is per document; a future version may dedupe glyphs across edits
+
+## [0.4.0] - 2026-09-04
+
+- Project and repository renamed DAEPIL → EDITOR_KIM (the old GitHub URL redirects to the new one).
+- New hero image.
+
+### Changed
+- Mask color now always starts at black on launch (no longer remembered between sessions).
+- Toolbar button renamed from "▭ 사각형 가리기" to "▭ 마스킹 삽입".
+
+### Fixed
+- Editing invisible text left the old picture of the word behind (a duplicate): the cover rectangle now spans the actual ink extent of the edited word within the overlapping image tiles, without touching neighbouring words. Bold weight is remembered so re-edited fallback text stays bold.
+- Revealed (formerly invisible) text turned invisible again after save or undo: PDFium does not record an alpha of exactly 1.0, so the original transparency came back. The text is now written with alpha 254.
+- Re-editing text that already uses the fallback font in a reopened document rendered thin, widely spaced glyphs (PDFium substituted a system font). Such objects are now always rebuilt with a fresh subset instead of edited in place.
 
 ## [0.3.0] - 2026-09-04
 

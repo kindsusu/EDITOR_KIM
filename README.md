@@ -1,6 +1,6 @@
-# DAEPIL (대필)
+# EDITOR_KIM
 
-![DAEPIL — edit text. remove it for real.](assets/hero.png)
+![EDITOR_KIM — edit text. remove it for real.](assets/hero.png)
 
 > a PDF & Markdown editor that runs Claude through your own Claude Code login, by **su** ([kindsusu](https://github.com/kindsusu))
 
@@ -10,8 +10,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/kindsusu/DAEPIL/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/kindsusu/DAEPIL/actions/workflows/ci.yml/badge.svg"></a>
-  <img alt="version 0.3.0" src="https://img.shields.io/badge/version-0.3.0-d97757">
+  <a href="https://github.com/kindsusu/EDITOR_KIM/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/kindsusu/EDITOR_KIM/actions/workflows/ci.yml/badge.svg"></a>
+  <img alt="version 0.4.0" src="https://img.shields.io/badge/version-0.4.0-d97757">
   <img alt="engine PDFium (WASM)" src="https://img.shields.io/badge/engine-PDFium%20(WASM)-1A2B28">
   <img alt="no API key" src="https://img.shields.io/badge/API%20key-none-2C7A4B">
   <img alt="Node 22+" src="https://img.shields.io/badge/node-22%2B-0E6B5C">
@@ -22,7 +22,7 @@
 
 **A local desktop editor that edits the text inside a PDF — in the original font — and redacts it for real.**
 
-Most "PDF editors" draw over the page. The text underneath stays in the file, so a black bar over a national ID number still leaks it to Ctrl+F, to copy-paste, and to every text extractor. DAEPIL rewrites the page content stream instead: it changes the text object, keeps the embedded font, splits the object around the characters you redact, and then **re-extracts the page text to prove they are gone**. The AI panel does not need an API key — the app spawns the Claude Code CLI under the login you already have, so a Pro or Max subscription is enough.
+Most "PDF editors" draw over the page. The text underneath stays in the file, so a black bar over a national ID number still leaks it to Ctrl+F, to copy-paste, and to every text extractor. EDITOR_KIM rewrites the page content stream instead: it changes the text object, keeps the embedded font, splits the object around the characters you redact, and then **re-extracts the page text to prove they are gone**. The AI panel does not need an API key — the app spawns the Claude Code CLI under the login you already have, so a Pro or Max subscription is enough.
 
 ## Contents
 
@@ -43,7 +43,7 @@ Most "PDF editors" draw over the page. The text underneath stays in the file, so
 
 ## Before / after
 
-Fictional meeting minutes exported from Chromium, so every line is split into per-glyph text objects with a subset Malgun Gothic Bold font — the hard case. Rendered by DAEPIL's own engine, not a screenshot of another viewer.
+Fictional meeting minutes exported from Chromium, so every line is split into per-glyph text objects with a subset Malgun Gothic Bold font — the hard case. Rendered by EDITOR_KIM's own engine, not a screenshot of another viewer.
 
 <table>
 <tr><th>before</th><th>after</th></tr>
@@ -84,18 +84,18 @@ Scanned pages are different: there is no text to remove, so the rectangle tool o
 
 ## Quick start
 
-**No build needed on Windows:** download `DAEPIL-<version>-portable.exe` (run directly) or `DAEPIL-<version>-setup.exe` (installer) from [Releases](https://github.com/kindsusu/DAEPIL/releases). The builds are not code-signed, so SmartScreen shows an "unknown publisher" warning on first run — choose *More info → Run anyway*.
+**No build needed on Windows:** download `EDITOR_KIM-<version>-portable.exe` (run directly) or `EDITOR_KIM-<version>-setup.exe` (installer) from [Releases](https://github.com/kindsusu/EDITOR_KIM/releases). The builds are not code-signed, so SmartScreen shows an "unknown publisher" warning on first run — choose *More info → Run anyway*.
 
 Requires [Claude Code](https://code.claude.com/docs/en/setup) installed and logged in (Pro, Max or Team — the free plan cannot use Claude Code). The app checks on startup and offers to install (`irm https://claude.ai/install.ps1 | iex`) and log in (`claude auth login`) in a separate PowerShell window.
 
 ```bash
-git clone https://github.com/kindsusu/DAEPIL.git
-cd DAEPIL
+git clone https://github.com/kindsusu/EDITOR_KIM.git
+cd EDITOR_KIM
 npm install
 npm start
 ```
 
-On Windows you can skip the terminal after cloning: double-click **`run-daepil.bat`** — it checks for Node, runs `npm install` on first launch, then starts the app.
+On Windows you can skip the terminal after cloning: double-click **`run-editor-kim.bat`** — it checks for Node, runs `npm install` on first launch, then starts the app.
 
 Then: **📂 파일 열기** → pick a PDF → hover a line, click it → type → Enter → Ctrl+S. Keys that matter:
 
@@ -106,7 +106,7 @@ Then: **📂 파일 열기** → pick a PDF → hover a line, click it → type 
 | Ctrl+Z / Ctrl+Y | undo / redo (20 snapshots per document) |
 | ◀ ▲ ▼ ▶ (Shift) | nudge the line 0.5 pt (5 pt) · or drag it |
 | 선택 글자 가리기 | redact the characters selected in the panel |
-| ▭ 사각형 가리기 | rectangle cover for scanned pages |
+| ▭ 마스킹 삽입 | rectangle cover for scanned pages |
 
 Browser only, no Electron: `npm run serve` and open http://localhost:4747 (no file dialogs; lists `workspace/`). Markdown → PDF with embedded subset fonts: `npm run md2pdf -- in.md out.pdf`.
 
@@ -142,7 +142,7 @@ OK — 모든 검사 통과
 ## Who it's for
 
 - **People who handle other people's documents** — HR, admin, legal — and need to fix a date on a signed PDF or black out an ID number without sending the file to a web service.
-- **Korean-first users.** Word and HWP exports embed subset fonts; DAEPIL detects missing glyphs correctly on those fonts and falls back to Malgun Gothic (bold when the original is bold), subsetting the fallback so a 51 KB file grows by ~8 KB, not 7.5 MB.
+- **Korean-first users.** Word and HWP exports embed subset fonts; EDITOR_KIM detects missing glyphs correctly on those fonts and falls back to Malgun Gothic (bold when the original is bold), subsetting the fallback so a 51 KB file grows by ~8 KB, not 7.5 MB.
 - **Claude subscribers** who want document AI without an API bill.
 
 It is not for teams (single user, no server), not for scanned-only archives (cover only), and not yet for macOS or Linux (untested; the fallback font path is Windows).
@@ -153,8 +153,8 @@ It is not for teams (single user, no server), not for scanned-only archives (cov
 
 The project was built as a series of small work packages, each with a written contract and a check it had to pass before merging. [`PLAN.md`](PLAN.md) is the running log — decisions, contracts, and the traps found on the way. A few of those traps shaped the design:
 
-- **Subset CID fonts do not say "no glyph".** `FPDFFont_GetGlyphPath` returns the `.notdef` path for missing characters, and every missing character shares that pointer. DAEPIL probes two Private Use Area code points to learn the notdef pointer and compares against it. `FPDFFont_GetGlyphWidth` is useless here — it returns a default width.
-- **fontkit's TTF subset has no `cmap`.** pdfkit draws by glyph ID and never needed one; PDFium maps Unicode through the cmap and renders tofu without it. DAEPIL writes a format 4 cmap and splices it into the sfnt directory. `name`, `OS/2` and `post` are not required.
+- **Subset CID fonts do not say "no glyph".** `FPDFFont_GetGlyphPath` returns the `.notdef` path for missing characters, and every missing character shares that pointer. EDITOR_KIM probes two Private Use Area code points to learn the notdef pointer and compares against it. `FPDFFont_GetGlyphWidth` is useless here — it returns a default width.
+- **fontkit's TTF subset has no `cmap`.** pdfkit draws by glyph ID and never needed one; PDFium maps Unicode through the cmap and renders tofu without it. EDITOR_KIM writes a format 4 cmap and splices it into the sfnt directory. `name`, `OS/2` and `post` are not required.
 - **Automatic line grouping merges table cells.** A baseline-and-gap heuristic was tried and removed. Now one text object is one box; the user groups boxes with Shift-click, and the grouping is stored as the PDFium content mark `DaepilGroup`. Only the lines produced by a multi-line edit are grouped automatically.
 - **`FPDFText_SetText(obj, "")` traps the WASM module.** Empty text is replaced by a single space at the engine boundary, so every caller is safe.
 
@@ -183,7 +183,7 @@ Dependencies: `@embedpdf/pdfium` (engine), `fontkit` (fallback subsetting), `ele
 
 ## Compared to the alternatives
 
-| | DAEPIL | GenOffice | Adobe Acrobat | pdf.js-based editors | Stirling-PDF |
+| | EDITOR_KIM | GenOffice | Adobe Acrobat | pdf.js-based editors | Stirling-PDF |
 |---|---|---|---|---|---|
 | edits text in the original font | yes (PDFium) | yes (same PDFium approach) | yes | no — annotations over the page | no |
 | redaction removes the text | yes, verified by re-extraction | — | yes | no (cover-up) | partial (page flatten) |
@@ -193,7 +193,7 @@ Dependencies: `@embedpdf/pdfium` (engine), `fontkit` (fallback subsetting), `ele
 | platform | Windows (tested) | Win · macOS · Linux | Win · macOS | any | Docker |
 | license | personal free · commercial by approval | Apache-2.0 | commercial | mostly open | MIT |
 
-GenOffice is the closest relative — DAEPIL took the engine choice from it and left the office suite behind.
+GenOffice is the closest relative — EDITOR_KIM took the engine choice from it and left the office suite behind.
 
 ---
 
@@ -204,7 +204,7 @@ GenOffice is the closest relative — DAEPIL took the engine choice from it and 
 - **Scanned pages are covered, not redacted.** Removing pixels from the underlying image is future work.
 - **Undo snapshots are whole documents.** 20 × a 600 KB PDF is 12 MB of memory per open file; fine for office documents, not for 200-page scans.
 - **The server trusts absolute paths.** It is a local, single-user app; paths only ever come from the OS file dialog. Do not expose port 4747.
-- **Distribution is a gray area.** Running Claude Code under your own login for your own use is what the tool is for. Shipping DAEPIL to third parties is an Anthropic terms question, and the license reflects that.
+- **Distribution is a gray area.** Running Claude Code under your own login for your own use is what the tool is for. Shipping EDITOR_KIM to third parties is an Anthropic terms question, and the license reflects that.
 
 ---
 

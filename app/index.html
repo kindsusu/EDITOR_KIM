@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
 <meta charset="utf-8">
-<title>대필</title>
+<title>EDITOR_KIM</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/15.0.7/marked.min.js"></script>
 <style>
   :root{--bg:#1b1b1f;--panel:#232329;--line:#33333b;--fg:#e8e8ec;--mut:#9a9aa6;--acc:#d97757;--add:#1f4d2e;--del:#5a2323}
@@ -55,7 +55,7 @@
 </style>
 </head>
 <body>
-<header><b>대필</b><span id="ver" style="color:var(--acc);opacity:.8"></span><span>PDF · Markdown 편집기</span><span class="sp"></span><span id="status">Claude Code 로그인 사용 · API 키 없음</span><button id="aiToggle" title="Claude 패널 열기/닫기 (Ctrl+J)">💬 Claude</button></header>
+<header><b>EDITOR_KIM</b><span id="ver" style="color:var(--acc);opacity:.8"></span><span>PDF · Markdown 편집기</span><span class="sp"></span><span id="status">Claude Code 로그인 사용 · API 키 없음</span><button id="aiToggle" title="Claude 패널 열기/닫기 (Ctrl+J)">💬 Claude</button></header>
 <aside>
   <button id="openFiles" hidden>📂 파일 열기</button>
   <button id="openFolder" hidden>📁 폴더 열기</button>
@@ -68,7 +68,7 @@
     <span id="pdfZoom" hidden><button id="zoomOut">−</button> <span id="zoomPct">150%</span> <button id="zoomIn">+</button></span>
     <button id="undoBtn" hidden disabled>↶ 실행 취소</button>
     <button id="redoBtn" hidden disabled>↷ 다시 실행</button>
-    <button id="rectTool" hidden>▭ 사각형 가리기</button>
+    <button id="rectTool" hidden>▭ 마스킹 삽입</button>
     <select id="maskColor" hidden title="가림 색: 검정 또는 그 자리의 배경색을 자동 추출"><option value="black">가림: 검정</option><option value="auto">가림: 배경색</option></select>
     <button id="save" hidden>저장 (Ctrl+S)</button>
     <button id="saveAs" hidden>다른 이름으로 저장 (Ctrl+Shift+S)</button>
@@ -91,7 +91,7 @@
 
 <div id="setup" hidden><div class="card">
   <h2>Claude Code 준비</h2>
-  <p>대필은 API 키 대신 <b>Claude Code</b>(Claude 구독)로 AI를 호출합니다. Pro·Max·Team 계정이 필요합니다.</p>
+  <p>EDITOR_KIM은 API 키 대신 <b>Claude Code</b>(Claude 구독)로 AI를 호출합니다. Pro·Max·Team 계정이 필요합니다.</p>
   <div class="st" id="setupStatus">확인 중…</div>
   <p id="setupHelp"></p>
   <div class="row"><button id="btnInstall" class="pri" hidden>1. Claude Code 설치</button><button id="btnLogin" class="pri" hidden>2. 로그인</button><button id="btnRecheck">다시 확인</button><span class="sp"></span><button id="btnSkip">AI 없이 계속</button></div>
@@ -117,7 +117,7 @@ const showDirty = () => { $('#dirty').hidden = !dirty(); };
 async function checkHealth() {
   $('#setupStatus').textContent = '확인 중…';
   const h = await (await fetch('/api/health')).json();
-  if (h.appVersion) { $('#ver').textContent = 'v' + h.appVersion; document.title = `대필 v${h.appVersion}`; }
+  if (h.appVersion) { $('#ver').textContent = 'v' + h.appVersion; document.title = `EDITOR_KIM v${h.appVersion}`; }
   const ok = h.installed && h.loggedIn;
   $('#setup').hidden = ok;
   $('#btnInstall').hidden = h.installed; $('#btnLogin').hidden = !h.installed || h.loggedIn;
@@ -705,18 +705,17 @@ function updateEditRadio() {
   if (isPdf && !selectedObj && document.querySelector('[name=mode]:checked').value === 'edit') document.querySelector('[value=chat]').checked = true;
 }
 
-// ---- 사각형 가리기(스캔본용): 드래그로 뽑은 영역에 검은 사각형을 얹는다 ----
+// ---- 마스킹 삽입(스캔본용): 드래그로 뽑은 영역에 검은 사각형을 얹는다 ----
 function setRectMode(on) {
   rectMode = on;
   $('#rectTool').classList.toggle('pri', on);
   $('#pdf').style.cursor = on ? 'crosshair' : '';
 }
 $('#rectTool').onclick = () => setRectMode(!rectMode);
-// 가림 색: 'black' → [0,0,0,255], 'auto' → 서버가 그 자리 배경색을 추출. 선택 기억
+// 가림 색: 'black' → [0,0,0,255], 'auto' → 서버가 그 자리 배경색을 추출. 실행마다 검정으로 시작(기억 안 함)
 const maskColor = () => ($('#maskColor').value === 'auto' ? 'auto' : [0, 0, 0, 255]);
 const hex = (c) => '#' + c.slice(0, 3).map((v) => v.toString(16).padStart(2, '0')).join('');
-$('#maskColor').value = localStorage.getItem('daepil.maskColor') || 'black';
-$('#maskColor').onchange = () => localStorage.setItem('daepil.maskColor', $('#maskColor').value);
+$('#maskColor').value = 'black';
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && rectMode) setRectMode(false); });
 $('#pdf').addEventListener('mousedown', (e) => {
   if (!rectMode) return;

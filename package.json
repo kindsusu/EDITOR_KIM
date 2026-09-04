@@ -1,7 +1,7 @@
 {
-  "name": "su-daepil",
-  "productName": "대필",
-  "version": "0.3.0",
+  "name": "editor-kim",
+  "productName": "EDITOR_KIM",
+  "version": "0.4.0",
   "description": "Local PDF & Markdown editor with true PDF text editing and redaction — PDFium (WASM) + Claude Code, no API key",
   "main": "app/main.js",
   "scripts": {
@@ -14,22 +14,22 @@
     "icon": "electron tools/make-icon.js"
   },
   "build": {
-    "appId": "com.kindsusu.daepil",
-    "productName": "DAEPIL",
-    "artifactName": "DAEPIL-${version}-${arch}-${os}.${ext}",
+    "appId": "com.kindsusu.editorkim",
+    "productName": "EDITOR_KIM",
+    "artifactName": "EDITOR_KIM-${version}-${arch}-${os}.${ext}",
     "directories": { "output": "dist", "buildResources": "build" },
     "files": ["app/**", "package.json", "workspace/sample.pdf", "workspace/회의록_초안.md", "workspace/회의록_초안.pdf", "LICENSE"],
     "asar": true,
     "win": { "target": [{ "target": "portable", "arch": ["x64"] }, { "target": "nsis", "arch": ["x64"] }], "icon": "build/icon.png" },
-    "portable": { "artifactName": "DAEPIL-${version}-portable.exe" },
-    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true, "perMachine": false, "artifactName": "DAEPIL-${version}-setup.exe", "shortcutName": "대필" }
+    "portable": { "artifactName": "EDITOR_KIM-${version}-portable.exe" },
+    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true, "perMachine": false, "artifactName": "EDITOR_KIM-${version}-setup.exe", "shortcutName": "EDITOR_KIM" }
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/kindsusu/DAEPIL.git"
+    "url": "https://github.com/kindsusu/EDITOR_KIM.git"
   },
-  "homepage": "https://github.com/kindsusu/DAEPIL",
-  "bugs": "https://github.com/kindsusu/DAEPIL/issues",
+  "homepage": "https://github.com/kindsusu/EDITOR_KIM",
+  "bugs": "https://github.com/kindsusu/EDITOR_KIM/issues",
   "author": "kindsusu",
   "keywords": [
     "pdf",

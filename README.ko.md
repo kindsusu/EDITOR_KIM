@@ -1,6 +1,6 @@
-# 대필 (DAEPIL)
+# EDITOR_KIM
 
-![대필 — 글자를 고치고, 진짜로 지운다](assets/hero.png)
+![EDITOR_KIM — edit text. remove it for real.](assets/hero.png)
 
 > 내 Claude Code 로그인으로 Claude를 부르는 PDF·Markdown 편집기 — **su** ([kindsusu](https://github.com/kindsusu))
 
@@ -10,8 +10,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/kindsusu/DAEPIL/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/kindsusu/DAEPIL/actions/workflows/ci.yml/badge.svg"></a>
-  <img alt="version 0.3.0" src="https://img.shields.io/badge/version-0.3.0-d97757">
+  <a href="https://github.com/kindsusu/EDITOR_KIM/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/kindsusu/EDITOR_KIM/actions/workflows/ci.yml/badge.svg"></a>
+  <img alt="version 0.4.0" src="https://img.shields.io/badge/version-0.4.0-d97757">
   <img alt="engine PDFium (WASM)" src="https://img.shields.io/badge/engine-PDFium%20(WASM)-1A2B28">
   <img alt="no API key" src="https://img.shields.io/badge/API%20key-none-2C7A4B">
   <img alt="Node 22+" src="https://img.shields.io/badge/node-22%2B-0E6B5C">
@@ -22,7 +22,7 @@
 
 **PDF 안의 글자를 원본 폰트 그대로 고치고, 가릴 때는 정말로 지우는 로컬 데스크톱 편집기.**
 
-시중의 "PDF 편집기" 대부분은 페이지 위에 덧그립니다. 글자는 파일 안에 그대로 남아서, 주민번호 위에 검은 막대를 얹어도 Ctrl+F와 복사, 텍스트 추출기에는 그대로 나옵니다. 대필은 페이지 콘텐츠 스트림을 다시 씁니다. 텍스트 객체를 바꾸고, 임베드된 폰트를 유지하고, 가릴 글자 앞뒤로 객체를 쪼갠 뒤, **페이지 텍스트를 다시 추출해 정말 사라졌는지 확인**합니다. AI 패널은 API 키가 필요 없습니다. 이미 로그인된 Claude Code CLI를 자식 프로세스로 띄우므로 Pro나 Max 구독이면 됩니다.
+시중의 "PDF 편집기" 대부분은 페이지 위에 덧그립니다. 글자는 파일 안에 그대로 남아서, 주민번호 위에 검은 막대를 얹어도 Ctrl+F와 복사, 텍스트 추출기에는 그대로 나옵니다. EDITOR_KIM은 페이지 콘텐츠 스트림을 다시 씁니다. 텍스트 객체를 바꾸고, 임베드된 폰트를 유지하고, 가릴 글자 앞뒤로 객체를 쪼갠 뒤, **페이지 텍스트를 다시 추출해 정말 사라졌는지 확인**합니다. AI 패널은 API 키가 필요 없습니다. 이미 로그인된 Claude Code CLI를 자식 프로세스로 띄우므로 Pro나 Max 구독이면 됩니다.
 
 ## 목차
 
@@ -43,7 +43,7 @@
 
 ## 전 / 후
 
-Chromium이 내보낸 가상의 회의록입니다. 모든 줄이 글자 단위 텍스트 객체로 쪼개져 있고 폰트는 맑은 고딕 굵게 서브셋 — 가장 까다로운 경우입니다. 다른 뷰어의 스크린샷이 아니라 대필의 엔진이 렌더한 그림입니다.
+Chromium이 내보낸 가상의 회의록입니다. 모든 줄이 글자 단위 텍스트 객체로 쪼개져 있고 폰트는 맑은 고딕 굵게 서브셋 — 가장 까다로운 경우입니다. 다른 뷰어의 스크린샷이 아니라 EDITOR_KIM의 엔진이 렌더한 그림입니다.
 
 <table>
 <tr><th>전</th><th>후</th></tr>
@@ -84,18 +84,18 @@ AI는 서버가 `claude -p --output-format stream-json`을 실행하고 프롬�
 
 ## 빠른 시작
 
-**Windows는 빌드 없이:** [Releases](https://github.com/kindsusu/DAEPIL/releases)에서 `DAEPIL-<버전>-portable.exe`(바로 실행) 또는 `DAEPIL-<버전>-setup.exe`(설치형)를 내려받습니다. 코드 서명이 없어 첫 실행 때 SmartScreen "알 수 없는 게시자" 경고가 뜹니다. *추가 정보 → 실행*을 누르세요.
+**Windows는 빌드 없이:** [Releases](https://github.com/kindsusu/EDITOR_KIM/releases)에서 `EDITOR_KIM-<버전>-portable.exe`(바로 실행) 또는 `EDITOR_KIM-<버전>-setup.exe`(설치형)를 내려받습니다. 코드 서명이 없어 첫 실행 때 SmartScreen "알 수 없는 게시자" 경고가 뜹니다. *추가 정보 → 실행*을 누르세요.
 
 [Claude Code](https://code.claude.com/docs/en/setup)가 설치·로그인되어 있어야 합니다 (Pro·Max·Team. 무료 플랜은 Claude Code를 쓸 수 없습니다). 앱이 시작할 때 검사하고, 없으면 별도 PowerShell 창에서 설치(`irm https://claude.ai/install.ps1 | iex`)와 로그인(`claude auth login`)을 안내합니다.
 
 ```bash
-git clone https://github.com/kindsusu/DAEPIL.git
-cd DAEPIL
+git clone https://github.com/kindsusu/EDITOR_KIM.git
+cd EDITOR_KIM
 npm install
 npm start
 ```
 
-Windows에서는 클론 후 터미널 없이 **`run-daepil.bat`** 을 더블클릭하면 됩니다. Node 확인, 첫 실행 시 `npm install`, 앱 시작까지 알아서 합니다.
+Windows에서는 클론 후 터미널 없이 **`run-editor-kim.bat`** 을 더블클릭하면 됩니다. Node 확인, 첫 실행 시 `npm install`, 앱 시작까지 알아서 합니다.
 
 그다음 **📂 파일 열기** → PDF 선택 → 줄에 마우스를 올리고 클릭 → 입력 → Enter → Ctrl+S. 알아둘 키:
 
@@ -106,7 +106,7 @@ Windows에서는 클론 후 터미널 없이 **`run-daepil.bat`** 을 더블클�
 | Ctrl+Z / Ctrl+Y | 실행 취소 / 다시 실행 (문서당 20단계) |
 | ◀ ▲ ▼ ▶ (Shift) | 줄을 0.5pt(5pt) 이동 · 드래그도 가능 |
 | 선택 글자 가리기 | 패널에서 선택한 글자를 마스킹 |
-| ▭ 사각형 가리기 | 스캔본용 사각형 덮기 |
+| ▭ 마스킹 삽입 | 스캔본용 사각형 덮기 |
 
 Electron 없이 브라우저만: `npm run serve` 후 http://localhost:4747 (파일 대화상자 없음, `workspace/`만 표시). 서브셋 폰트가 임베드된 Markdown → PDF: `npm run md2pdf -- in.md out.pdf`.
 
@@ -142,7 +142,7 @@ OK — 모든 검사 통과
 ## 누구를 위한 것인가
 
 - **다른 사람의 문서를 다루는 사람** — 인사, 총무, 법무. 서명된 PDF의 날짜를 고치거나 주민번호를 가려야 하는데 파일을 웹 서비스에 올리고 싶지 않은 경우.
-- **한국어 사용자.** Word와 한글 출력물은 서브셋 폰트를 임베드합니다. 대필은 그 폰트에서 없는 글자를 정확히 판별하고 맑은 고딕(원본이 굵으면 굵게)으로 대체하며, 대체 폰트도 서브셋해서 51KB 파일이 7.5MB가 아니라 8KB쯤 커집니다.
+- **한국어 사용자.** Word와 한글 출력물은 서브셋 폰트를 임베드합니다. EDITOR_KIM은 그 폰트에서 없는 글자를 정확히 판별하고 맑은 고딕(원본이 굵으면 굵게)으로 대체하며, 대체 폰트도 서브셋해서 51KB 파일이 7.5MB가 아니라 8KB쯤 커집니다.
 - **Claude 구독자.** API 청구 없이 문서 AI를 쓰고 싶은 사람.
 
 팀용이 아니고(단일 사용자, 서버 없음), 스캔본 전용 보관에도 맞지 않으며(덮기만 됨), macOS·Linux는 아직 아닙니다(미검증, 폴백 폰트 경로가 Windows).
@@ -153,8 +153,8 @@ OK — 모든 검사 통과
 
 작은 작업 묶음 단위로 만들었습니다. 묶음마다 계약과 통과해야 할 검사를 먼저 적고, 통과해야 합쳤습니다. [`PLAN.md`](PLAN.md)가 진행 기록입니다. 결정, 계약, 도중에 발견한 함정. 그중 설계를 바꾼 것들:
 
-- **서브셋 CID 폰트는 "글리프 없음"이라고 말하지 않는다.** `FPDFFont_GetGlyphPath`가 없는 글자에 `.notdef` 경로를 돌려주고, 없는 글자끼리 같은 포인터를 공유합니다. 대필은 사설영역 코드포인트 두 개로 notdef 포인터를 알아내 비교합니다. `FPDFFont_GetGlyphWidth`는 기본 폭을 돌려줘서 쓸 수 없습니다.
-- **fontkit의 TTF 서브셋에는 `cmap`이 없다.** pdfkit은 글리프 ID로 그려서 필요가 없었고, PDFium은 cmap으로 유니코드를 찾으므로 없으면 □로 그립니다. 대필은 format 4 cmap을 써서 sfnt 디렉터리에 끼워 넣습니다. `name`, `OS/2`, `post`는 필요 없습니다.
+- **서브셋 CID 폰트는 "글리프 없음"이라고 말하지 않는다.** `FPDFFont_GetGlyphPath`가 없는 글자에 `.notdef` 경로를 돌려주고, 없는 글자끼리 같은 포인터를 공유합니다. EDITOR_KIM은 사설영역 코드포인트 두 개로 notdef 포인터를 알아내 비교합니다. `FPDFFont_GetGlyphWidth`는 기본 폭을 돌려줘서 쓸 수 없습니다.
+- **fontkit의 TTF 서브셋에는 `cmap`이 없다.** pdfkit은 글리프 ID로 그려서 필요가 없었고, PDFium은 cmap으로 유니코드를 찾으므로 없으면 □로 그립니다. EDITOR_KIM은 format 4 cmap을 써서 sfnt 디렉터리에 끼워 넣습니다. `name`, `OS/2`, `post`는 필요 없습니다.
 - **자동으로 줄을 묶으면 표의 옆 칸까지 묶인다.** 기준선·간격 휴리스틱을 시도했다가 뺐습니다. 지금은 텍스트 객체 하나가 상자 하나이고, 묶음은 사용자가 Shift 클릭으로 정해 PDF 콘텐츠 마크(`DaepilGroup`)로 저장합니다. 줄바꿈 편집으로 생긴 줄들만 자동으로 한 그룹이 됩니다.
 - **`FPDFText_SetText(obj, "")`는 WASM 모듈을 죽인다.** 빈 문자열은 엔진 경계에서 공백 하나로 바꿔 모든 호출자를 안전하게 했습니다.
 
@@ -183,7 +183,7 @@ PLAN.md              작업 계획과 검수 기록
 
 ## 다른 도구와 비교
 
-| | 대필 | GenOffice | Adobe Acrobat | pdf.js 기반 편집기 | Stirling-PDF |
+| | EDITOR_KIM | GenOffice | Adobe Acrobat | pdf.js 기반 편집기 | Stirling-PDF |
 |---|---|---|---|---|---|
 | 원본 폰트로 글자 편집 | 예 (PDFium) | 예 (같은 PDFium 방식) | 예 | 아니오 — 페이지 위 주석 | 아니오 |
 | 마스킹이 텍스트를 제거 | 예, 재추출로 검증 | — | 예 | 아니오 (덮기) | 일부 (페이지 평탄화) |
@@ -193,7 +193,7 @@ PLAN.md              작업 계획과 검수 기록
 | 플랫폼 | Windows (검증) | Win · macOS · Linux | Win · macOS | 모두 | Docker |
 | 라이선스 | 개인 무료 · 상업은 승인 | Apache-2.0 | 상용 | 대부분 공개 | MIT |
 
-GenOffice가 가장 가까운 친척입니다. 대필은 엔진 선택을 거기서 가져오고 오피스 스위트는 두고 왔습니다.
+GenOffice가 가장 가까운 친척입니다. EDITOR_KIM은 엔진 선택을 거기서 가져오고 오피스 스위트는 두고 왔습니다.
 
 ---
 
@@ -204,7 +204,7 @@ GenOffice가 가장 가까운 친척입니다. 대필은 엔진 선택을 거기
 - **스캔본은 덮기만 됩니다.** 밑 이미지의 픽셀 제거는 다음 과제입니다.
 - **실행 취소 스냅샷은 문서 전체입니다.** 600KB PDF × 20 = 파일당 12MB. 사무 문서에는 충분하고, 200쪽 스캔본에는 아닙니다.
 - **서버가 절대경로를 그대로 믿습니다.** 로컬 단일 사용자 앱이고 경로는 OS 파일 대화상자에서만 옵니다. 4747 포트를 외부에 열지 마세요.
-- **배포는 회색 지대입니다.** 내 로그인으로 내 용도에 Claude Code를 돌리는 것이 이 도구의 목적입니다. 대필을 제3자에게 배포하는 것은 Anthropic 약관 문제이며, 라이선스가 그것을 반영합니다.
+- **배포는 회색 지대입니다.** 내 로그인으로 내 용도에 Claude Code를 돌리는 것이 이 도구의 목적입니다. EDITOR_KIM을 제3자에게 배포하는 것은 Anthropic 약관 문제이며, 라이선스가 그것을 반영합니다.
 
 ---
 
