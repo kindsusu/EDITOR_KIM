@@ -342,7 +342,22 @@ async function open(buffer) {
             ? { ch, x0: f64(s), y0: f64(s + 16), x1: f64(s + 8), y1: f64(s + 24) }
             : { ch, x0: 0, y0: 0, x1: 0, y1: 0 });
         }
-        return out;
+        // 객체 텍스트와 길이를 맞춘다. Word/Excel 출력물은 객체 텍스트 끝에 공백을 달고 있고(계약서 PDF 97개 중 50개),
+        // Chromium 출력물은 한 글자 조각마다 뒤 공백이 붙는데, 텍스트 페이지는 그 공백을 내놓지 않는다.
+        // 빠진 공백 자리에 0폭 합성 상자를 끼워 넣어 인덱스가 텍스트와 1:1이 되게 한다. 공백이 아닌 글자가 안 맞으면 원래 목록을 돌려준다(호출자가 길이 불일치로 판단).
+        const need = P.FPDFTextObj_GetText(o, tp, 0, 0);
+        let text = '';
+        if (need > 0) { const b = mal(need); P.FPDFTextObj_GetText(o, tp, b, need); text = M.UTF16ToString(b); free(b); }
+        const aligned = []; let j = 0;
+        for (let k = 0; k < text.length; k++) {
+          const ch = text[k];
+          if (j < out.length && out[j].ch === ch) { aligned.push(out[j++]); continue; }
+          if (!/\s/.test(ch)) return out;
+          const prev = aligned[aligned.length - 1], next = out[j];
+          const x = prev ? prev.x1 : next ? next.x0 : 0, ref = prev || next || { y0: 0, y1: 0 };
+          aligned.push({ ch, x0: x, y0: ref.y0, x1: x, y1: ref.y1 });
+        }
+        return j === out.length ? aligned : out;
       } finally { free(s); P.FPDFText_ClosePage(tp); }
     },
 

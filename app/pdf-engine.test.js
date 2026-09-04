@@ -245,6 +245,14 @@ const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
   if (fs.existsSync(ko)) {
     const koBuf = fs.readFileSync(ko);
     const d = await open(koBuf);
+    // 회귀: 객체 텍스트 끝의 공백(Word/Excel/Chromium 출력)은 텍스트 페이지에 없다 → charBoxes가 합성 상자로 길이를 맞춰야 한다.
+    //       안 맞으면 redact가 charmap으로 실패하고 서버가 객체 전체를 가려 버린다(사용자 보고: "선택 가리기가 전체 가리기가 됨").
+    const texts = d.objects(0).filter((o) => o.type === 'text');
+    const trailing = texts.filter((o) => /\s$/.test(o.text));
+    assert.ok(trailing.length > 0, '뒤 공백 조각이 시험지에 있어야 함');
+    assert.ok(trailing.every((o) => d.charBoxes(0, o.idx).length === o.text.length), '뒤 공백 조각도 charBoxes 길이 = 텍스트 길이');
+    assert.strictEqual(texts.filter((o) => d.charBoxes(0, o.idx).length !== o.text.length).length, 0, '페이지 0 전 객체 대응');
+    console.log(`[회의록] 뒤 공백 조각 ${trailing.length}개 charBoxes 대응 OK`);
     // 조각 중 3글자 이상인 것 하나 (charBoxes와 글자 수가 맞는 것)
     const frag = d.objects(0).find((o) => o.type === 'text' && (o.text || '').trim().length >= 3
       && d.charBoxes(0, o.idx).length === o.text.length);
@@ -262,6 +270,14 @@ const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     assert.ok(!d2.pageText(0).includes(frag.text), '저장본에도 없음');
     d2.close();
     console.log('[회의록] 마스킹 저장·재열기 OK', s.length, 'bytes');
+
+    // 회귀: 뒤 공백 조각의 부분 마스킹이 charmap 실패 없이 성공 (깨끗한 문서에서)
+    const d3 = await open(koBuf);
+    const tr = d3.objects(0).find((o) => o.type === 'text' && /\s$/.test(o.text) && o.text.trim().length >= 1);
+    const rr = d3.redact(0, tr.idx, 0, 1);
+    assert.strictEqual(rr.ok, true, `뒤 공백 조각 부분 마스킹: ${JSON.stringify(rr)}`);
+    console.log('[회의록] 뒤 공백 조각 부분 마스킹 OK');
+    d3.close();
   }
 
   console.log('\nOK — 모든 검사 통과');
