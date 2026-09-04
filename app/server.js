@@ -153,6 +153,14 @@ const server = http.createServer(async (req, res) => {
       entry.dirty = true;
       return json(res, 200, { results, fallbackFont: results.some((r) => r.fallbackFont), ...stacks(entry) });
     }
+    if (url.pathname === '/api/pdf/fit' && req.method === 'POST') { // 폭 맞춤 편집: wrap(줄바꿈) / shrink(축소) / none
+      const { name, i, idx, text, maxWidth, mode } = JSON.parse(await body(req));
+      const entry = await getPdfDoc(name);
+      snapshot(entry, i);
+      const r = entry.doc.fitText(i, idx, text, +maxWidth, mode);
+      entry.dirty = true;
+      return json(res, 200, { ...r, ...stacks(entry) });
+    }
     if (url.pathname === '/api/pdf/charboxes' && req.method === 'GET') {
       const { doc } = await getPdfDoc(url.searchParams.get('name'));
       return json(res, 200, doc.charBoxes(+url.searchParams.get('i'), +url.searchParams.get('idx')));

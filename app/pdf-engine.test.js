@@ -257,6 +257,25 @@ const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     d.close();
   }
 
+  // 폭 맞춤: 긴 글이 maxWidth 안에서 줄바꿈되거나(wrap) 축소돼야(shrink) 한다
+  {
+    const long = 'This sentence is deliberately much longer than the original line so that it must wrap into several lines.';
+    const d = await open(src);
+    const r = d.fitText(0, 5, long, 200, 'wrap');
+    assert.ok(r.ok && r.wrapped >= 2, 'wrap: 2줄 이상');
+    const objs = d.objects(0);
+    for (let k = 0; k <= r.inserted; k++) assert.ok(objs[5 + k].bounds.x1 - objs[5 + k].bounds.x0 <= 201, `wrap: 줄 ${k} 폭 ≤ 200`);
+    assert.strictEqual(objs.slice(5, 6 + r.inserted).map((o) => o.text).join(' '), long, 'wrap: 글자 손실 없음');
+    console.log('폭 맞춤 wrap OK', r.wrapped, '줄');
+    d.close();
+    const d2 = await open(src);
+    const r2 = d2.fitText(0, 5, long, 200, 'shrink');
+    const b = d2.objects(0)[5].bounds;
+    assert.ok(r2.ok && r2.scaled < 1 && b.x1 - b.x0 <= 201, `shrink: 폭 ${(b.x1 - b.x0).toFixed(1)} ≤ 200, scale ${r2.scaled}`);
+    console.log('폭 맞춤 shrink OK', r2.scaled.toFixed(3));
+    d2.close();
+  }
+
   // redact — 한글(서브셋 폰트, Chromium이 조각낸 텍스트 객체)
   if (fs.existsSync(ko)) {
     const koBuf = fs.readFileSync(ko);

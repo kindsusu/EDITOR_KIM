@@ -312,6 +312,48 @@ async function open(buffer) {
         return { ok: true, fallbackFont: fallback, inserted };
       } finally { free(m); free(c); }
     },
+    // 폭 맞춤. 긴 글을 넣어도 옆 글자와 겹치지 않게:
+    //   'wrap'   사용 가능한 폭(maxWidth)에 맞춰 단어 단위 줄바꿈 → setText의 여러 줄 배치. 폭 측정은 실제로 SetText 해보고 bounds를 읽는다(폰트 메트릭 추정 없음)
+    //   'shrink' 첫 줄 폭이 넘치면 행렬(a,d)을 같은 비율로 줄여 글자를 축소 (표 셀처럼 줄을 늘릴 수 없을 때)
+    //   'none'   그대로 (setText)
+    fitText(i, idx, text, maxWidth, mode = 'wrap') {
+      if (!(maxWidth > 0) || mode === 'none') return api.setText(i, idx, text);
+      const width = (s) => { const r = api._setOne(i, idx, s); if (!r.ok) return -1; const b = api.objects(i)[idx].bounds; return b.x1 - b.x0; };
+      const lines = String(text ?? '').split(/\r?\n/);
+      if (mode === 'shrink') {
+        const w = Math.max(...lines.map(width));
+        const r = api.setText(i, idx, text);
+        if (r.ok && w > maxWidth) {
+          const s = maxWidth / w, m = mal(24), p = page(i);
+          try {
+            for (let k = 0; k <= (r.inserted || 0); k++) {
+              const o = P.FPDFPage_GetObject(p, idx + k);
+              if (!P.FPDFPageObj_GetMatrix(o, m)) continue;
+              M.setValue(m, f32(m) * s, 'float'); M.setValue(m + 12, f32(m + 12) * s, 'float'); // a, d만 축소 (원점 e,f 유지)
+              P.FPDFPageObj_SetMatrix(o, m);
+            }
+            P.FPDFPage_GenerateContent(p);
+          } finally { free(m); }
+          r.scaled = s;
+        }
+        return r;
+      }
+      const out = [];
+      for (let line of lines) {
+        for (let guard = 0; guard < 50 && line !== null; guard++) {
+          const w = width(line);
+          if (w < 0 || w <= maxWidth || line.trim().length < 2) { out.push(line); break; }
+          let cut = Math.max(1, Math.floor(line.length * maxWidth / w)); // 폭 비례로 자르고, 그 앞의 공백이 있으면 단어 경계로
+          const sp = line.lastIndexOf(' ', cut); if (sp > 0) cut = sp;
+          out.push(line.slice(0, cut).trimEnd()); line = line.slice(cut).trimStart();
+          if (!line) line = null;
+        }
+      }
+      const r = api.setText(i, idx, out.join('\n'));
+      r.wrapped = out.length;
+      return r;
+    },
+
     // 한 줄 교체(내부). 1) 원본 폰트로 그릴 수 있으면 그대로 SetText (폰트·모양 보존)
     //                   2) 글리프가 없으면 시스템 한글 폰트로 새 객체를 만들어 자리 바꿔치기
     _setOne(i, idx, newText) {
