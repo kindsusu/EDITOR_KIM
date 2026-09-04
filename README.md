@@ -93,6 +93,8 @@ npm install
 npm start
 ```
 
+On Windows you can skip the terminal after cloning: double-click **`run-daepil.bat`** — it checks for Node, runs `npm install` on first launch, then starts the app.
+
 Then: **📂 파일 열기** → pick a PDF → hover a line, click it → type → Enter → Ctrl+S. Keys that matter:
 
 | key | does |

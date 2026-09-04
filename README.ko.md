@@ -93,6 +93,8 @@ npm install
 npm start
 ```
 
+Windows에서는 클론 후 터미널 없이 **`run-daepil.bat`** 을 더블클릭하면 됩니다. Node 확인, 첫 실행 시 `npm install`, 앱 시작까지 알아서 합니다.
+
 그다음 **📂 파일 열기** → PDF 선택 → 줄에 마우스를 올리고 클릭 → 입력 → Enter → Ctrl+S. 알아둘 키:
 
 | 키 | 동작 |
