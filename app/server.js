@@ -24,8 +24,18 @@ async function getPdfDoc(name) {
   if (cached && cached.mtimeMs === mtimeMs) return cached;
   if (cached) cached.doc.close();
   const doc = await pdfEngine.open(fs.readFileSync(p));
-  return (pdfDocs[name] = { doc, mtimeMs, dirty: false });
+  return (pdfDocs[name] = { doc, mtimeMs, dirty: false, undo: [], redo: [] });
 }
+
+// ponytail: undo 스택은 문서당 최대 20개(save() 바이트 통짜) — 600KB 문서 기준 12MB, 개인용 데스크톱 앱이라 넉넉함.
+//   더 큰 문서/더 긴 히스토리가 필요해지면 diff 기반으로 바꿔야 함.
+const UNDO_MAX = 20;
+function snapshot(entry, i) {
+  entry.undo.push({ bytes: entry.doc.save(), page: i });
+  if (entry.undo.length > UNDO_MAX) entry.undo.shift();
+  entry.redo = [];
+}
+const stacks = (entry) => ({ undoLeft: entry.undo.length, redoLeft: entry.redo.length });
 
 // 절대경로는 그대로 씀 (로컬 단일 사용자 데스크톱 앱, OS 파일 대화상자에서 온 경로). 상대경로는 여전히 WS 안으로 제한.
 const safe = (p) => {
@@ -129,16 +139,18 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/pdf/edit' && req.method === 'POST') {
       const { name, i, idx, text } = JSON.parse(await body(req));
       const entry = await getPdfDoc(name);
+      snapshot(entry, i);
       const r = entry.doc.setText(i, idx, text);
       entry.dirty = true;
-      return json(res, 200, r);
+      return json(res, 200, { ...r, ...stacks(entry) });
     }
     if (url.pathname === '/api/pdf/edits' && req.method === 'POST') {
       const { name, i, edits } = JSON.parse(await body(req));
       const entry = await getPdfDoc(name);
+      snapshot(entry, i);
       const results = edits.map(({ idx, text }) => entry.doc.setText(i, idx, text));
       entry.dirty = true;
-      return json(res, 200, { results, fallbackFont: results.some((r) => r.fallbackFont) });
+      return json(res, 200, { results, fallbackFont: results.some((r) => r.fallbackFont), ...stacks(entry) });
     }
     if (url.pathname === '/api/pdf/charboxes' && req.method === 'GET') {
       const { doc } = await getPdfDoc(url.searchParams.get('name'));
@@ -147,27 +159,39 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/pdf/move' && req.method === 'POST') {
       const { name, i, idxs, dx, dy } = JSON.parse(await body(req));
       const entry = await getPdfDoc(name);
+      snapshot(entry, i);
       const r = entry.doc.move(i, idxs, dx, dy);
       entry.dirty = true;
-      return json(res, 200, r);
+      return json(res, 200, { ...r, ...stacks(entry) });
     }
     if (url.pathname === '/api/pdf/rect' && req.method === 'POST') {
       const { name, i, bounds, color } = JSON.parse(await body(req));
       const entry = await getPdfDoc(name);
+      snapshot(entry, i);
       const r = entry.doc.addRect(i, bounds, color || [0, 0, 0, 255]);
       entry.dirty = true;
-      return json(res, 200, r);
+      return json(res, 200, { ...r, ...stacks(entry) });
+    }
+    if (url.pathname === '/api/pdf/remove' && req.method === 'POST') {
+      const { name, i, idx } = JSON.parse(await body(req));
+      const entry = await getPdfDoc(name);
+      snapshot(entry, i);
+      const r = entry.doc.removeObject(i, idx);
+      entry.dirty = true;
+      return json(res, 200, { ...r, ...stacks(entry) });
     }
     if (url.pathname === '/api/pdf/redact' && req.method === 'POST') {
       const { name, i, idx, from, to } = JSON.parse(await body(req));
       const entry = await getPdfDoc(name);
+      snapshot(entry, i);
       const r = entry.doc.redact(i, idx, from, to);
       entry.dirty = true;
-      return json(res, 200, r);
+      return json(res, 200, { ...r, ...stacks(entry) });
     }
     if (url.pathname === '/api/pdf/mask' && req.method === 'POST') {
       const { name, i, parts, fallbackRects } = JSON.parse(await body(req));
       const entry = await getPdfDoc(name);
+      snapshot(entry, i);
       const rects = [];
       // redact가 idx+1에 새 텍스트 객체를 끼워넣어 뒤 인덱스를 밀어내므로, 앞 인덱스가 안 밀리도록 뒤에서부터 처리
       const sorted = [...parts].sort((a, b) => b.idx - a.idx);
@@ -182,7 +206,29 @@ const server = http.createServer(async (req, res) => {
       }
       for (const b of (fallbackRects || [])) { entry.doc.addRect(i, b, [0, 0, 0, 255]); rects.push(b); }
       entry.dirty = true;
-      return json(res, 200, { ok: true, rects, textLeft: entry.doc.pageText(i) });
+      return json(res, 200, { ok: true, rects, textLeft: entry.doc.pageText(i), ...stacks(entry) });
+    }
+    if (url.pathname === '/api/pdf/undo' && req.method === 'POST') {
+      const { name } = JSON.parse(await body(req));
+      const entry = await getPdfDoc(name);
+      if (!entry.undo.length) return json(res, 200, { ok: false });
+      const { bytes, page } = entry.undo.pop();
+      entry.redo.push({ bytes: entry.doc.save(), page });
+      entry.doc.close();
+      entry.doc = await pdfEngine.open(bytes);
+      entry.dirty = true;
+      return json(res, 200, { ok: true, page, ...stacks(entry) });
+    }
+    if (url.pathname === '/api/pdf/redo' && req.method === 'POST') {
+      const { name } = JSON.parse(await body(req));
+      const entry = await getPdfDoc(name);
+      if (!entry.redo.length) return json(res, 200, { ok: false });
+      const { bytes, page } = entry.redo.pop();
+      entry.undo.push({ bytes: entry.doc.save(), page });
+      entry.doc.close();
+      entry.doc = await pdfEngine.open(bytes);
+      entry.dirty = true;
+      return json(res, 200, { ok: true, page, ...stacks(entry) });
     }
     if (url.pathname === '/api/pdf/text' && req.method === 'GET') {
       const { doc } = await getPdfDoc(url.searchParams.get('name'));

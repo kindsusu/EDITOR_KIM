@@ -42,6 +42,10 @@ claude -p       — Claude Code CLI, 사용자 로그인 그대로
 
 엔진 자체 검사: `node app/pdf-engine.test.js`
 
+## 라이선스
+
+개인 용도는 무료입니다. 기업·상업 용도는 원칙적으로 불가하며, 저작권자의 사전 승인을 받은 경우에만 가능합니다. 자세한 내용은 [LICENSE](LICENSE).
+
 ## 주의
 
 - 앱은 토큰이나 키를 저장하지 않습니다. Claude Code를 자식 프로세스로 실행할 뿐입니다.

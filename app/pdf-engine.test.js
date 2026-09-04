@@ -159,6 +159,23 @@ const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     assert.strictEqual(ro[rIdx].type, 'path');
     for (const k of ['x0', 'y0', 'x1', 'y1']) assert.ok(Math.abs(ro[rIdx].bounds[k] - rect[k]) < 0.01, `rect ${k}`);
     console.log('addRect idx', rIdx, JSON.stringify(ro[rIdx].bounds));
+
+    // K: 마크 — addRect가 만든 객체만 mask:true, 나머지는 전부 false
+    assert.strictEqual(ro[rIdx].mask, true, '사각형은 mask:true');
+    for (let k = 0; k < ro.length; k++) if (k !== rIdx) assert.strictEqual(ro[k].mask, false, `idx ${k}는 mask:false`);
+
+    // K: 저장 → 재열기해도 마크가 살아남는다
+    const savedRect = d.save();
+    const dr = await open(savedRect);
+    const rro = dr.objects(0);
+    assert.strictEqual(rro.length, ro.length, '재열기 후 객체 수 동일');
+    assert.strictEqual(rro[rIdx].mask, true, '저장·재열기 후에도 mask:true 유지');
+    dr.close();
+
+    // K: removeObject — 삭제하면 객체 수가 다시 줄어든다
+    assert.deepStrictEqual(d.removeObject(0, rIdx), { ok: true });
+    assert.strictEqual(d.objects(0).length, nBefore, 'removeObject 후 원래 개수로 복귀');
+    assert.deepStrictEqual(d.removeObject(0, 999), { ok: false }, '범위 밖 idx는 실패');
     d.close();
   }
 
@@ -174,6 +191,10 @@ const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     assert.strictEqual(r.ok, true);
     assert.strictEqual(r.inserted, 6);
     assert.strictEqual(r.rects.length, 1);
+
+    // K: redact가 얹은 사각형(마지막 객체)도 addRect를 거치므로 mask:true여야 함
+    const objsAfterRedact = d.objects(0);
+    assert.strictEqual(objsAfterRedact[objsAfterRedact.length - 1].mask, true, 'redact의 가림 사각형은 mask:true');
 
     const pt = d.pageText(0);
     assert.ok(!pt.includes('local'), '"local"이 페이지 텍스트에 남으면 안 됨');

@@ -161,6 +161,19 @@ async function open(buffer) {
   //     → 사설영역(PUA) 코드포인트로 notdef 포인터를 먼저 뽑아 두고, 그 포인터와 같으면 없는 글자로 본다.
   //       (PUA 두 개가 서로 다른 패스를 주면 notdef 판별을 포기하고 0 검사만 쓴다)
   //   공백류는 원래 빈 패스(0)라 검사에서 제외.
+  // FPDFPageObjMark_GetName(mark, buffer, buflen, out_buflen) — buffer는 UTF-16LE. 먼저 0,0으로 불러 필요 바이트 수를 받는다.
+  const markName = (mark) => {
+    const outLen = mal(4);
+    try {
+      if (!P.FPDFPageObjMark_GetName(mark, 0, 0, outLen)) return '';
+      const need = i32(outLen);
+      if (!need) return '';
+      const buf = mal(need);
+      try { return P.FPDFPageObjMark_GetName(mark, buf, need, outLen) ? M.UTF16ToString(buf) : ''; }
+      finally { free(buf); }
+    } finally { free(outLen); }
+  };
+
   const canRender = (font, text, size) => {
     const sz = size || 12;
     const a = P.FPDFFont_GetGlyphPath(font, 0xe000, sz);
@@ -230,8 +243,12 @@ async function open(buffer) {
             idx,
             type: t === OBJ_TEXT ? 'text' : t === OBJ_IMAGE ? 'image' : t === OBJ_PATH ? 'path' : 'other',
             text: null, font: null, size: null,
-            bounds: null, color: [0, 0, 0, 255],
+            bounds: null, color: [0, 0, 0, 255], mask: false,
           };
+          for (let k = 0, mc = P.FPDFPageObj_CountMarks(o); k < mc; k++) {
+            const mk = P.FPDFPageObj_GetMark(o, k);
+            if (mk && markName(mk) === 'DaepilMask') { item.mask = true; break; }
+          }
           P.FPDFPageObj_GetBounds(o, scratch, scratch + 4, scratch + 8, scratch + 12);
           item.bounds = { x0: f32(scratch), y0: f32(scratch + 4), x1: f32(scratch + 8), y1: f32(scratch + 12) };
           if (P.FPDFPageObj_GetFillColor(o, scratch, scratch + 4, scratch + 8, scratch + 12)) {
@@ -350,9 +367,20 @@ async function open(buffer) {
       if (!o) return { idx: -1 };
       P.FPDFPageObj_SetFillColor(o, color[0], color[1], color[2], color[3] == null ? 255 : color[3]);
       P.FPDFPath_SetDrawMode(o, 1, false); // FPDF_FILLMODE_WINDING, stroke=false
+      P.FPDFPageObj_AddMark(o, 'DaepilMask'); // 콘텐츠 마크: 저장·재열기 후에도 "이게 우리가 만든 가림 상자"임을 식별
       P.FPDFPage_InsertObject(p, o);       // 맨 위에 얹는다
       P.FPDFPage_GenerateContent(p);
       return { idx: P.FPDFPage_CountObjects(p) - 1 };
+    },
+
+    // 객체 하나를 페이지에서 제거 (가림 상자 삭제용)
+    removeObject(i, idx) {
+      const p = page(i);
+      const o = P.FPDFPage_GetObject(p, idx);
+      if (!o) return { ok: false };
+      const ok = !!P.FPDFPage_RemoveObject(p, o);
+      if (ok) { P.FPDFPageObj_Destroy(o); P.FPDFPage_GenerateContent(p); }
+      return { ok };
     },
 
     // 글자 [from,to)를 텍스트에서 실제로 지우고 그 자리에 검은 사각형을 덮는다.
