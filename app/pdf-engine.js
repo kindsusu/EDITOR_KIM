@@ -6,6 +6,7 @@ const fontkit = require('fontkit');
 const OBJ_TEXT = 1, OBJ_PATH = 2, OBJ_IMAGE = 3; // FPDF_PAGEOBJ_*
 const RENDER_FLAGS = 0x01 | 0x10;                // FPDF_ANNOT | FPDF_REVERSE_BYTE_ORDER(=RGBA로 뽑기)
 const FPDF_FONT_TRUETYPE = 2;
+const LINE_HEIGHT = 1.2; // 줄바꿈 편집 시 행간(글자 크기 배수). PDF는 행간 정보를 주지 않는다
 
 // 폴백 한글 폰트 후보 (윈도우 기준). 없으면 폴백 불가 → setText가 ok:false.
 const FALLBACK_FONTS = [
@@ -186,6 +187,8 @@ async function open(buffer) {
     return true;
   };
 
+  const isBold = (o) => { const nb = mal(256); const r = !!(P.FPDFFont_GetBaseFontName(P.FPDFTextObj_GetFont(o), nb, 256) && /bold|black|heavy/i.test(M.UTF8ToString(nb))); free(nb); return r; };
+
   const withBitmap = (i, scale, fn) => {
     const { w, h } = api.pageSize(i);
     const pw = Math.max(1, Math.round(w * scale)), ph = Math.max(1, Math.round(h * scale));
@@ -276,9 +279,42 @@ async function open(buffer) {
       } finally { free(scratch); P.FPDFText_ClosePage(tp); }
     },
 
-    // 1) 원본 폰트로 그릴 수 있으면 그대로 SetText (폰트·모양 보존)
-    // 2) 글리프가 없으면 시스템 한글 폰트로 새 객체를 만들어 자리 바꿔치기
+    // 줄바꿈 지원: PDF 텍스트 객체는 한 줄이라 '\n'을 넣으면 □로 그려진다.
+    // 첫 줄은 기존 객체에(setOne), 나머지 줄은 같은 폰트·크기·색으로 새 객체를 만들어 행간만큼 아래(idx+k)에 넣는다.
     setText(i, idx, newText) {
+      const lines = String(newText ?? '').split(/\r?\n/);
+      const r = api._setOne(i, idx, lines[0]);
+      if (!r.ok || lines.length < 2) return r;
+      const p = page(i), o = P.FPDFPage_GetObject(p, idx);
+      const m = mal(24), c = mal(16);
+      try {
+        P.FPDFTextObj_GetFontSize(o, c); const size = f32(c);
+        if (!P.FPDFPageObj_GetMatrix(o, m)) return r;
+        const b = f32(m + 4), cc = f32(m + 8), d = f32(m + 12), f = f32(m + 20);
+        if (Math.abs(b) > 0.01 || Math.abs(cc) > 0.01) return r; // 회전 텍스트는 첫 줄만
+        const lh = LINE_HEIGHT * size * (d || 1); // ponytail: 행간은 PDFium이 알려주지 않는다 → 글자 크기의 1.2배. 문서에 안 맞으면 LINE_HEIGHT 조정
+        const color = P.FPDFPageObj_GetFillColor(o, c, c + 4, c + 8, c + 12) ? [i32(c), i32(c + 4), i32(c + 8), i32(c + 12)] : null;
+        const bold = isBold(o);
+        let fallback = r.fallbackFont, inserted = 0;
+        for (let k = 1; k < lines.length; k++) {
+          const text = lines[k] || ' ';
+          let font = P.FPDFTextObj_GetFont(o), fb = false;
+          if (!canRender(font, text, size)) { font = fallbackFont(bold, text); fb = true; if (!font || !canRender(font, text, size)) continue; }
+          const neo = P.FPDFPageObj_CreateTextObj(doc, font, size);
+          const u = utf16(text); const ok = neo && P.FPDFText_SetText(neo, u); free(u);
+          if (!ok) { if (neo) P.FPDFPageObj_Destroy(neo); continue; }
+          M.setValue(m + 20, f - k * lh, 'float'); P.FPDFPageObj_SetMatrix(neo, m);
+          if (color) P.FPDFPageObj_SetFillColor(neo, color[0], color[1], color[2], color[3]);
+          if (!P.FPDFPage_InsertObjectAtIndex(p, neo, idx + k)) P.FPDFPage_InsertObject(p, neo);
+          inserted++; fallback = fallback || fb;
+        }
+        P.FPDFPage_GenerateContent(p);
+        return { ok: true, fallbackFont: fallback, inserted };
+      } finally { free(m); free(c); }
+    },
+    // 한 줄 교체(내부). 1) 원본 폰트로 그릴 수 있으면 그대로 SetText (폰트·모양 보존)
+    //                   2) 글리프가 없으면 시스템 한글 폰트로 새 객체를 만들어 자리 바꿔치기
+    _setOne(i, idx, newText) {
       if (!newText) newText = ' '; // 빈 문자열로 SetText하면 PDFium(WASM)이 unreachable 트랩으로 죽는다
       const p = page(i);
       const o = P.FPDFPage_GetObject(p, idx);
@@ -295,9 +331,7 @@ async function open(buffer) {
           return { ok, fallbackFont: false };
         }
 
-        const nb = mal(256);
-        const bold = P.FPDFFont_GetBaseFontName(P.FPDFTextObj_GetFont(o), nb, 256) && /bold|black|heavy/i.test(M.UTF8ToString(nb));
-        free(nb);
+        const bold = isBold(o);
         const font = fallbackFont(bold, newText);
         // 시스템 한글 폰트가 없거나, 서브셋에도 없는 글자(폰트 자체에 글리프 없음)면 두부(□)로 그려질 테니 거절
         if (!font || !canRender(font, newText, size)) return { ok: false, fallbackFont: false };

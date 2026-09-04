@@ -534,7 +534,7 @@ function openInlineEditor(initialText) {
   const maskHint = document.createElement('div'); maskHint.className = 'tip'; maskHint.textContent = '먼저 원문 상태에서 가릴 부분을 선택하세요';
   panel.appendChild(maskHint);
 
-  const tip = document.createElement('div'); tip.className = 'tip'; tip.textContent = 'Claude에게 맡기려면 오른쪽 패널에서 "편집(선택 객체)" 모드로 지시하세요.';
+  const tip = document.createElement('div'); tip.className = 'tip'; tip.textContent = 'Shift+Enter로 줄을 나누면 줄마다 아래에 배치됩니다. Claude에게 맡기려면 오른쪽 패널에서 "편집(선택 객체)" 모드로 지시하세요.';
   panel.appendChild(tip);
   panel.style.visibility = 'hidden';
   wrap.appendChild(panel);
@@ -565,7 +565,8 @@ function openInlineEditor(initialText) {
     const idxs = objs.map((o) => o.idx);
     // 줄을 이루는 조각 객체 중 첫 조각에 전체 텍스트를 넣고 나머지는 비운다 (원본 폰트 유지, idx는 편집 후에도 안정적)
     // 빈 문자열("")로 SetText하면 PDFium(WASM)이 unreachable로 죽는다 — 대신 공백 하나로 채운다 (원래도 조각 사이에 공백이 섞여 있어 시각적으로 동일)
-    const edits = [{ idx: objs[0].idx, text: newText }, ...objs.slice(1).map((o) => ({ idx: o.idx, text: ' ' }))];
+    // 나머지 조각을 먼저 비우고 첫 조각을 마지막에: 여러 줄 텍스트면 첫 조각 뒤에 줄 객체가 끼어들어 뒤 인덱스가 밀리기 때문
+    const edits = [...objs.slice(1).map((o) => ({ idx: o.idx, text: ' ' })), { idx: objs[0].idx, text: newText }];
     const r = await pdfMutate('/api/pdf/edits', { name: cur, i, edits });
     if (align !== 'left') { // 새 폭을 재서 왼쪽/오른쪽 끝이 원래 자리에 오도록 이동
       const fresh = await (await fetch(`/api/pdf/objects?name=${encodeURIComponent(cur)}&i=${i}`)).json();
@@ -578,7 +579,8 @@ function openInlineEditor(initialText) {
     }
     selectedObj = null; updateEditRadio();
     await refreshPage(i, objs[0].idx);
-    flash(r.fallbackFont ? '원본 폰트에 없는 글자라 맑은 고딕으로 대체됨' : '저장 전 (Ctrl+S)');
+    const addedLines = (r.results || []).reduce((n, x) => n + (x.inserted || 0), 0);
+    flash(addedLines ? `줄 ${addedLines}개를 아래에 추가했습니다 — 기존 줄과 겹치면 드래그로 옮기세요` : r.fallbackFont ? '원본 폰트에 없는 글자라 맑은 고딕으로 대체됨' : '저장 전 (Ctrl+S)');
   };
   okBtn.onclick = commit;
   cancelBtn.onclick = close;

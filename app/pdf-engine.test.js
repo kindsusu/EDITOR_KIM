@@ -241,6 +241,22 @@ const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     d2.close();
   }
 
+  // 줄바꿈 편집: '\n'이 □가 되지 않고 줄마다 객체가 생겨 아래로 배치돼야 한다
+  {
+    const d = await open(src);
+    const before = d.objects(0), t2 = before[2];
+    const r = d.setText(0, 2, 'first line\nsecond line\nthird');
+    assert.deepStrictEqual({ ok: r.ok, inserted: r.inserted, fb: r.fallbackFont }, { ok: true, inserted: 2, fb: false });
+    const after = d.objects(0);
+    assert.strictEqual(after.length, before.length + 2, '줄 수만큼 객체 추가');
+    assert.strictEqual(after[2].text, 'first line'); assert.strictEqual(after[3].text, 'second line'); assert.strictEqual(after[4].text, 'third');
+    assert.ok(after[3].bounds.y1 < t2.bounds.y0 + 1 && after[4].bounds.y1 < after[3].bounds.y0 + 1, '각 줄이 앞 줄 아래에');
+    assert.ok(Math.abs(after[3].bounds.x0 - after[2].bounds.x0) < 1, '왼쪽 정렬 유지');
+    assert.ok(!d.pageText(0).includes('�'), '□ 없음');
+    console.log('줄바꿈 편집 OK', after.slice(2, 5).map((o) => `${o.text}@y${o.bounds.y0.toFixed(1)}`).join(' | '));
+    d.close();
+  }
+
   // redact — 한글(서브셋 폰트, Chromium이 조각낸 텍스트 객체)
   if (fs.existsSync(ko)) {
     const koBuf = fs.readFileSync(ko);
