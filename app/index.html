@@ -51,7 +51,7 @@
 </style>
 </head>
 <body>
-<header><b>대필</b><span>PDF · Markdown 편집기</span><span class="sp"></span><span id="status">Claude Code 로그인 사용 · API 키 없음</span></header>
+<header><b>대필</b><span id="ver" style="color:var(--acc);opacity:.8"></span><span>PDF · Markdown 편집기</span><span class="sp"></span><span id="status">Claude Code 로그인 사용 · API 키 없음</span></header>
 <aside>
   <button id="openFiles" hidden>📂 파일 열기</button>
   <button id="openFolder" hidden>📁 폴더 열기</button>
@@ -107,6 +107,7 @@ const showDirty = () => { $('#dirty').hidden = !dirty(); };
 async function checkHealth() {
   $('#setupStatus').textContent = '확인 중…';
   const h = await (await fetch('/api/health')).json();
+  if (h.appVersion) { $('#ver').textContent = 'v' + h.appVersion; document.title = `대필 v${h.appVersion}`; }
   const ok = h.installed && h.loggedIn;
   $('#setup').hidden = ok;
   $('#btnInstall').hidden = h.installed; $('#btnLogin').hidden = !h.installed || h.loggedIn;
@@ -583,8 +584,10 @@ function openInlineEditor(initialText) {
       const size = selectedObj.size || 10, texts = (pdfObjects[i] || []).filter((o) => o.type === 'text' && o.bounds && !idxs.includes(o.idx));
       const row = texts.filter((o) => Math.abs(o.bounds.y0 - oldBounds.y0) < 0.6 * size);
       const pageL = Math.min(...texts.map((o) => o.bounds.x0)), pageR = Math.max(...texts.map((o) => o.bounds.x1));
-      const left = row.filter((o) => o.bounds.x1 <= oldBounds.x0 + 1).reduce((m, o) => Math.max(m, o.bounds.x1), isFinite(pageL) ? pageL : 0);
-      const right = row.filter((o) => o.bounds.x0 >= oldBounds.x1 - 1).reduce((m, o) => Math.min(m, o.bounds.x0), isFinite(pageR) ? pageR : pdfPages[i].w - 20);
+      // 이웃이 없어도 페이지 가장자리(여백 18pt)는 넘지 않는다
+      const edgeL = 18, edgeR = pdfPages[i].w - 18;
+      const left = Math.max(0, row.filter((o) => o.bounds.x1 <= oldBounds.x0 + 1).reduce((m, o) => Math.max(m, o.bounds.x1), isFinite(pageL) ? Math.min(pageL, oldBounds.x0) : edgeL));
+      const right = Math.min(edgeR, row.filter((o) => o.bounds.x0 >= oldBounds.x1 - 1).reduce((m, o) => Math.min(m, o.bounds.x0), isFinite(pageR) ? Math.max(pageR, oldBounds.x1) : edgeR));
       const maxWidth = Math.max(20, right - left - 2);
       if (objs.length > 1) await pdfMutate('/api/pdf/edits', { name: cur, i, edits: objs.slice(1).map((o) => ({ idx: o.idx, text: ' ' })) });
       const one = await pdfMutate('/api/pdf/fit', { name: cur, i, idx: objs[0].idx, text: newText, maxWidth, mode: fit });

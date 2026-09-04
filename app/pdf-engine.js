@@ -283,9 +283,12 @@ async function open(buffer) {
     // 첫 줄은 기존 객체에(setOne), 나머지 줄은 같은 폰트·크기·색으로 새 객체를 만들어 행간만큼 아래(idx+k)에 넣는다.
     setText(i, idx, newText) {
       const lines = String(newText ?? '').split(/\r?\n/);
+      const p = page(i), orig = P.FPDFPage_GetObject(p, idx);
+      // 굵기는 원래 객체에서 읽어 둔다 — _setOne이 폴백으로 바꾸면 폰트 이름이 "Untitled"라 굵기를 잃는다
+      const bold = orig && P.FPDFPageObj_GetType(orig) === OBJ_TEXT ? isBold(orig) : false;
       const r = api._setOne(i, idx, lines[0]);
       if (!r.ok || lines.length < 2) return r;
-      const p = page(i), o = P.FPDFPage_GetObject(p, idx);
+      const o = P.FPDFPage_GetObject(p, idx);
       const m = mal(24), c = mal(16);
       try {
         P.FPDFTextObj_GetFontSize(o, c); const size = f32(c);
@@ -294,8 +297,7 @@ async function open(buffer) {
         if (Math.abs(b) > 0.01 || Math.abs(cc) > 0.01) return r; // 회전 텍스트는 첫 줄만
         const lh = LINE_HEIGHT * size * (d || 1); // ponytail: 행간은 PDFium이 알려주지 않는다 → 글자 크기의 1.2배. 문서에 안 맞으면 LINE_HEIGHT 조정
         const color = P.FPDFPageObj_GetFillColor(o, c, c + 4, c + 8, c + 12) ? [i32(c), i32(c + 4), i32(c + 8), i32(c + 12)] : null;
-        const bold = isBold(o);
-        let fallback = r.fallbackFont, inserted = 0;
+        let fallback = r.fallbackFont; const lineIdxs = [idx];
         for (let k = 1; k < lines.length; k++) {
           const text = lines[k] || ' ';
           let font = P.FPDFTextObj_GetFont(o), fb = false;
@@ -305,11 +307,12 @@ async function open(buffer) {
           if (!ok) { if (neo) P.FPDFPageObj_Destroy(neo); continue; }
           M.setValue(m + 20, f - k * lh, 'float'); P.FPDFPageObj_SetMatrix(neo, m);
           if (color) P.FPDFPageObj_SetFillColor(neo, color[0], color[1], color[2], color[3]);
-          if (!P.FPDFPage_InsertObjectAtIndex(p, neo, idx + k)) P.FPDFPage_InsertObject(p, neo);
-          inserted++; fallback = fallback || fb;
+          // 맨 뒤(가장 위 z-순서)에 넣는다. 원래 글자 바로 뒤에 끼우면 표 셀 배경 같은 뒤쪽 채움 도형이 새 줄을 덮어 글자가 사라진다
+          P.FPDFPage_InsertObject(p, neo);
+          lineIdxs.push(P.FPDFPage_CountObjects(p) - 1); fallback = fallback || fb;
         }
         P.FPDFPage_GenerateContent(p);
-        return { ok: true, fallbackFont: fallback, inserted };
+        return { ok: true, fallbackFont: fallback, inserted: lineIdxs.length - 1, lineIdxs };
       } finally { free(m); free(c); }
     },
     // 폭 맞춤. 긴 글을 넣어도 옆 글자와 겹치지 않게:
@@ -326,8 +329,8 @@ async function open(buffer) {
         if (r.ok && w > maxWidth) {
           const s = maxWidth / w, m = mal(24), p = page(i);
           try {
-            for (let k = 0; k <= (r.inserted || 0); k++) {
-              const o = P.FPDFPage_GetObject(p, idx + k);
+            for (const li of r.lineIdxs || [idx]) {
+              const o = P.FPDFPage_GetObject(p, li);
               if (!P.FPDFPageObj_GetMatrix(o, m)) continue;
               M.setValue(m, f32(m) * s, 'float'); M.setValue(m + 12, f32(m + 12) * s, 'float'); // a, d만 축소 (원점 e,f 유지)
               P.FPDFPageObj_SetMatrix(o, m);

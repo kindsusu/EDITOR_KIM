@@ -10,6 +10,7 @@ const PORT = 4747;
 const CONF = path.join(os.homedir(), '.su-daepil.json');
 const ENV = { ...process.env, CLAUDECODE: '' }; // 중첩 세션 검사 회피
 const pdfEngine = require('./pdf-engine');
+const APP_VERSION = require('../package.json').version;
 
 let conf = {}; try { conf = JSON.parse(fs.readFileSync(CONF, 'utf8')); } catch {}
 let WS = conf.workspace && fs.existsSync(conf.workspace) ? conf.workspace : path.join(ROOT, '..', 'workspace');
@@ -57,9 +58,9 @@ const run = (args) => new Promise((r) => CLAUDE ? execFile(CLAUDE, args, opts(),
 async function health() {
   if (!CLAUDE) await findClaude();
   const version = await run(['--version']);
-  if (!version) return { installed: false };
+  if (!version) return { installed: false, appVersion: APP_VERSION };
   let auth = {}; try { auth = JSON.parse(await run(['auth', 'status'])); } catch {}
-  return { installed: true, version, loggedIn: !!auth.loggedIn, authMethod: auth.authMethod };
+  return { installed: true, version, loggedIn: !!auth.loggedIn, authMethod: auth.authMethod, appVersion: APP_VERSION };
 }
 // 사용자가 진행 상황을 보도록 별도 PowerShell 창에서 실행
 const openConsole = (cmd) => spawn('powershell', ['-NoExit', '-ExecutionPolicy', 'Bypass', '-Command', cmd], { detached: true, stdio: 'ignore', env: ENV }).unref();

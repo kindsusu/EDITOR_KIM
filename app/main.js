@@ -5,7 +5,7 @@ const { PORT } = require('./server.js');
 
 app.whenReady().then(() => {
   const win = new BrowserWindow({
-    width: 1400, height: 900, title: '대필', autoHideMenuBar: true, backgroundColor: '#1b1b1f',
+    width: 1400, height: 900, title: `대필 v${require('../package.json').version}`, autoHideMenuBar: true, backgroundColor: '#1b1b1f',
     webPreferences: { preload: path.join(__dirname, 'preload.js') },
   });
   win.loadURL(`http://localhost:${PORT}`);
