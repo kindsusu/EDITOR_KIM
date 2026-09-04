@@ -1,27 +1,49 @@
-// 프로토타입 백엔드: 정적 UI 제공 + 파일 읽기/쓰기 + `claude -p` 호출 (API 키 없음, Claude Code 로그인 사용)
+// 대필 백엔드: 정적 UI + 파일 읽기/쓰기 + Claude Code CLI 호출 (API 키 없음, 구독 로그인 사용)
 const http = require('http');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
-const { spawn } = require('child_process');
+const { spawn, execFile } = require('child_process');
 
 const ROOT = __dirname;
-const WS = path.join(ROOT, 'workspace');
 const PORT = 4747;
+const CONF = path.join(os.homedir(), '.su-daepil.json');
+const ENV = { ...process.env, CLAUDECODE: '' }; // 중첩 세션 검사 회피
 
-const safe = (p) => {
-  const abs = path.resolve(WS, p || '');
-  if (!abs.startsWith(WS)) throw new Error('bad path');
-  return abs;
-};
+let conf = {}; try { conf = JSON.parse(fs.readFileSync(CONF, 'utf8')); } catch {}
+let WS = conf.workspace && fs.existsSync(conf.workspace) ? conf.workspace : path.join(ROOT, '..', 'workspace');
+const sessions = {}; // 문서명 → claude 세션 ID (대화 이어가기)
+
+const safe = (p) => { const abs = path.resolve(WS, p || ''); if (!abs.startsWith(WS)) throw new Error('bad path'); return abs; };
 const json = (res, code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(obj)); };
 const body = (req) => new Promise((r) => { let b = ''; req.on('data', (c) => (b += c)); req.on('end', () => r(b)); });
+// claude 실행 파일 위치 (설치 후 [다시 확인] 시 재탐색). npm 설치본은 .cmd라 shell 필요
+let CLAUDE = null;
+const findClaude = () => new Promise((r) => execFile(process.platform === 'win32' ? 'where' : 'which', ['claude'], (e, out) => {
+  const lines = e ? [] : String(out).split(/\r?\n/).filter(Boolean);
+  r(CLAUDE = lines.find((l) => /\.exe$/i.test(l)) || lines[0] || null);
+}));
+const opts = () => ({ env: ENV, shell: /\.cmd$/i.test(CLAUDE || '') });
+const run = (args) => new Promise((r) => CLAUDE ? execFile(CLAUDE, args, opts(), (e, out) => r(e ? null : String(out).trim())) : r(null));
+
+// ---- Claude Code 설치·로그인 상태 ----
+async function health() {
+  if (!CLAUDE) await findClaude();
+  const version = await run(['--version']);
+  if (!version) return { installed: false };
+  let auth = {}; try { auth = JSON.parse(await run(['auth', 'status'])); } catch {}
+  return { installed: true, version, loggedIn: !!auth.loggedIn, authMethod: auth.authMethod };
+}
+// 사용자가 진행 상황을 보도록 별도 PowerShell 창에서 실행
+const openConsole = (cmd) => spawn('powershell', ['-NoExit', '-ExecutionPolicy', 'Bypass', '-Command', cmd], { detached: true, stdio: 'ignore', env: ENV }).unref();
 
 // ---- Claude 호출: stdin으로 프롬프트, stream-json으로 토큰 단위 수신 ----
-function askClaude({ prompt, model }, onDelta) {
+function askClaude({ prompt, model, session }, onDelta) {
   return new Promise((resolve, reject) => {
-    const args = ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--no-session-persistence'];
-    if (model) args.push('--model', model);
-    const child = spawn('claude', args, { shell: true, env: { ...process.env, CLAUDECODE: '' } });
+    const args = ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--model', model || 'sonnet'];
+    if (session) args.push('--resume', session);
+    if (!CLAUDE) return reject(new Error('Claude Code가 설치되어 있지 않습니다'));
+    const child = spawn(CLAUDE, args, opts());
     let buf = '', text = '', result = null, err = '';
     child.stdout.on('data', (d) => {
       buf += d;
@@ -36,7 +58,7 @@ function askClaude({ prompt, model }, onDelta) {
     child.stderr.on('data', (d) => (err += d));
     child.on('close', (code) => {
       if (code !== 0 && !result) return reject(new Error(err || `claude exit ${code}`));
-      resolve({ text: text || result?.result || '', cost: result?.total_cost_usd, ms: result?.duration_api_ms, model: result?.modelUsage && Object.keys(result.modelUsage)[0] });
+      resolve({ text: text || result?.result || '', cost: result?.total_cost_usd, ms: result?.duration_api_ms, session: result?.session_id, model: result?.modelUsage && Object.keys(result.modelUsage)[0] });
     });
     child.stdin.end(prompt);
   });
@@ -44,28 +66,47 @@ function askClaude({ prompt, model }, onDelta) {
 
 const PROMPTS = {
   chat: (doc, name, q) => `아래는 사용자가 열어둔 문서 "${name}"의 내용이다. 문서에 근거해 한국어로 간결하게 답하라. 도구는 쓰지 말 것.\n\n<document>\n${doc}\n</document>\n\n질문: ${q}`,
+  chatMore: (_doc, _name, q) => q, // 같은 세션의 후속 질문: 문서는 이미 대화에 있음
   edit: (doc, name, q) => `아래 Markdown 문서 "${name}"를 지시대로 수정하라. 출력은 수정된 문서 전체만, 코드펜스나 설명 없이 그대로 출력할 것. 지시와 무관한 부분은 바꾸지 말 것. 도구는 쓰지 말 것.\n\n<document>\n${doc}\n</document>\n\n지시: ${q}`,
 };
 
-http.createServer(async (req, res) => {
+const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
   try {
     if (url.pathname === '/') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); return fs.createReadStream(path.join(ROOT, 'index.html')).pipe(res); }
-    if (url.pathname === '/api/files') return json(res, 200, fs.readdirSync(WS).filter((f) => /\.(md|pdf)$/i.test(f)));
+    if (url.pathname === '/api/health') return json(res, 200, await health());
+    if (url.pathname === '/api/setup/install') { openConsole('irm https://claude.ai/install.ps1 | iex'); return json(res, 200, { ok: true }); }
+    if (url.pathname === '/api/setup/login') { openConsole('claude auth login'); return json(res, 200, { ok: true }); }
+    if (url.pathname === '/api/workspace' && req.method === 'GET') return json(res, 200, { path: WS });
+    if (url.pathname === '/api/workspace' && req.method === 'POST') {
+      const { path: p } = JSON.parse(await body(req));
+      if (!fs.existsSync(p)) return json(res, 400, { error: '폴더 없음' });
+      WS = path.resolve(p); fs.writeFileSync(CONF, JSON.stringify({ ...conf, workspace: WS })); return json(res, 200, { path: WS });
+    }
+    if (url.pathname === '/api/files') return json(res, 200, fs.readdirSync(WS).filter((f) => /\.(md|pdf)$/i.test(f)).sort());
     if (url.pathname === '/api/file' && req.method === 'GET') {
       const p = safe(url.searchParams.get('name'));
       res.writeHead(200, { 'Content-Type': p.endsWith('.pdf') ? 'application/pdf' : 'text/plain; charset=utf-8' });
       return fs.createReadStream(p).pipe(res);
     }
     if (url.pathname === '/api/file' && req.method === 'PUT') { fs.writeFileSync(safe(url.searchParams.get('name')), await body(req)); return json(res, 200, { ok: true }); }
+    if (url.pathname === '/api/session/reset' && req.method === 'POST') { delete sessions[JSON.parse(await body(req)).name]; return json(res, 200, { ok: true }); }
     if (url.pathname === '/api/chat' && req.method === 'POST') {
       const { mode, doc, name, q, model } = JSON.parse(await body(req));
       res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache' });
       const send = (o) => res.write(`data: ${JSON.stringify(o)}\n\n`);
-      try { const r = await askClaude({ prompt: PROMPTS[mode](doc, name, q), model }, (t) => send({ delta: t })); send({ done: r }); }
-      catch (e) { send({ error: e.message }); }
+      try {
+        const session = mode === 'chat' ? sessions[name] : undefined; // 편집은 매번 문서 전체를 새로 넘김
+        const prompt = PROMPTS[mode === 'chat' && session ? 'chatMore' : mode](doc, name, q);
+        const r = await askClaude({ prompt, model, session }, (t) => send({ delta: t }));
+        if (mode === 'chat' && r.session) sessions[name] = r.session;
+        send({ done: r });
+      } catch (e) { send({ error: e.message }); }
       return res.end();
     }
     json(res, 404, { error: 'not found' });
   } catch (e) { json(res, 500, { error: e.message }); }
-}).listen(PORT, () => console.log(`GenOffice-lite proto → http://localhost:${PORT}`));
+});
+server.on('error', (e) => console.error('server:', e.message));
+server.listen(PORT, '127.0.0.1', () => console.log(`대필 → http://localhost:${PORT}  workspace=${WS}`));
+module.exports = { PORT };

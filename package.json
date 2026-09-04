@@ -10,5 +10,8 @@
     "dist": "electron-builder --win"
   },
   "license": "MIT",
-  "private": true
+  "private": true,
+  "devDependencies": {
+    "electron": "^44.1.1"
+  }
 }

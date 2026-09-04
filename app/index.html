@@ -2,20 +2,18 @@
 <html lang="ko">
 <head>
 <meta charset="utf-8">
-<title>GenOffice-lite · Claude</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs" type="module"></script>
+<title>대필</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/15.0.7/marked.min.js"></script>
 <style>
   :root{--bg:#1b1b1f;--panel:#232329;--line:#33333b;--fg:#e8e8ec;--mut:#9a9aa6;--acc:#d97757;--add:#1f4d2e;--del:#5a2323}
-  *{box-sizing:border-box}body{margin:0;height:100vh;display:grid;grid-template-columns:200px 1fr 380px;grid-template-rows:40px 1fr;font:13px/1.5 system-ui,'Malgun Gothic',sans-serif;background:var(--bg);color:var(--fg)}
+  *{box-sizing:border-box}body{margin:0;height:100vh;display:grid;grid-template-columns:220px 1fr 380px;grid-template-rows:40px 1fr;font:13px/1.5 system-ui,'Malgun Gothic',sans-serif;background:var(--bg);color:var(--fg)}
   header{grid-column:1/-1;display:flex;align-items:center;gap:12px;padding:0 14px;border-bottom:1px solid var(--line);background:var(--panel)}
-  header b{color:var(--acc)}header span{color:var(--mut)}header .sp{flex:1}
-  aside{border-right:1px solid var(--line);background:var(--panel);padding:8px;overflow:auto}
-  aside h4{margin:4px 6px 8px;color:var(--mut);font-weight:500;font-size:11px;text-transform:uppercase}
-  aside div{padding:6px 8px;border-radius:6px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}aside div:hover{background:#2c2c34}aside div.on{background:#34343e}
+  header b{color:var(--acc);font-size:15px}header span{color:var(--mut)}header .sp{flex:1}
+  aside{border-right:1px solid var(--line);background:var(--panel);padding:8px;overflow:auto;display:flex;flex-direction:column;gap:4px}
+  aside h4{margin:4px 6px;color:var(--mut);font-weight:500;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  aside .f{padding:6px 8px;border-radius:6px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}aside .f:hover{background:#2c2c34}aside .f.on{background:#34343e}
   main{display:flex;flex-direction:column;min-width:0}
-  .bar{display:flex;gap:8px;align-items:center;padding:6px 12px;border-bottom:1px solid var(--line);color:var(--mut)}
-  .bar .sp{flex:1}
+  .bar{display:flex;gap:8px;align-items:center;padding:6px 12px;border-bottom:1px solid var(--line);color:var(--mut)}.bar .sp{flex:1}
   button{background:#2e2e37;color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:5px 10px;cursor:pointer;font:inherit}button:hover{background:#3a3a45}button.pri{background:var(--acc);border-color:var(--acc);color:#fff}button:disabled{opacity:.5;cursor:default}
   select{background:#2e2e37;color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:4px;font:inherit}
   .split{flex:1;display:grid;grid-template-columns:1fr 1fr;min-height:0}
@@ -31,15 +29,23 @@
   .ask textarea{height:70px;border:1px solid var(--line);border-radius:8px;padding:8px;font:inherit}
   .ask .row{display:flex;gap:6px;align-items:center}.ask label{color:var(--mut);display:flex;gap:4px;align-items:center}
   .hint{color:var(--mut);font-size:11px;padding:0 12px 8px}
+  #setup{position:fixed;inset:0;background:#000c;display:flex;align-items:center;justify-content:center;z-index:9}
+  #setup .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:28px 32px;width:520px;line-height:1.7}
+  #setup h2{margin:0 0 8px;color:var(--acc)}#setup p{color:var(--mut);margin:6px 0}#setup .row{display:flex;gap:8px;margin-top:16px}#setup .st{padding:10px 12px;background:#1b1b1f;border-radius:8px;margin:12px 0;font-family:Consolas,monospace;font-size:12px}
+  .ok{color:#7cc47f}.bad{color:#e07a7a}
   [hidden]{display:none!important}
 </style>
 </head>
 <body>
-<header><b>GenOffice-lite</b><span>PDF · Markdown 편집기</span><span class="sp"></span><span id="status">Claude Code 로그인 사용 · API 키 없음</span></header>
-<aside><h4>workspace</h4><div id="files"></div></aside>
+<header><b>대필</b><span>PDF · Markdown 편집기</span><span class="sp"></span><span id="status">Claude Code 로그인 사용 · API 키 없음</span></header>
+<aside>
+  <button id="openFolder" hidden>📁 폴더 열기</button>
+  <h4 id="wsPath" title=""></h4>
+  <div id="files"></div>
+</aside>
 <main>
-  <div class="bar"><span id="fname">파일을 선택하세요</span><span class="sp"></span>
-    <button id="save" hidden>저장</button>
+  <div class="bar"><span id="fname">파일을 선택하세요</span><span id="dirty" hidden>●</span><span class="sp"></span>
+    <button id="save" hidden>저장 (Ctrl+S)</button>
     <span id="diffbar" hidden><button id="reject">취소</button> <button id="accept" class="pri">변경 적용</button></span>
   </div>
   <div class="split" id="md" hidden><textarea id="src" spellcheck="false"></textarea><div class="prev" id="prev"></div></div>
@@ -47,36 +53,81 @@
   <div class="diff" id="diff" hidden></div>
 </main>
 <section class="ai">
-  <div class="bar"><b>Claude</b><span class="sp"></span><select id="model"><option value="">기본 모델</option><option value="sonnet">Sonnet</option><option value="opus">Opus</option></select></div>
+  <div class="bar"><b>Claude</b><span class="sp"></span><button id="newChat" title="이 문서의 대화 기록을 지우고 새로 시작">새 대화</button>
+    <select id="model"><option value="sonnet">Sonnet 5 (기본)</option><option value="opus">Opus 5</option></select></div>
   <div class="log" id="log"><div class="msg bot">문서를 열고 질문하거나, Markdown이면 <b>편집 모드</b>로 수정을 지시하세요.</div></div>
   <div class="hint">비용 표시는 API 환산액입니다. 구독으로 호출되므로 실제 청구는 없습니다.</div>
   <div class="ask">
-    <textarea id="q" placeholder="예) 2문단을 더 격식 있게 고쳐줘 / 이 문서 3줄 요약"></textarea>
+    <textarea id="q" placeholder="예) 2문단을 더 격식 있게 고쳐줘 / 이 문서 3줄 요약  (Ctrl+Enter 전송)"></textarea>
     <div class="row"><label><input type="radio" name="mode" value="chat" checked>질문</label><label><input type="radio" name="mode" value="edit" id="editRadio">편집(MD)</label><span class="sp"></span><button id="send" class="pri">보내기</button></div>
   </div>
 </section>
+
+<div id="setup" hidden><div class="card">
+  <h2>Claude Code 준비</h2>
+  <p>대필은 API 키 대신 <b>Claude Code</b>(Claude 구독)로 AI를 호출합니다. Pro·Max·Team 계정이 필요합니다.</p>
+  <div class="st" id="setupStatus">확인 중…</div>
+  <p id="setupHelp"></p>
+  <div class="row"><button id="btnInstall" class="pri" hidden>1. Claude Code 설치</button><button id="btnLogin" class="pri" hidden>2. 로그인</button><button id="btnRecheck">다시 확인</button><span class="sp"></span><button id="btnSkip">AI 없이 계속</button></div>
+  <p style="font-size:11px">설치·로그인은 별도 PowerShell 창에서 진행됩니다. 관리자 권한은 필요 없습니다. 창이 끝나면 [다시 확인]을 누르세요.</p>
+</div></div>
+
 <script type="module">
 const $ = (s) => document.querySelector(s);
-let cur = null, docText = '', pending = null;
+let cur = null, docText = '', savedText = '', pending = null;
+const dirty = () => cur && !cur.endsWith('.pdf') && docText !== savedText;
+window.isDirty = dirty;
+const showDirty = () => { $('#dirty').hidden = !dirty(); };
 
-async function loadFiles() {
-  const fs = await (await fetch('/api/files')).json();
-  $('#files').innerHTML = fs.map((f) => `<div data-f="${f}">${f.endsWith('.pdf') ? '📄' : '📝'} ${f}</div>`).join('');
-  $('#files').onclick = (e) => e.target.dataset.f && open(e.target.dataset.f);
+// ---- Claude Code 설치·로그인 검사 ----
+async function checkHealth() {
+  $('#setupStatus').textContent = '확인 중…';
+  const h = await (await fetch('/api/health')).json();
+  const ok = h.installed && h.loggedIn;
+  $('#setup').hidden = ok;
+  $('#btnInstall').hidden = h.installed; $('#btnLogin').hidden = !h.installed || h.loggedIn;
+  $('#setupStatus').innerHTML = h.installed
+    ? `<span class="ok">✔ 설치됨</span> ${h.version}<br>${h.loggedIn ? `<span class="ok">✔ 로그인됨</span> (${h.authMethod})` : '<span class="bad">✘ 로그인 안 됨</span>'}`
+    : '<span class="bad">✘ Claude Code가 설치되어 있지 않습니다</span>';
+  $('#setupHelp').textContent = !h.installed ? '아래 [설치]를 누르면 공식 설치 스크립트가 실행됩니다. 끝나면 [다시 확인] 후 로그인하세요.' : !h.loggedIn ? '[로그인]을 누르면 브라우저가 열립니다. Claude 계정으로 로그인한 뒤 [다시 확인]을 누르세요.' : '';
+  $('#status').textContent = ok ? `Claude Code ${h.version} · ${h.authMethod} 로그인 · API 키 없음` : 'AI 사용 불가 (Claude Code 미설정)';
+  $('#send').disabled = !ok;
 }
+$('#btnInstall').onclick = () => fetch('/api/setup/install');
+$('#btnLogin').onclick = () => fetch('/api/setup/login');
+$('#btnRecheck').onclick = checkHealth;
+$('#btnSkip').onclick = () => { $('#setup').hidden = true; };
+
+// ---- 작업 폴더 · 파일 ----
+async function loadFiles() {
+  const ws = await (await fetch('/api/workspace')).json();
+  $('#wsPath').textContent = ws.path.split(/[\\/]/).pop(); $('#wsPath').title = ws.path;
+  const fs = await (await fetch('/api/files')).json();
+  $('#files').innerHTML = fs.map((f) => `<div class="f" data-f="${f}">${f.endsWith('.pdf') ? '📄' : '📝'} ${f}</div>`).join('') || '<div class="f" style="color:var(--mut)">.md / .pdf 파일 없음</div>';
+}
+$('#files').onclick = (e) => e.target.dataset.f && open(e.target.dataset.f);
+if (window.daepil) { $('#openFolder').hidden = false; $('#openFolder').onclick = async () => {
+  const p = await window.daepil.openFolder(); if (!p) return;
+  await fetch('/api/workspace', { method: 'POST', body: JSON.stringify({ path: p }) }); cur = null; $('#fname').textContent = '파일을 선택하세요'; $('#md').hidden = $('#pdf').hidden = true; loadFiles();
+}; }
+
 async function open(name) {
+  if (dirty() && !confirm('저장하지 않은 변경이 있습니다. 버리고 다른 파일을 열까요?')) return;
   cur = name; pending = null; docText = ''; $('#send').disabled = true;
   [...$('#files').children].forEach((d) => d.classList.toggle('on', d.dataset.f === name));
   $('#fname').textContent = name; $('#diff').hidden = true; $('#diffbar').hidden = true;
   const isPdf = name.endsWith('.pdf');
   $('#md').hidden = isPdf; $('#pdf').hidden = !isPdf; $('#save').hidden = isPdf; $('#editRadio').disabled = isPdf;
-  if (isPdf) { $('#q').closest('.ask').querySelector('[value=chat]').checked = true; await renderPdf(name); }
-  else { docText = await (await fetch('/api/file?name=' + encodeURIComponent(name))).text(); $('#src').value = docText; preview(); }
-  $('#send').disabled = false;
+  if (isPdf) { document.querySelector('[value=chat]').checked = true; await renderPdf(name); }
+  else { docText = savedText = await (await fetch('/api/file?name=' + encodeURIComponent(name))).text(); $('#src').value = docText; preview(); }
+  showDirty(); $('#send').disabled = $('#setup').hidden === false;
 }
 function preview() { $('#prev').innerHTML = marked.parse($('#src').value); }
-$('#src').oninput = () => { docText = $('#src').value; preview(); };
-$('#save').onclick = async () => { await fetch('/api/file?name=' + encodeURIComponent(cur), { method: 'PUT', body: $('#src').value }); flash('저장됨'); };
+$('#src').oninput = () => { docText = $('#src').value; preview(); showDirty(); };
+async function save() { if (!cur || cur.endsWith('.pdf')) return; await fetch('/api/file?name=' + encodeURIComponent(cur), { method: 'PUT', body: $('#src').value }); savedText = docText; showDirty(); flash('저장됨'); }
+$('#save').onclick = save;
+document.addEventListener('keydown', (e) => { if (e.ctrlKey && e.key === 's') { e.preventDefault(); save(); } });
+window.onbeforeunload = (e) => { if (dirty() && !window.daepil) { e.preventDefault(); e.returnValue = ''; } };
 
 async function renderPdf(name) {
   const pdfjs = await import('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs');
@@ -95,6 +146,8 @@ async function renderPdf(name) {
 // ---- Claude 패널 ----
 function add(cls, text) { const d = document.createElement('div'); d.className = 'msg ' + cls; d.textContent = text; $('#log').appendChild(d); $('#log').scrollTop = 1e9; return d; }
 function flash(t) { const s = $('#status').textContent; $('#status').textContent = t; setTimeout(() => ($('#status').textContent = s), 1500); }
+$('#newChat').onclick = async () => { if (cur) await fetch('/api/session/reset', { method: 'POST', body: JSON.stringify({ name: cur }) }); $('#log').innerHTML = ''; add('bot', '새 대화를 시작합니다.'); };
+$('#q').addEventListener('keydown', (e) => { if (e.ctrlKey && e.key === 'Enter') $('#send').click(); });
 $('#send').onclick = async () => {
   const q = $('#q').value.trim(); if (!q || !cur) return;
   const mode = document.querySelector('[name=mode]:checked').value;
@@ -107,7 +160,7 @@ $('#send').onclick = async () => {
     buf += dec.decode(value, { stream: true });
     for (const line of buf.split('\n\n').slice(0, -1)) {
       if (!line.startsWith('data: ')) continue; const ev = JSON.parse(line.slice(6));
-      if (ev.delta) { out += ev.delta; if (mode === 'chat') bot.textContent = out; else bot.textContent = `문서를 수정하는 중… ${out.length}자`; }
+      if (ev.delta) { out += ev.delta; bot.textContent = mode === 'chat' ? out : `문서를 수정하는 중… ${out.length}자`; }
       if (ev.error) bot.textContent = '오류: ' + ev.error;
       if (ev.done) {
         out = out || ev.done.text;
@@ -136,10 +189,11 @@ function showDiff(oldT, newT) {
   $('#diff').innerHTML = lineDiff(oldT, newT).map(([k, l]) => `<div class="${k === '+' ? 'a' : k === '-' ? 'd' : ''}">${k} ${esc(l) || ' '}</div>`).join('');
   $('#md').hidden = true; $('#diff').hidden = false; $('#diffbar').hidden = false;
 }
-$('#accept').onclick = () => { $('#src').value = docText = pending; preview(); closeDiff(); flash('변경 적용됨 (저장 전)'); };
+$('#accept').onclick = () => { $('#src').value = docText = pending; preview(); closeDiff(); showDirty(); flash('변경 적용됨 (Ctrl+S로 저장)'); };
 $('#reject').onclick = closeDiff;
 function closeDiff() { pending = null; $('#diff').hidden = true; $('#diffbar').hidden = true; $('#md').hidden = false; }
-loadFiles();
+
+checkHealth(); loadFiles();
 </script>
 </body>
 </html>

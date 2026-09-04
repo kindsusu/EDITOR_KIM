@@ -30,7 +30,7 @@ claude -p --output-format stream-json   ← Claude Code CLI, 사용자 로그인
 - [ ] Ctrl+S 저장, 수정됨 표시, 닫을 때 미저장 경고
 - [ ] Claude 대화 이어가기(`--resume` 세션 ID) — 문서당 1세션
 - [ ] 모델 선택(Sonnet 기본 / Opus)
-- [ ] 시작 시 `claude` 설치·로그인 검사, 없으면 안내 화면
+- [ ] 시작 시 Claude Code 검사 → 없으면 **설치 화면**: `claude --version`으로 설치 여부, `claude auth status`로 로그인 여부 확인. 미설치면 [설치] 버튼이 공식 설치기(`irm https://claude.ai/install.ps1 | iex`, 관리자 권한 불필요)를 별도 PowerShell 창에서 실행. 미로그인이면 [로그인] 버튼이 `claude`를 별도 창에서 띄워 브라우저 로그인 진행. [다시 확인]으로 재검사. Pro/Max/Team 계정 필요(무료 계정은 Claude Code 불가)
 - [ ] `npm start`로 실행
 
 ### P2 — 문서 기능
