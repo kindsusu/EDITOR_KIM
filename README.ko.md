@@ -1,6 +1,6 @@
 # 대필 (DAEPIL)
 
-![대필 — PDF 글자를 원본 폰트로 고치고, 진짜로 가린다](assets/hero.svg)
+![대필 — 글자를 고치고, 진짜로 지운다](assets/hero.png)
 
 > 내 Claude Code 로그인으로 Claude를 부르는 PDF·Markdown 편집기 — **su** ([kindsusu](https://github.com/kindsusu))
 

@@ -1,6 +1,6 @@
 # DAEPIL (대필)
 
-![DAEPIL — true PDF text editing and redaction, on your machine](assets/hero.svg)
+![DAEPIL — edit text. remove it for real.](assets/hero.png)
 
 > a PDF & Markdown editor that runs Claude through your own Claude Code login, by **su** ([kindsusu](https://github.com/kindsusu))
 
