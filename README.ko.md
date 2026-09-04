@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://github.com/kindsusu/DAEPIL/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/kindsusu/DAEPIL/actions/workflows/ci.yml/badge.svg"></a>
-  <img alt="version 0.2.1" src="https://img.shields.io/badge/version-0.2.1-d97757">
+  <img alt="version 0.2.2" src="https://img.shields.io/badge/version-0.2.2-d97757">
   <img alt="engine PDFium (WASM)" src="https://img.shields.io/badge/engine-PDFium%20(WASM)-1A2B28">
   <img alt="no API key" src="https://img.shields.io/badge/API%20key-none-2C7A4B">
   <img alt="Node 22+" src="https://img.shields.io/badge/node-22%2B-0E6B5C">
