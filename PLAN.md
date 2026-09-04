@@ -25,13 +25,13 @@ claude -p --output-format stream-json   ← Claude Code CLI, 사용자 로그인
 ## 단계
 
 ### P1 — 쓸 수 있는 앱 (첫 목표)
-- [ ] Electron 셸: `app/main.js`가 server.js를 띄우고 창을 연다
-- [ ] 폴더 열기(네이티브 대화상자) → 작업 폴더 전환, 최근 폴더 기억
-- [ ] Ctrl+S 저장, 수정됨 표시, 닫을 때 미저장 경고
-- [ ] Claude 대화 이어가기(`--resume` 세션 ID) — 문서당 1세션
-- [ ] 모델 선택(Sonnet 기본 / Opus)
-- [ ] 시작 시 Claude Code 검사 → 없으면 **설치 화면**: `claude --version`으로 설치 여부, `claude auth status`로 로그인 여부 확인. 미설치면 [설치] 버튼이 공식 설치기(`irm https://claude.ai/install.ps1 | iex`, 관리자 권한 불필요)를 별도 PowerShell 창에서 실행. 미로그인이면 [로그인] 버튼이 `claude`를 별도 창에서 띄워 브라우저 로그인 진행. [다시 확인]으로 재검사. Pro/Max/Team 계정 필요(무료 계정은 Claude Code 불가)
-- [ ] `npm start`로 실행
+- [x] Electron 셸: `app/main.js`가 server.js를 띄우고 창을 연다 (2026-09-04, `npm start` 동작 확인)
+- [x] 폴더 열기(네이티브 대화상자) → 작업 폴더 전환, `~/.su-daepil.json`에 기억 — 대화상자는 실제 창에서 직접 확인 필요
+- [x] Ctrl+S 저장, 수정됨 ● 표시, 닫을 때 미저장 경고 — 닫기 경고는 실제 창에서 직접 확인 필요
+- [x] Claude 대화 이어가기(`--resume` 세션 ID) — 문서당 1세션, 질문 모드만. 편집 모드는 매번 문서 전체를 새로 보냄. [새 대화]로 초기화
+- [x] 모델 선택(Sonnet 기본 / Opus) — 응답에 `claude-sonnet-5` 확인
+- [x] 시작 시 Claude Code 검사 → 없으면 **설치 화면**: `claude --version`으로 설치 여부, `claude auth status`로 로그인 여부 확인. 미설치면 [설치] 버튼이 공식 설치기(`irm https://claude.ai/install.ps1 | iex`, 관리자 권한 불필요)를 별도 PowerShell 창에서 실행. 미로그인이면 [로그인] 버튼이 `claude`를 별도 창에서 띄워 브라우저 로그인 진행. [다시 확인]으로 재검사. Pro/Max/Team 계정 필요(무료 계정은 Claude Code 불가)
+- [x] `npm start`로 실행 (`npm run serve`는 브라우저용, 폴더 열기 버튼 없음)
 
 ### P2 — 문서 기능
 - [ ] MD → PDF 내보내기 (Electron `printToPDF`, 한글 폰트 포함)
