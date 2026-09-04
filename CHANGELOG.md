@@ -4,6 +4,8 @@ All notable changes to DAEPIL are recorded here. The format follows [Keep a Chan
 
 ## [Unreleased]
 
+- Mask color option: black (default) or the page background sampled at that spot, so a masked table cell blends with the cell fill. Applies to the rectangle tool and to text masking.
+
 - PDF → Markdown conversion (PDFium text extraction, structure restored by Claude)
 - "Export as PDF" button for Markdown documents (the `md2pdf` tool exists; the UI button does not yet)
 - One-click prompts in the Claude panel (formal tone, 3-line summary, typo pass, table)
