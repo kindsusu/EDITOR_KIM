@@ -84,6 +84,8 @@ Scanned pages are different: there is no text to remove, so the rectangle tool o
 
 ## Quick start
 
+**No build needed on Windows:** download `DAEPIL-<version>-portable.exe` (run directly) or `DAEPIL-<version>-setup.exe` (installer) from [Releases](https://github.com/kindsusu/DAEPIL/releases). The builds are not code-signed, so SmartScreen shows an "unknown publisher" warning on first run — choose *More info → Run anyway*.
+
 Requires [Claude Code](https://code.claude.com/docs/en/setup) installed and logged in (Pro, Max or Team — the free plan cannot use Claude Code). The app checks on startup and offers to install (`irm https://claude.ai/install.ps1 | iex`) and log in (`claude auth login`) in a separate PowerShell window.
 
 ```bash

@@ -84,6 +84,8 @@ AI는 서버가 `claude -p --output-format stream-json`을 실행하고 프롬�
 
 ## 빠른 시작
 
+**Windows는 빌드 없이:** [Releases](https://github.com/kindsusu/DAEPIL/releases)에서 `DAEPIL-<버전>-portable.exe`(바로 실행) 또는 `DAEPIL-<버전>-setup.exe`(설치형)를 내려받습니다. 코드 서명이 없어 첫 실행 때 SmartScreen "알 수 없는 게시자" 경고가 뜹니다. *추가 정보 → 실행*을 누르세요.
+
 [Claude Code](https://code.claude.com/docs/en/setup)가 설치·로그인되어 있어야 합니다 (Pro·Max·Team. 무료 플랜은 Claude Code를 쓸 수 없습니다). 앱이 시작할 때 검사하고, 없으면 별도 PowerShell 창에서 설치(`irm https://claude.ai/install.ps1 | iex`)와 로그인(`claude auth login`)을 안내합니다.
 
 ```bash
