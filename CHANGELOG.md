@@ -10,6 +10,23 @@ All notable changes to DAEPIL are recorded here. The format follows [Keep a Chan
 - Windows installer via electron-builder
 - Font subsetting for the fallback font is per document; a future version may dedupe glyphs across edits
 
+## [0.2.0] - 2026-09-04
+
+Feedback round on a real 10-page contract PDF (Word/Excel export, subset Malgun Gothic, tables).
+
+### Added
+- **Multi-line edits**: Shift+Enter in the edit panel; each extra line becomes a sibling text object 1.2× the font size below, in the original font when it has the glyphs. Lines follow the text matrix, so italic (skewed) and rotated cells keep every line. New lines are appended on top of the z-order so table-cell fills cannot cover them.
+- **Fit to width** ("넘치면"): wrap within the space between the left and right neighbours on the same line (clamped to the page edges), or shrink the glyphs proportionally, or leave as is. Width is measured by setting the text and reading PDFium bounds, not estimated from metrics.
+- **Groups**: one box per text object, no automatic line grouping. Shift-click selects several boxes → group / ungroup; groups are stored as the PDFium content mark `DaepilGroup` and survive save/reload. Multi-line edits auto-group their lines.
+- **Claude panel collapsed by default**; toggle with the header button or Ctrl+J.
+- App version shown in the header and window title; `run-daepil.bat` one-click launcher; artwork hero image.
+
+### Fixed
+- Partial masking turning into whole-cell masking on Word/Excel PDFs: the text page omits the trailing space that text objects carry, so char boxes are now aligned to the object text with synthetic zero-width boxes.
+- Second and later lines of a bold heading rendered regular (bold is read from the original object before fallback).
+- `GET /api/file` on a missing path crashed the server process.
+- Drag ghost shows the moving text; selected mask boxes are translucent; the app starts empty with a "recent files" list instead of reopening the last session's files.
+
 ## [0.1.0] - 2026-09-04
 
 First working release. Built in one day, in work packages reviewed by Claude Fable 5.1 and implemented by Claude Opus 5 / Sonnet 5.
