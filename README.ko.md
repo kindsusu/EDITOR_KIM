@@ -149,7 +149,7 @@ OK — 모든 검사 통과
 
 ## 방법
 
-하루 동안, 검수를 거친 작업 묶음들로 만들었습니다. Claude Fable 5.1이 계획과 엔진 계약을 쓰고 모든 묶음을 검수하며 통합 검사를 돌렸고, Claude Opus 5가 엔진을, Claude Sonnet 5가 UI·서버·도구를 만들었습니다. [`PLAN.md`](PLAN.md)가 진행 기록입니다. 결정, 계약, 각 묶음이 통과해야 했던 검사, 도중에 발견한 함정. 그중 설계를 바꾼 것들:
+작은 작업 묶음 단위로 만들었습니다. 묶음마다 계약과 통과해야 할 검사를 먼저 적고, 통과해야 합쳤습니다. [`PLAN.md`](PLAN.md)가 진행 기록입니다. 결정, 계약, 도중에 발견한 함정. 그중 설계를 바꾼 것들:
 
 - **서브셋 CID 폰트는 "글리프 없음"이라고 말하지 않는다.** `FPDFFont_GetGlyphPath`가 없는 글자에 `.notdef` 경로를 돌려주고, 없는 글자끼리 같은 포인터를 공유합니다. 대필은 사설영역 코드포인트 두 개로 notdef 포인터를 알아내 비교합니다. `FPDFFont_GetGlyphWidth`는 기본 폭을 돌려줘서 쓸 수 없습니다.
 - **fontkit의 TTF 서브셋에는 `cmap`이 없다.** pdfkit은 글리프 ID로 그려서 필요가 없었고, PDFium은 cmap으로 유니코드를 찾으므로 없으면 □로 그립니다. 대필은 format 4 cmap을 써서 sfnt 디렉터리에 끼워 넣습니다. `name`, `OS/2`, `post`는 필요 없습니다.
@@ -218,7 +218,7 @@ GenOffice가 가장 가까운 친척입니다. 대필은 엔진 선택을 거기
 ## 기여자
 
 - **su / [kindsusu](https://github.com/kindsusu)** — 방향, 제품 결정, 실제 문서로 시험
-- Claude Fable 5.1 — 계획, 계약, 검수 · Claude Opus 5 — PDF 엔진 · Claude Sonnet 5 — UI, 서버, 도구
+- Claude Code로 만들었습니다.
 
 ## 라이선스
 

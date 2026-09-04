@@ -10,18 +10,44 @@
     "test": "node app/pdf-engine.test.js",
     "dist": "electron-builder --win",
     "md2pdf": "electron tools/md2pdf.js",
-    "assets": "node tools/demo-assets.js"
+    "assets": "node tools/demo-assets.js",
+    "icon": "electron tools/make-icon.js"
   },
-  "repository": { "type": "git", "url": "https://github.com/kindsusu/DAEPIL.git" },
+  "build": {
+    "appId": "com.kindsusu.daepil",
+    "productName": "DAEPIL",
+    "artifactName": "DAEPIL-${version}-${arch}-${os}.${ext}",
+    "directories": { "output": "dist", "buildResources": "build" },
+    "files": ["app/**", "package.json", "workspace/sample.pdf", "workspace/회의록_초안.md", "workspace/회의록_초안.pdf", "LICENSE"],
+    "asar": true,
+    "win": { "target": [{ "target": "portable", "arch": ["x64"] }, { "target": "nsis", "arch": ["x64"] }], "icon": "build/icon.png" },
+    "portable": { "artifactName": "DAEPIL-${version}-portable.exe" },
+    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true, "perMachine": false, "artifactName": "DAEPIL-${version}-setup.exe", "shortcutName": "대필" }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kindsusu/DAEPIL.git"
+  },
   "homepage": "https://github.com/kindsusu/DAEPIL",
   "bugs": "https://github.com/kindsusu/DAEPIL/issues",
   "author": "kindsusu",
-  "keywords": ["pdf", "pdf-editor", "redaction", "pdfium", "electron", "markdown", "claude-code"],
-  "engines": { "node": ">=22" },
+  "keywords": [
+    "pdf",
+    "pdf-editor",
+    "redaction",
+    "pdfium",
+    "electron",
+    "markdown",
+    "claude-code"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
   "license": "SEE LICENSE IN LICENSE",
   "private": true,
   "devDependencies": {
-    "electron": "^44.1.1"
+    "electron": "^44.1.1",
+    "electron-builder": "^26.15.3"
   },
   "dependencies": {
     "@embedpdf/pdfium": "^2.15.0",

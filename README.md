@@ -149,7 +149,7 @@ It is not for teams (single user, no server), not for scanned-only archives (cov
 
 ## Method
 
-The project was built in one working day as a set of reviewed work packages: Claude Fable 5.1 wrote the plan and the engine contract, reviewed every package and ran the integration checks; Claude Opus 5 built the engine; Claude Sonnet 5 built the UI, server and tooling. [`PLAN.md`](PLAN.md) is the running log — decisions, contracts, the checks each package had to pass, and the traps found on the way. A few of those traps shaped the design:
+The project was built as a series of small work packages, each with a written contract and a check it had to pass before merging. [`PLAN.md`](PLAN.md) is the running log — decisions, contracts, and the traps found on the way. A few of those traps shaped the design:
 
 - **Subset CID fonts do not say "no glyph".** `FPDFFont_GetGlyphPath` returns the `.notdef` path for missing characters, and every missing character shares that pointer. DAEPIL probes two Private Use Area code points to learn the notdef pointer and compares against it. `FPDFFont_GetGlyphWidth` is useless here — it returns a default width.
 - **fontkit's TTF subset has no `cmap`.** pdfkit draws by glyph ID and never needed one; PDFium maps Unicode through the cmap and renders tofu without it. DAEPIL writes a format 4 cmap and splices it into the sfnt directory. `name`, `OS/2` and `post` are not required.
@@ -218,7 +218,7 @@ GenOffice is the closest relative — DAEPIL took the engine choice from it and 
 ## Contributors
 
 - **su / [kindsusu](https://github.com/kindsusu)** — direction, product decisions, testing on real documents
-- Claude Fable 5.1 — plan, contracts, review · Claude Opus 5 — PDF engine · Claude Sonnet 5 — UI, server, tools
+- Built with Claude Code.
 
 ## License
 
