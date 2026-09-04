@@ -153,7 +153,7 @@ The project was built in one working day as a set of reviewed work packages: Cla
 
 - **Subset CID fonts do not say "no glyph".** `FPDFFont_GetGlyphPath` returns the `.notdef` path for missing characters, and every missing character shares that pointer. DAEPIL probes two Private Use Area code points to learn the notdef pointer and compares against it. `FPDFFont_GetGlyphWidth` is useless here — it returns a default width.
 - **fontkit's TTF subset has no `cmap`.** pdfkit draws by glyph ID and never needed one; PDFium maps Unicode through the cmap and renders tofu without it. DAEPIL writes a format 4 cmap and splices it into the sfnt directory. `name`, `OS/2` and `post` are not required.
-- **Chromium splits every line into one-glyph text objects.** Editing a fragment overlaps its neighbours, so the UI groups objects by baseline and adjacency into one line, puts the new text into the first fragment and blanks the rest.
+- **Automatic line grouping merges table cells.** A baseline-and-gap heuristic was tried and removed. Now one text object is one box; the user groups boxes with Shift-click, and the grouping is stored as the PDFium content mark `DaepilGroup`. Only the lines produced by a multi-line edit are grouped automatically.
 - **`FPDFText_SetText(obj, "")` traps the WASM module.** Empty text is replaced by a single space at the engine boundary, so every caller is safe.
 
 ---
