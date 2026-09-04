@@ -108,6 +108,13 @@ doc.pageText(i)                         // string  검증용 페이지 전체 �
 
 - [x] **L 닫을 때 선택 (Fable, 2026-09-04).** 실제 창에서 네 버튼 동작은 사용자 확인 필요. 미저장 상태로 창을 닫으면 네 가지: 이 문서에 덮어쓰기 / 다른 이름으로 저장 / 저장하지 않고 닫기 / 취소. main.js 닫기 핸들러에서 렌더러의 save·saveAs를 호출
 
+### P2-M — 공개 저장소 정비 (2026-09-04, "su-multi-geo 수준으로")
+- [x] 영어 README(히어로·배지·목차·전후 비교·구조·마스킹 다이어그램·빠른 시작·샘플 출력·대상·방법·구성·비교표·한계·요구사항·기여자·라이선스) + README.ko.md
+- [x] assets: hero.svg · architecture.svg · redaction.svg · edit-before/after.png(엔진 실제 렌더, `npm run assets`)
+- [x] CHANGELOG.md(0.1.0), .github/workflows/ci.yml(windows-latest에서 `npm test` + ubuntu 구문 검사), .editorconfig, package.json 메타(description·repository·keywords·engines·test)
+- [x] GitHub 저장소 설명 영어화 + 토픽 10개
+- 함정: 위임한 두 에이전트가 세션 한도(429)로 시작도 못 함 → Fable이 직접 작성. 마스킹 그림 예시 번호에 사용자 계약서의 실제 번호를 옮겨 쓴 것을 검수에서 발견해 가짜 번호로 교체하고 저장소 전체 grep으로 확인
+
 ### P2-후속 — 문서 기능
 - [ ] UI에 "PDF로 내보내기" 버튼 (C의 도구를 연결)
 - [ ] PDF → MD 변환 (PDFium 텍스트 추출 → Claude로 제목·표 구조 복원)
