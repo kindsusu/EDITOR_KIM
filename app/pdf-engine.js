@@ -3,6 +3,9 @@
 const fs = require('fs');
 const fontkit = require('fontkit');
 
+const MARK_MASK = 'EditorKimMask', MARK_GROUP = 'EditorKimGroup';
+const LEGACY = { EditorKimMask: 'DaepilMask', EditorKimGroup: 'DaepilGroup' }; // 옛 이름으로 저장된 파일 호환용 — 읽기 전용
+
 const OBJ_TEXT = 1, OBJ_PATH = 2, OBJ_IMAGE = 3; // FPDF_PAGEOBJ_*
 const RENDER_FLAGS = 0x01 | 0x10;                // FPDF_ANNOT | FPDF_REVERSE_BYTE_ORDER(=RGBA로 뽑기)
 const FPDF_FONT_TRUETYPE = 2;
@@ -148,7 +151,7 @@ async function open(buffer) {
     heap().set(data, ptr);
     fbPtrs.push(ptr);
     const font = P.FPDFText_LoadFont(doc, ptr, data.length, FPDF_FONT_TRUETYPE, true);
-    if (process.env.DAEPIL_DEBUG) console.error('[fallbackFont]', key, path.split(/[\\/]/).pop(), 'chars', chars.size, 'bytes', data.length, 'font', font);
+    if (process.env.EDITORKIM_DEBUG) console.error('[fallbackFont]', key, path.split(/[\\/]/).pop(), 'chars', chars.size, 'bytes', data.length, 'font', font);
     if (!font) return 0;
     fb[key] = { font, chars };
     fbBold.set(font, !!bold);
@@ -212,8 +215,8 @@ async function open(buffer) {
     } finally { P.FPDFBitmap_Destroy(bmp); }
   };
 
-  // ── 그룹 마크: 줄바꿈 편집으로 만든 줄들, 사용자가 Shift 클릭으로 묶은 상자들을 콘텐츠 마크 DaepilGroup(id)로 표시. 저장 후에도 유지 ──
-  const findMark = (o, name) => { for (let k = 0, mc = P.FPDFPageObj_CountMarks(o); k < mc; k++) { const mk = P.FPDFPageObj_GetMark(o, k); if (mk && markName(mk) === name) return mk; } return 0; };
+  // ── 그룹 마크: 줄바꿈 편집으로 만든 줄들, 사용자가 Shift 클릭으로 묶은 상자들을 콘텐츠 마크 EditorKimGroup(id)로 표시. 저장 후에도 유지 ──
+  const findMark = (o, name) => { for (let k = 0, mc = P.FPDFPageObj_CountMarks(o); k < mc; k++) { const mk = P.FPDFPageObj_GetMark(o, k); const n = mk && markName(mk); if (n === name || n === LEGACY[name]) return mk; } return 0; };
   const markParam = (mk, key) => {
     const n = mal(4);
     try {
@@ -222,10 +225,10 @@ async function open(buffer) {
       try { return P.FPDFPageObjMark_GetParamStringValue(mk, key, b, len, n) ? M.UTF16ToString(b) : null; } finally { free(b); }
     } finally { free(n); }
   };
-  const groupOf = (o) => { const mk = findMark(o, 'DaepilGroup'); return mk ? markParam(mk, 'id') : null; };
+  const groupOf = (o) => { const mk = findMark(o, MARK_GROUP); return mk ? markParam(mk, 'id') : null; };
   const tagGroup = (o, id) => { // id=null이면 해제
-    let mk; while ((mk = findMark(o, 'DaepilGroup'))) P.FPDFPageObj_RemoveMark(o, mk);
-    if (id) { mk = P.FPDFPageObj_AddMark(o, 'DaepilGroup'); if (mk) P.FPDFPageObjMark_SetStringParam(doc, o, mk, 'id', id); }
+    let mk; while ((mk = findMark(o, MARK_GROUP))) P.FPDFPageObj_RemoveMark(o, mk);
+    if (id) { mk = P.FPDFPageObj_AddMark(o, MARK_GROUP); if (mk) P.FPDFPageObjMark_SetStringParam(doc, o, mk, 'id', id); }
   };
   const newGroupId = () => 'g' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 
@@ -285,7 +288,7 @@ async function open(buffer) {
             text: null, font: null, size: null,
             bounds: null, color: [0, 0, 0, 255], mask: false,
           };
-          item.mask = !!findMark(o, 'DaepilMask');
+          item.mask = !!findMark(o, MARK_MASK);
           // 보이지 않는 글자: 채움 알파 0 또는 렌더 모드 3(invisible)/7(clip). PowerPoint가 글자 효과를 그림으로 내보내며 검색용으로 깔아 둔 투명 글자
           if (t === OBJ_TEXT) { const rm = P.FPDFTextObj_GetTextRenderMode(o); item.hidden = rm === 3 || rm === 7; }
           item.group = groupOf(o); // 줄바꿈 줄들·사용자 그룹 (없으면 null)
@@ -329,7 +332,7 @@ async function open(buffer) {
       if (r.idx != null) idx = r.idx; // 투명 글자를 드러내면 객체가 맨 뒤로 간다
       if (lines.length < 2) { // 한 줄로 돌아오면 줄바꿈 그룹 표시는 뗀다
         const o1 = P.FPDFPage_GetObject(p, idx);
-        if (o1 && findMark(o1, 'DaepilGroup')) { tagGroup(o1, null); P.FPDFPage_GenerateContent(p); }
+        if (o1 && findMark(o1, MARK_GROUP)) { tagGroup(o1, null); P.FPDFPage_GenerateContent(p); }
         return r;
       }
       const o = P.FPDFPage_GetObject(p, idx), gid = newGroupId();
@@ -552,10 +555,19 @@ async function open(buffer) {
       if (!o) return { idx: -1 };
       P.FPDFPageObj_SetFillColor(o, color[0], color[1], color[2], color[3] == null ? 255 : color[3]);
       P.FPDFPath_SetDrawMode(o, 1, false); // FPDF_FILLMODE_WINDING, stroke=false
-      P.FPDFPageObj_AddMark(o, 'DaepilMask'); // 콘텐츠 마크: 저장·재열기 후에도 "이게 우리가 만든 가림 상자"임을 식별
+      P.FPDFPageObj_AddMark(o, MARK_MASK); // 콘텐츠 마크: 저장·재열기 후에도 "이게 우리가 만든 가림 상자"임을 식별
       P.FPDFPage_InsertObject(p, o);       // 맨 위에 얹는다
       P.FPDFPage_GenerateContent(p);
       return { idx: P.FPDFPage_CountObjects(p) - 1 };
+    },
+
+    // 테스트 전용: 마크를 옛 이름(LEGACY)으로 다시 달아 하위 호환 읽기를 검증한다
+    _addLegacyMark(i, idx) {
+      const o = P.FPDFPage_GetObject(page(i), idx);
+      if (!o) return { ok: false };
+      let mk; while ((mk = findMark(o, MARK_MASK))) P.FPDFPageObj_RemoveMark(o, mk);
+      P.FPDFPageObj_AddMark(o, LEGACY[MARK_MASK]);
+      return { ok: true };
     },
 
     // 객체 하나를 페이지에서 제거 (가림 상자 삭제용)

@@ -28,7 +28,7 @@ app.whenReady().then(() => {
     return r.canceled ? null : r.filePath;
   });
 
-  // 닫을 때 미저장이면 네 가지 중 선택. 저장은 렌더러의 window.daepilSave / daepilSaveAs가 수행하고 성공 여부(true/false)를 돌려준다
+  // 닫을 때 미저장이면 네 가지 중 선택. 저장은 렌더러의 window.editorKimSave / editorKimSaveAs가 수행하고 성공 여부(true/false)를 돌려준다
   let allowClose = false;
   const exec = (js) => win.webContents.executeJavaScript(js).catch(() => false);
   win.on('close', async (e) => {
@@ -41,8 +41,8 @@ app.whenReady().then(() => {
         buttons: ['이 문서에 덮어쓰기', '다른 이름으로 저장', '저장하지 않고 닫기', '취소'], defaultId: 0, cancelId: 3, noLink: true,
       });
       if (r === 3) return;
-      if (r === 0 && !(await exec('window.daepilSave ? window.daepilSave() : false'))) return;
-      if (r === 1 && !(await exec('window.daepilSaveAs ? window.daepilSaveAs() : false'))) return; // 저장 대화상자에서 취소하면 닫지 않음
+      if (r === 0 && !(await exec('window.editorKimSave ? window.editorKimSave() : false'))) return;
+      if (r === 1 && !(await exec('window.editorKimSaveAs ? window.editorKimSaveAs() : false'))) return; // 저장 대화상자에서 취소하면 닫지 않음
     }
     allowClose = true; win.close();
   });

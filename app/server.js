@@ -1,4 +1,4 @@
-// 대필 백엔드: 정적 UI + 파일 읽기/쓰기 + Claude Code CLI 호출 (API 키 없음, 구독 로그인 사용)
+// EDITOR_KIM 백엔드: 정적 UI + 파일 읽기/쓰기 + Claude Code CLI 호출 (API 키 없음, 구독 로그인 사용)
 const http = require('http');
 const fs = require('fs');
 const os = require('os');
@@ -7,7 +7,11 @@ const { spawn, execFile } = require('child_process');
 
 const ROOT = __dirname;
 const PORT = 4747;
-const CONF = path.join(os.homedir(), '.su-daepil.json');
+const CONF = path.join(os.homedir(), '.editor-kim.json');
+{ // 옛 이름 시절 설정 파일을 새 경로로 1회 이전
+  const OLD_CONF = path.join(os.homedir(), '.su-da' + 'epil.json');
+  if (!fs.existsSync(CONF) && fs.existsSync(OLD_CONF)) { try { fs.renameSync(OLD_CONF, CONF); } catch {} }
+}
 const ENV = { ...process.env, CLAUDECODE: '' }; // 중첩 세션 검사 회피
 const pdfEngine = require('./pdf-engine');
 const APP_VERSION = require('../package.json').version;

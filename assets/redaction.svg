@@ -43,7 +43,7 @@
     <rect x="85" y="55" width="70" height="26" fill="#000"/>
     <text x="14" y="116" font-size="11.5" fill="#e8e8ec">A filled path object over the</text>
     <text x="14" y="134" font-size="11.5" fill="#e8e8ec">union of the removed boxes.</text>
-    <text x="14" y="162" font-size="11" fill="#9a9aa6">tagged with content mark DaepilMask</text>
+    <text x="14" y="162" font-size="11" fill="#9a9aa6">tagged with content mark EditorKimMask</text>
     <text x="14" y="178" font-size="11" fill="#9a9aa6">→ still selectable after save / reload</text>
   </g>
 
@@ -69,7 +69,7 @@
   <!-- inset: cover-up -->
   <g transform="translate(32 302)">
     <rect width="1040" height="110" rx="10" fill="#232329" stroke="#5a2323"/>
-    <text x="14" y="26" font-size="13" font-weight="700" fill="#e07a7a">What DAEPIL does not do: cover-up</text>
+    <text x="14" y="26" font-size="13" font-weight="700" fill="#e07a7a">What EDITOR_KIM does not do: cover-up</text>
     <rect x="14" y="40" width="208" height="46" rx="4" fill="#fff"/>
     <text x="24" y="70" font-size="15" fill="#222" font-family="Consolas, monospace">900101-</text>
     <rect x="85" y="51" width="70" height="26" fill="#000" opacity="0.92"/>

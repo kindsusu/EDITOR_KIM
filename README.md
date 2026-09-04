@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://github.com/kindsusu/EDITOR_KIM/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/kindsusu/EDITOR_KIM/actions/workflows/ci.yml/badge.svg"></a>
-  <img alt="version 0.4.0" src="https://img.shields.io/badge/version-0.4.0-d97757">
+  <img alt="version 0.4.1" src="https://img.shields.io/badge/version-0.4.1-d97757">
   <img alt="engine PDFium (WASM)" src="https://img.shields.io/badge/engine-PDFium%20(WASM)-1A2B28">
   <img alt="no API key" src="https://img.shields.io/badge/API%20key-none-2C7A4B">
   <img alt="Node 22+" src="https://img.shields.io/badge/node-22%2B-0E6B5C">
@@ -75,7 +75,7 @@ The redact call is the reason this project exists. Given a text object and a cha
 
 1. reads per-character boxes from PDFium (`FPDFText_GetTextObject` maps every character on the page back to the object that drew it — no coordinate heuristics);
 2. sets the object's text to the prefix, creates a new object for the suffix with the same font, size, color and matrix, and shifts it by the distance between character boxes (measured error: 0.17 pt);
-3. adds a filled black path over the union of the removed boxes, tagged with the PDFium content mark `DaepilMask` so the box remains a selectable, movable, deletable object after save and reload;
+3. adds a filled black path over the union of the removed boxes, tagged with the PDFium content mark `EditorKimMask` so the box remains a selectable, movable, deletable object after save and reload;
 4. re-extracts the page text and refuses to call it done if the removed string is still present.
 
 Scanned pages are different: there is no text to remove, so the rectangle tool only covers pixels, and the UI says so.
@@ -155,7 +155,7 @@ The project was built as a series of small work packages, each with a written co
 
 - **Subset CID fonts do not say "no glyph".** `FPDFFont_GetGlyphPath` returns the `.notdef` path for missing characters, and every missing character shares that pointer. EDITOR_KIM probes two Private Use Area code points to learn the notdef pointer and compares against it. `FPDFFont_GetGlyphWidth` is useless here — it returns a default width.
 - **fontkit's TTF subset has no `cmap`.** pdfkit draws by glyph ID and never needed one; PDFium maps Unicode through the cmap and renders tofu without it. EDITOR_KIM writes a format 4 cmap and splices it into the sfnt directory. `name`, `OS/2` and `post` are not required.
-- **Automatic line grouping merges table cells.** A baseline-and-gap heuristic was tried and removed. Now one text object is one box; the user groups boxes with Shift-click, and the grouping is stored as the PDFium content mark `DaepilGroup`. Only the lines produced by a multi-line edit are grouped automatically.
+- **Automatic line grouping merges table cells.** A baseline-and-gap heuristic was tried and removed. Now one text object is one box; the user groups boxes with Shift-click, and the grouping is stored as the PDFium content mark `EditorKimGroup`. Only the lines produced by a multi-line edit are grouped automatically.
 - **`FPDFText_SetText(obj, "")` traps the WASM module.** Empty text is replaced by a single space at the engine boundary, so every caller is safe.
 
 ---
@@ -165,7 +165,7 @@ The project was built as a series of small work packages, each with a written co
 ```
 app/
   main.js            Electron shell: window, file/save dialogs, four-way close dialog
-  preload.js         window.daepil bridge (openFiles, openFolder, saveAs)
+  preload.js         window.editorKim bridge (openFiles, openFolder, saveAs)
   server.js          local HTTP/SSE: files, PDF endpoints, undo snapshots, Claude Code spawn
   pdf-engine.js      PDFium wrapper: open · render · objects · setText · charBoxes · move · addRect · redact · pageText · save
   pdf-engine.test.js plain Node asserts, run by CI on windows-latest

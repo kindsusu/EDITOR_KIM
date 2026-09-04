@@ -78,7 +78,7 @@
     <text x="16" y="54" font-size="12" fill="#9a9aa6">only what Claude Code sends</text>
     <text x="16" y="76" font-size="12" fill="#e8e8ec">the prompt and the document text</text>
     <text x="16" y="94" font-size="12" fill="#e8e8ec">you chose to ask about</text>
-    <text x="16" y="112" font-size="12" fill="#d97757">no key or token stored by DAEPIL</text>
+    <text x="16" y="112" font-size="12" fill="#d97757">no key or token stored by EDITOR_KIM</text>
   </g>
   <line x1="762" y1="144" x2="828" y2="144" stroke="#9a9aa6" stroke-width="1.6" stroke-dasharray="5 5" marker-end="url(#a)"/>
 </svg>

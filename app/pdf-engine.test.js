@@ -31,7 +31,7 @@ const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
   console.log('render bytes', png.length);
 
   // 한글 → Helvetica에 글리프 없음 → 폴백 기대
-  const r1 = doc.setText(0, 0, 'EDITED 대필 한글');
+  const r1 = doc.setText(0, 0, 'EDITED 에디터 한글');
   console.log('setText(한글)', r1);
   assert.strictEqual(r1.ok, true);
   if (process.platform === 'win32') assert.strictEqual(r1.fallbackFont, true, '한글은 폴백 폰트여야 함');
@@ -65,7 +65,7 @@ const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     const t = d.objects(0).filter((o) => o.type === 'text' && /[가-힣]/.test(o.text || ''));
     if (t.length) {
       // (a) 문서에 없던 한글 → 서브셋에 글리프가 없으므로 폴백 기대
-      const r = d.setText(0, t[0].idx, '쀍뷁쭶 대필 엔진 검사');
+      const r = d.setText(0, t[0].idx, '쀍뷁쭶 에디터 엔진 검사');
       console.log(`[회의록_초안.pdf] font=${t[0].font} "${t[0].text}" → ${JSON.stringify(r)} (${r.fallbackFont ? '폴백 폰트' : '원본 폰트 유지'})`);
       assert.strictEqual(r.ok, true);
       const p = await d.render(0, 1);
@@ -90,7 +90,7 @@ const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     const ts = d.objects(0).filter((o) => o.type === 'text' && (o.text || '').trim());
     assert.ok(ts.length >= 2, '텍스트 객체 2개 이상');
 
-    const NEW1 = '대필 검수 테스트';
+    const NEW1 = '에디터 검수 테스트';
     const e1 = d.setText(0, ts[0].idx, NEW1);
     assert.deepStrictEqual(e1, { ok: true, fallbackFont: true }, '서브셋에 없는 한글 → 폴백');
     const s1 = d.save();
@@ -171,6 +171,10 @@ const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     assert.strictEqual(rro.length, ro.length, '재열기 후 객체 수 동일');
     assert.strictEqual(rro[rIdx].mask, true, '저장·재열기 후에도 mask:true 유지');
     dr.close();
+
+    // 호환: 옛 이름(LEGACY)으로 달린 마크도 mask:true로 인식돼야 한다
+    assert.deepStrictEqual(d._addLegacyMark(0, rIdx), { ok: true });
+    assert.strictEqual(d.objects(0)[rIdx].mask, true, '옛 이름 마크도 mask:true로 인식');
 
     // K: removeObject — 삭제하면 객체 수가 다시 줄어든다
     assert.deepStrictEqual(d.removeObject(0, rIdx), { ok: true });

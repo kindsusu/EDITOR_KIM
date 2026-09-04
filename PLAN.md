@@ -1,4 +1,4 @@
-# su-daepil (대필) — 계획
+# EDITOR_KIM — 계획
 
 PDF·Markdown 편집기. AI는 Claude Code 로그인(구독)으로 호출하고 API 키는 쓰지 않는다.
 
@@ -26,7 +26,7 @@ claude -p --output-format stream-json   ← Claude Code CLI, 사용자 로그인
 
 ### P1 — 쓸 수 있는 앱 (첫 목표)
 - [x] Electron 셸: `app/main.js`가 server.js를 띄우고 창을 연다 (2026-09-04, `npm start` 동작 확인)
-- [x] 폴더 열기(네이티브 대화상자) → 작업 폴더 전환, `~/.su-daepil.json`에 기억 — 대화상자는 실제 창에서 직접 확인 필요
+- [x] 폴더 열기(네이티브 대화상자) → 작업 폴더 전환, `~/.editor-kim.json`에 기억 — 대화상자는 실제 창에서 직접 확인 필요
 - [x] Ctrl+S 저장, 수정됨 ● 표시, 닫을 때 미저장 경고 — 닫기 경고는 실제 창에서 직접 확인 필요
 - [x] Claude 대화 이어가기(`--resume` 세션 ID) — 문서당 1세션, 질문 모드만. 편집 모드는 매번 문서 전체를 새로 보냄. [새 대화]로 초기화
 - [x] 모델 선택(Sonnet 기본 / Opus) — 응답에 `claude-sonnet-5` 확인
@@ -103,7 +103,7 @@ doc.pageText(i)                         // string  검증용 페이지 전체 �
 ### P2-J/K — 실행 취소 · 가림 상자 편집 (2026-09-04 사용자 피드백)
 - 라이선스 확정: 개인 용도 무료, 기업·상업 용도는 원칙 불가·저작권자 승인 시 허용. `LICENSE` 작성, package.json `SEE LICENSE IN LICENSE`.
 - [x] **J 실행 취소/다시 실행 (2026-09-04).** 편집+정렬이동은 요청 2건이라 취소도 2단계. PDFium에 undo가 없으므로 서버가 변경 전 `doc.save()` 바이트를 문서별 스택(최대 20)에 쌓고, 취소 시 그 바이트로 다시 연다. Ctrl+Z / Ctrl+Y, 상단 버튼. 편집·이동·가리기·사각형 모두 대상
-- [x] **K 가림 상자 편집 (2026-09-04).** `FPDFPageObj_AddMark`는 JS 문자열을 그대로 받음. 마크는 저장·재열기 후에도 유지 확인. 만든 사각형에 PDFium 콘텐츠 마크 `DaepilMask`를 붙여 저장 후에도 식별. `objects()`가 `mask:true`로 표시. UI에서 점선 테두리로 보이고 클릭 → 삭제·화살표 이동·드래그. 엔진에 `removeObject` 추가
+- [x] **K 가림 상자 편집 (2026-09-04).** `FPDFPageObj_AddMark`는 JS 문자열을 그대로 받음. 마크는 저장·재열기 후에도 유지 확인. 만든 사각형에 PDFium 콘텐츠 마크 `EditorKimMask`를 붙여 저장 후에도 식별. `objects()`가 `mask:true`로 표시. UI에서 점선 테두리로 보이고 클릭 → 삭제·화살표 이동·드래그. 엔진에 `removeObject` 추가
 
 - [x] **L 닫을 때 선택 (2026-09-04).** 실제 창에서 네 버튼 동작은 사용자 확인 필요. 미저장 상태로 창을 닫으면 네 가지: 이 문서에 덮어쓰기 / 다른 이름으로 저장 / 저장하지 않고 닫기 / 취소. main.js 닫기 핸들러에서 렌더러의 save·saveAs를 호출
 
@@ -149,7 +149,7 @@ doc.pageText(i)                         // string  검증용 페이지 전체 �
 ### P2-U — 상자 = 객체 하나, 그룹은 사용자가 (2026-09-04 사용자 결정)
 > *"한줄로 묶는 기능 자체가 왜 필요하지? 다른 박스일 수도 있으니 원 박스를 유지하는 형태가 낫고, Shift키로 여러 박스를 한번에 선택 시 그룹설정 및 그룹해제 기능을 넣어줘."*
 - [x] 자동 줄 묶기(기준선·간격 휴리스틱) 제거. 텍스트 객체 하나 = 상자 하나
-- [x] 그룹은 PDF 콘텐츠 마크 `DaepilGroup(id)`로 저장. 줄바꿈 편집으로 생긴 줄들은 자동으로 같은 그룹(한 줄로 되돌리면 해제). 저장·재열기 후 유지
+- [x] 그룹은 PDF 콘텐츠 마크 `EditorKimGroup(id)`로 저장. 줄바꿈 편집으로 생긴 줄들은 자동으로 같은 그룹(한 줄로 되돌리면 해제). 저장·재열기 후 유지
 - [x] Shift 클릭으로 여러 상자 선택 → 화면 하단 바 [그룹 설정] / [선택 해제]. 그룹 상자 패널에 [그룹 해제]. `POST /api/pdf/group`
 - [x] 그룹 텍스트는 위→아래·왼→오른쪽으로 잇고 기준선이 다르면 줄바꿈. 편집 시 첫 객체만 남기고 전체 텍스트를 다시 넣음. 가리기 범위 매핑은 구분 문자 길이 반영
 - 검수: sample.pdf 상자 8개 → Shift 클릭 2개 묶기 → 7개, 그룹 상자에 두 줄 텍스트·해제 버튼. 엔진 시험에 그룹 저장/설정/해제 추가
@@ -182,9 +182,9 @@ doc.pageText(i)                         // string  검증용 페이지 전체 �
 - 검수: 자막 첫 단어를 "너만의"로 → 옛 "나만의" 그림 사라지고 겹침 없음. 중간 단어도 옆 안 건드리고 교체
 
 ### P4 — 이름 변경 EDITOR_KIM · 마스킹 기본값 (2026-09-04 사용자 지시)
-- [x] GitHub 저장소 DAEPIL → EDITOR_KIM (`gh repo rename`, 옛 URL은 리다이렉트). 로컬 원격 갱신
-- [x] 프로그램 이름·헤더·창 제목·package.json·README·LICENSE·bat → EDITOR_KIM (Sonnet). `run-daepil.bat` → `run-editor-kim.bat`(git mv), 버전 0.4.0
-- [x] 가림 색은 실행 때마다 검정 기본(기억 안 함, `daepil.maskColor` localStorage 제거). 버튼 "사각형 가리기" → "마스킹 삽입"
+- [x] GitHub 저장소 이름 변경 완료 (`gh repo rename`, 옛 URL은 리다이렉트). 로컬 원격 갱신
+- [x] 프로그램 이름·헤더·창 제목·package.json·README·LICENSE·bat → EDITOR_KIM (Sonnet). 실행 파일명을 `run-editor-kim.bat`으로 변경(git mv), 버전 0.4.0
+- [x] 가림 색은 실행 때마다 검정 기본(기억 안 함, `editorkim.maskColor` localStorage 제거). 버튼 "사각형 가리기" → "마스킹 삽입"
 - [x] 메인 이미지 = `assets/Editor_Kim.png` → hero.png 교체 (기존 hero.png 대체)
 - [x] 검수: `npm test` 통과, 브라우저에서 헤더/제목 EDITOR_KIM v0.4.0, 버튼 "마스킹 삽입", 새로고침 후에도 가림 색 검정 확인
 - [x] 0.4.0 태그·푸시 (검수 후, 2026-09-04)
@@ -198,11 +198,11 @@ doc.pageText(i)                         // string  검증용 페이지 전체 �
 
 ### P3 — 배포 (2026-09-04 진행)
 - [x] electron-builder 설정(package.json `build`): portable + nsis, x64, asar. 아이콘은 `tools/make-icon.js`(Electron 오프스크린 캡처 → build/icon.png, 빌더가 .ico 변환)
-- [x] `npm run dist` → `dist/DAEPIL-0.2.1-portable.exe`, `dist/DAEPIL-0.2.1-setup.exe` (각 약 102MB). 포터블 실행 → 5초 내 기동, Claude Code 검사·PDFium 렌더·폴백 폰트 편집 동작 확인
+- [x] `npm run dist` → `dist/EDITOR_KIM-0.2.1-portable.exe`, `dist/EDITOR_KIM-0.2.1-setup.exe` (각 약 102MB). 포터블 실행 → 5초 내 기동, Claude Code 검사·PDFium 렌더·폴백 폰트 편집 동작 확인
 - 주의: 코드 서명 인증서 없음 → 첫 실행 시 SmartScreen "알 수 없는 게시자" 경고. "추가 정보 → 실행"으로 진행
 - 문서에서 모델 언급 제거(사용자 요청)
-- [ ] electron-builder → `su-daepil-Setup-x.y.z.exe` (NSIS)
-- [ ] 아이콘, 앱 이름 "대필"
+- [ ] electron-builder → `editor-kim-Setup-x.y.z.exe` (NSIS)
+- [ ] 아이콘, 앱 이름 "EDITOR_KIM"
 - [ ] README: Claude Code 설치·로그인이 선행 조건
 
 ### P4 — 선택

@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://github.com/kindsusu/EDITOR_KIM/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/kindsusu/EDITOR_KIM/actions/workflows/ci.yml/badge.svg"></a>
-  <img alt="version 0.4.0" src="https://img.shields.io/badge/version-0.4.0-d97757">
+  <img alt="version 0.4.1" src="https://img.shields.io/badge/version-0.4.1-d97757">
   <img alt="engine PDFium (WASM)" src="https://img.shields.io/badge/engine-PDFium%20(WASM)-1A2B28">
   <img alt="no API key" src="https://img.shields.io/badge/API%20key-none-2C7A4B">
   <img alt="Node 22+" src="https://img.shields.io/badge/node-22%2B-0E6B5C">
@@ -75,7 +75,7 @@ AI는 서버가 `claude -p --output-format stream-json`을 실행하고 프롬�
 
 1. PDFium에서 글자별 상자를 읽습니다 (`FPDFText_GetTextObject`가 페이지의 모든 글자를 그 글자를 그린 객체로 되돌려 주므로 좌표 근사가 없습니다);
 2. 객체의 텍스트를 앞부분으로 바꾸고, 뒷부분은 같은 폰트·크기·색·행렬로 새 객체를 만들어 글자 상자 사이 거리만큼 옮깁니다 (측정 오차 0.17pt);
-3. 제거된 글자 상자들의 합집합 위에 검은 채움 경로를 넣고 PDFium 콘텐츠 마크 `DaepilMask`를 붙입니다. 저장 후 다시 열어도 선택·이동·삭제 가능한 객체로 남습니다;
+3. 제거된 글자 상자들의 합집합 위에 검은 채움 경로를 넣고 PDFium 콘텐츠 마크 `EditorKimMask`를 붙입니다. 저장 후 다시 열어도 선택·이동·삭제 가능한 객체로 남습니다;
 4. 페이지 텍스트를 다시 추출해, 제거한 문자열이 아직 있으면 완료로 치지 않습니다.
 
 스캔본은 다릅니다. 지울 텍스트가 없으니 사각형 도구는 픽셀을 덮기만 하고, UI가 그렇게 말해 줍니다.
@@ -155,7 +155,7 @@ OK — 모든 검사 통과
 
 - **서브셋 CID 폰트는 "글리프 없음"이라고 말하지 않는다.** `FPDFFont_GetGlyphPath`가 없는 글자에 `.notdef` 경로를 돌려주고, 없는 글자끼리 같은 포인터를 공유합니다. EDITOR_KIM은 사설영역 코드포인트 두 개로 notdef 포인터를 알아내 비교합니다. `FPDFFont_GetGlyphWidth`는 기본 폭을 돌려줘서 쓸 수 없습니다.
 - **fontkit의 TTF 서브셋에는 `cmap`이 없다.** pdfkit은 글리프 ID로 그려서 필요가 없었고, PDFium은 cmap으로 유니코드를 찾으므로 없으면 □로 그립니다. EDITOR_KIM은 format 4 cmap을 써서 sfnt 디렉터리에 끼워 넣습니다. `name`, `OS/2`, `post`는 필요 없습니다.
-- **자동으로 줄을 묶으면 표의 옆 칸까지 묶인다.** 기준선·간격 휴리스틱을 시도했다가 뺐습니다. 지금은 텍스트 객체 하나가 상자 하나이고, 묶음은 사용자가 Shift 클릭으로 정해 PDF 콘텐츠 마크(`DaepilGroup`)로 저장합니다. 줄바꿈 편집으로 생긴 줄들만 자동으로 한 그룹이 됩니다.
+- **자동으로 줄을 묶으면 표의 옆 칸까지 묶인다.** 기준선·간격 휴리스틱을 시도했다가 뺐습니다. 지금은 텍스트 객체 하나가 상자 하나이고, 묶음은 사용자가 Shift 클릭으로 정해 PDF 콘텐츠 마크(`EditorKimGroup`)로 저장합니다. 줄바꿈 편집으로 생긴 줄들만 자동으로 한 그룹이 됩니다.
 - **`FPDFText_SetText(obj, "")`는 WASM 모듈을 죽인다.** 빈 문자열은 엔진 경계에서 공백 하나로 바꿔 모든 호출자를 안전하게 했습니다.
 
 ---
@@ -165,7 +165,7 @@ OK — 모든 검사 통과
 ```
 app/
   main.js            Electron 셸: 창, 파일·저장 대화상자, 닫기 4지선다
-  preload.js         window.daepil 브리지 (openFiles, openFolder, saveAs)
+  preload.js         window.editorKim 브리지 (openFiles, openFolder, saveAs)
   server.js          로컬 HTTP/SSE: 파일, PDF 엔드포인트, 실행 취소 스냅샷, Claude Code 실행
   pdf-engine.js      PDFium 래퍼: open · render · objects · setText · charBoxes · move · addRect · redact · pageText · save
   pdf-engine.test.js 순수 Node assert, CI가 windows-latest에서 실행
