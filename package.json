@@ -1,0 +1,14 @@
+{
+  "name": "su-daepil",
+  "productName": "대필",
+  "version": "0.1.0",
+  "description": "PDF·Markdown editor with Claude (via Claude Code subscription, no API key)",
+  "main": "app/main.js",
+  "scripts": {
+    "start": "electron .",
+    "serve": "node app/server.js",
+    "dist": "electron-builder --win"
+  },
+  "license": "MIT",
+  "private": true
+}
