@@ -29,6 +29,7 @@
   .pdfBox{position:absolute}.pdfBox:hover{outline:1px solid var(--acc)}
   .pdfBox.editing{outline:2px solid var(--acc)}
   .pdfBox.multi{outline:2px solid #4c9be8;background:rgba(76,155,232,.12)}
+  .pdfBox.hiddenText{outline:1px dashed #9a9aa6}
   .pdfMask{border:1px dashed transparent;cursor:move}.pdfMask:hover{border-color:var(--acc)}
   .pdfMask.editing{background:rgba(255,255,255,.55)}
   .pdfEditor{position:absolute;z-index:6;min-width:340px;max-width:90%;background:var(--panel);border:1px solid var(--acc);border-radius:8px;padding:10px;box-shadow:0 6px 24px #0008;color:var(--fg);font:13px/1.5 system-ui,'Malgun Gothic',sans-serif}
@@ -99,9 +100,9 @@
 
 <script type="module">
 const $ = (s) => document.querySelector(s);
-// Claude 패널은 평소 접힘. 버튼 또는 Ctrl+J로 열고 닫는다 (선택 기억)
-function setAiOpen(open) { document.body.classList.toggle('ai-collapsed', !open); $('#aiToggle').classList.toggle('on', open); localStorage.setItem('daepil.ai', open ? '1' : '0'); }
-setAiOpen(localStorage.getItem('daepil.ai') === '1');
+// Claude 패널은 실행할 때마다 접힌 상태로 시작. 버튼 또는 Ctrl+J로 열고 닫는다 (실행 중에만 유지, 다음 실행에 이어지지 않음)
+function setAiOpen(open) { document.body.classList.toggle('ai-collapsed', !open); $('#aiToggle').classList.toggle('on', open); }
+setAiOpen(false); localStorage.removeItem('daepil.ai');
 $('#aiToggle').onclick = () => setAiOpen(document.body.classList.contains('ai-collapsed'));
 document.addEventListener('keydown', (e) => { if (e.ctrlKey && e.key.toLowerCase() === 'j') { e.preventDefault(); $('#aiToggle').click(); } });
 let cur = null, docText = '', savedText = '', pending = null;
@@ -340,6 +341,7 @@ function drawOverlay(wrap, i, objs, h) {
   const lines = groupLines(objs).map((line) => {
     const b = line.bounds, box = document.createElement('div');
     box.className = 'pdfBox';
+    if (line.objs.some((o) => o.hidden)) { box.classList.add('hiddenText'); box.title = '투명 글자(그림 위 검색용). 수정하면 그림을 배경색으로 덮고 글자를 새로 그립니다'; }
     box.style.left = (b.x0 * pdfScale) + 'px'; box.style.top = ((h - b.y1) * pdfScale) + 'px';
     box.style.width = ((b.x1 - b.x0) * pdfScale) + 'px'; box.style.height = ((b.y1 - b.y0) * pdfScale) + 'px';
     attachDrag(box, async (dx, dy) => {
@@ -527,7 +529,8 @@ function openInlineEditor(initialText) {
   const fontName = (font || '').replace(/^[A-Z]+\+/, '') || '기본 글꼴';
   const panel = document.createElement('div');
   panel.className = 'pdfEditor';
-  panel.innerHTML = `<h5>이 줄 고치기</h5><div class="hint2">${fontName} · ${Math.round(size)}pt</div>`;
+  const hiddenNote = selectedObj.objs.some((o) => o.hidden) ? ' · 투명 글자(그림 위) — 적용하면 그림을 덮고 새로 그립니다' : '';
+  panel.innerHTML = `<h5>이 줄 고치기</h5><div class="hint2">${fontName} · ${Math.round(size)}pt${hiddenNote}</div>`;
   const ta = document.createElement('textarea');
   ta.value = initialText; ta.rows = 2;
   panel.appendChild(ta);
@@ -626,6 +629,7 @@ function openInlineEditor(initialText) {
       const one = await pdfMutate('/api/pdf/fit', { name: cur, i, idx: objs[0].idx, text: newText, maxWidth, mode: fit });
       r = { ...one, results: [one] };
     }
+    { const li = (r.results || []).flatMap((x) => x.lineIdxs || []); if (li.length) idxs = li; } // 투명 글자를 드러내거나 줄이 늘면 객체 위치가 바뀐다
     if (align !== 'left') { // 새 폭을 재서 왼쪽/오른쪽 끝이 원래 자리에 오도록 이동
       const fresh = await (await fetch(`/api/pdf/objects?name=${encodeURIComponent(cur)}&i=${i}`)).json();
       const nb = idxs.reduce((b, ix) => {
@@ -638,7 +642,8 @@ function openInlineEditor(initialText) {
     selectedObj = null; updateEditRadio();
     await refreshPage(i, objs[0].idx);
     const addedLines = (r.results || []).reduce((n, x) => n + (x.inserted || 0), 0);
-    flash(r.scaled ? `폭에 맞춰 글자를 ${Math.round(r.scaled * 100)}%로 줄였습니다` : addedLines ? `줄 ${addedLines}개를 아래에 추가했습니다 — 기존 줄과 겹치면 드래그로 옮기세요` : r.fallbackFont ? '원본 폰트에 없는 글자라 맑은 고딕으로 대체됨' : '저장 전 (Ctrl+S)');
+    const revealed = (r.results || []).some((x) => x.revealed) || r.revealed;
+    flash(revealed ? '그림으로 그려진 글자였습니다 — 그림을 배경색으로 덮고 글자를 새로 그렸습니다' : r.scaled ? `폭에 맞춰 글자를 ${Math.round(r.scaled * 100)}%로 줄였습니다` : addedLines ? `줄 ${addedLines}개를 아래에 추가했습니다 — 기존 줄과 겹치면 드래그로 옮기세요` : r.fallbackFont ? '원본 폰트에 없는 글자라 맑은 고딕으로 대체됨' : '저장 전 (Ctrl+S)');
   };
   okBtn.onclick = commit;
   cancelBtn.onclick = close;
@@ -660,13 +665,13 @@ function openInlineEditor(initialText) {
   }
 
   async function maskParts(parts, maskedText) {
-    const { i } = selectedObj;
+    const { i } = selectedObj, hid = selectedObj.objs.some((o) => o.hidden);
     const r = await pdfMutate('/api/pdf/mask', { name: cur, i, parts, color: maskColor() });
     selectedObj = null; updateEditRadio();
     await refreshPage(i);
     close();
     const sub = (maskedText || '').trim();
-    flash(sub && r.textLeft.includes(sub) ? '⚠ 가린 글자가 텍스트에 남아 있습니다' : '가림 완료 — 텍스트에서도 제거됨');
+    flash(sub && r.textLeft.includes(sub) ? '⚠ 가린 글자가 텍스트에 남아 있습니다' : hid ? '가림 완료 — 텍스트는 제거됨. 이 글자는 그림으로도 그려져 있어 그림은 덮기만 했습니다' : '가림 완료 — 텍스트에서도 제거됨');
   }
   maskSelBtn.onclick = () => {
     const from = ta.selectionStart, to = ta.selectionEnd;

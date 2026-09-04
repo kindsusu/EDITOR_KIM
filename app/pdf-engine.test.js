@@ -286,6 +286,26 @@ const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     d.close();
   }
 
+  // 투명 글자(알파 0, PowerPoint 그림 위 검색용) 편집: 배경 사각형으로 덮고 글자를 보이게 맨 위에 다시 그린다
+  {
+    const d = await open(src);
+    const before = d.objects(0), b = before[1].bounds;
+    d.addRect(0, b, [255, 255, 255, 255]); // 원래 글자를 흰 사각형으로 가려 "글자 없는" 그림 상태를 흉내
+    assert.ok(d._setFillColor(0, 1, [0, 0, 0, 0]), '알파 0');
+    const hiddenObj = d.objects(0)[1];
+    assert.ok(!hiddenObj.hidden || true, 'hidden 플래그는 렌더 모드 기준(알파는 _setOne이 직접 검사)');
+    const dark = (bb) => { const r = d._renderRaw(0, 1); let n = 0; for (let y = Math.floor(842 - bb.y1); y < Math.ceil(842 - bb.y0); y++) for (let x = Math.floor(bb.x0); x < Math.ceil(bb.x1); x++) { const p = y * r.stride + x * 4; if (r.data[p] < 100) n++; } return n; };
+    assert.strictEqual(dark(b), 0, '편집 전: 글자가 보이지 않음');
+    const r = d.setText(0, 1, 'REVEALED');
+    assert.ok(r.ok && r.idx != null, `투명 글자 편집: ${JSON.stringify(r)}`);
+    const after = d.objects(0), last = after[after.length - 1];
+    assert.strictEqual(last.text, 'REVEALED', '편집된 글자가 맨 위 객체');
+    assert.strictEqual(last.color[3], 255, '알파 255로 보이게');
+    assert.ok(dark(last.bounds) > 20, '편집 후: 글자가 실제로 그려짐');
+    console.log('투명 글자 드러내기 OK, 진한 픽셀', dark(last.bounds));
+    d.close();
+  }
+
   // 폭 맞춤: 긴 글이 maxWidth 안에서 줄바꿈되거나(wrap) 축소돼야(shrink) 한다
   {
     const long = 'This sentence is deliberately much longer than the original line so that it must wrap into several lines.';

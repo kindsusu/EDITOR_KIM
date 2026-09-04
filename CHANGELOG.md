@@ -4,6 +4,9 @@ All notable changes to DAEPIL are recorded here. The format follows [Keep a Chan
 
 ## [Unreleased]
 
+- Invisible text (alpha 0 / render mode 3, the "searchable text under a picture" pattern of PowerPoint exports) can now be edited: the picture is covered with the sampled background color and the text is redrawn on top in the sampled ink color. Such boxes show a dashed gray outline.
+- Claude panel starts collapsed on every launch (no longer remembered).
+
 - PDF → Markdown conversion (PDFium text extraction, structure restored by Claude)
 - "Export as PDF" button for Markdown documents (the `md2pdf` tool exists; the UI button does not yet)
 - One-click prompts in the Claude panel (formal tone, 3-line summary, typo pass, table)

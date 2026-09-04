@@ -275,12 +275,15 @@ async function open(buffer) {
             bounds: null, color: [0, 0, 0, 255], mask: false,
           };
           item.mask = !!findMark(o, 'DaepilMask');
+          // 보이지 않는 글자: 채움 알파 0 또는 렌더 모드 3(invisible)/7(clip). PowerPoint가 글자 효과를 그림으로 내보내며 검색용으로 깔아 둔 투명 글자
+          if (t === OBJ_TEXT) { const rm = P.FPDFTextObj_GetTextRenderMode(o); item.hidden = rm === 3 || rm === 7; }
           item.group = groupOf(o); // 줄바꿈 줄들·사용자 그룹 (없으면 null)
           P.FPDFPageObj_GetBounds(o, scratch, scratch + 4, scratch + 8, scratch + 12);
           item.bounds = { x0: f32(scratch), y0: f32(scratch + 4), x1: f32(scratch + 8), y1: f32(scratch + 12) };
           if (P.FPDFPageObj_GetFillColor(o, scratch, scratch + 4, scratch + 8, scratch + 12)) {
             item.color = [i32(scratch), i32(scratch + 4), i32(scratch + 8), i32(scratch + 12)];
           }
+          if (t === OBJ_TEXT && item.color[3] === 0) item.hidden = true; // 알파 0도 투명 글자
           if (t === OBJ_TEXT) {
             const need = P.FPDFTextObj_GetText(o, tp, 0, 0); // 바이트 수(UTF-16, NUL 포함)
             if (need > 0) {
@@ -312,6 +315,7 @@ async function open(buffer) {
       const bold = orig && P.FPDFPageObj_GetType(orig) === OBJ_TEXT ? isBold(orig) : false;
       const r = api._setOne(i, idx, lines[0]);
       if (!r.ok) return r;
+      if (r.idx != null) idx = r.idx; // 투명 글자를 드러내면 객체가 맨 뒤로 간다
       if (lines.length < 2) { // 한 줄로 돌아오면 줄바꿈 그룹 표시는 뗀다
         const o1 = P.FPDFPage_GetObject(p, idx);
         if (o1 && findMark(o1, 'DaepilGroup')) { tagGroup(o1, null); P.FPDFPage_GenerateContent(p); }
@@ -353,7 +357,7 @@ async function open(buffer) {
     //   'none'   그대로 (setText)
     fitText(i, idx, text, maxWidth, mode = 'wrap') {
       if (!(maxWidth > 0) || mode === 'none') return api.setText(i, idx, text);
-      const width = (s) => { const r = api._setOne(i, idx, s); if (!r.ok) return -1; const b = api.objects(i)[idx].bounds; return b.x1 - b.x0; };
+      const width = (s) => { const r = api._setOne(i, idx, s); if (!r.ok) return -1; if (r.idx != null) idx = r.idx; const b = api.objects(i)[idx].bounds; return b.x1 - b.x0; };
       const lines = String(text ?? '').split(/\r?\n/);
       if (mode === 'shrink') {
         const w = Math.max(...lines.map(width));
@@ -391,7 +395,29 @@ async function open(buffer) {
 
     // 한 줄 교체(내부). 1) 원본 폰트로 그릴 수 있으면 그대로 SetText (폰트·모양 보존)
     //                   2) 글리프가 없으면 시스템 한글 폰트로 새 객체를 만들어 자리 바꿔치기
+    // 한 줄 교체 + 투명 글자 처리. 투명 글자(hidden)를 고치면: 그 자리의 그림을 배경색 사각형으로 덮고, 글자를 글자색으로 보이게 바꿔 맨 위에 올린다.
+    // 객체가 맨 뒤로 가므로 idx가 바뀐다 → {idx}로 돌려준다.
     _setOne(i, idx, newText) {
+      const p = page(i), o0 = P.FPDFPage_GetObject(p, idx);
+      const hidden = !!(o0 && P.FPDFPageObj_GetType(o0) === OBJ_TEXT && [3, 7].includes(P.FPDFTextObj_GetTextRenderMode(o0)) || (o0 && (() => { const c = mal(16); try { return P.FPDFPageObj_GetFillColor(o0, c, c + 4, c + 8, c + 12) && i32(c + 12) === 0; } finally { free(c); } })()));
+      let cover = null, ink = null;
+      if (hidden) { // 편집 전에 재야 한다: 그림(보이는 글자)이 아직 있을 때 배경색·글자색을 뽑는다
+        const b = api.objects(i)[idx].bounds, pad = 3; // 그림으로 그려진 글자는 텍스트 상자보다 조금 넓다(효과·안티앨리어싱)
+        cover = { x0: b.x0 - pad, y0: b.y0 - pad, x1: b.x1 + pad, y1: b.y1 + pad };
+        ink = api.sampleInk(i, cover);
+        api.addRect(i, cover, api.sampleColor(i, cover));
+      }
+      const r = api._setOneRaw(i, idx, newText);
+      if (!r.ok || !hidden) return r;
+      const o = P.FPDFPage_GetObject(p, idx);
+      P.FPDFTextObj_SetTextRenderMode(o, 0);
+      P.FPDFPageObj_SetFillColor(o, ink[0], ink[1], ink[2], 255);
+      P.FPDFPage_RemoveObject(p, o); P.FPDFPage_InsertObject(p, o); // 맨 위(z-순서)로
+      P.FPDFPage_GenerateContent(p);
+      return { ...r, idx: P.FPDFPage_CountObjects(p) - 1, revealed: true, ink };
+    },
+
+    _setOneRaw(i, idx, newText) {
       if (!newText) newText = ' '; // 빈 문자열로 SetText하면 PDFium(WASM)이 unreachable 트랩으로 죽는다
       const p = page(i);
       const o = P.FPDFPage_GetObject(p, idx);
@@ -527,6 +553,26 @@ async function open(buffer) {
       let best = null; for (const a of buckets.values()) if (!best || a[3] > best[3]) best = a;
       if (!best) return [255, 255, 255, 255];
       return [Math.round(best[0] / best[3]), Math.round(best[1] / best[3]), Math.round(best[2] / best[3]), 255];
+    },
+
+    // 시험용: 객체 채움색 강제 (알파 0 → 투명 글자 재현)
+    _setFillColor(i, idx, c) { const o = P.FPDFPage_GetObject(page(i), idx); const ok = !!(o && P.FPDFPageObj_SetFillColor(o, c[0], c[1], c[2], c[3])); if (ok) P.FPDFPage_GenerateContent(page(i)); return ok; },
+
+    // 영역의 글자색 추출: 배경색과 충분히 다른 픽셀(글자·선) 중 최빈색. 없으면 검정
+    sampleInk(i, b) {
+      const bg = api.sampleColor(i, b), { h: ph } = api.pageSize(i);
+      const raw = api._renderRaw(i, 1);
+      const x0 = Math.max(0, Math.floor(Math.min(b.x0, b.x1))), x1 = Math.min(raw.w - 1, Math.ceil(Math.max(b.x0, b.x1)));
+      const y0 = Math.max(0, Math.floor(ph - Math.max(b.y0, b.y1))), y1 = Math.min(raw.h - 1, Math.ceil(ph - Math.min(b.y0, b.y1)));
+      const buckets = new Map();
+      for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+        const p = y * raw.stride + x * 4, r = raw.data[p], g = raw.data[p + 1], bl = raw.data[p + 2];
+        if (Math.abs(r - bg[0]) + Math.abs(g - bg[1]) + Math.abs(bl - bg[2]) < 120) continue;
+        const key = ((r >> 3) << 10) | ((g >> 3) << 5) | (bl >> 3);
+        const acc = buckets.get(key) || [0, 0, 0, 0]; acc[0] += r; acc[1] += g; acc[2] += bl; acc[3]++; buckets.set(key, acc);
+      }
+      let best = null; for (const a of buckets.values()) if (!best || a[3] > best[3]) best = a;
+      return best ? [Math.round(best[0] / best[3]), Math.round(best[1] / best[3]), Math.round(best[2] / best[3]), 255] : [0, 0, 0, 255];
     },
 
     // color: [r,g,b,a] | 'auto'(배경색 추출) | 생략(검정)
