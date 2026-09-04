@@ -33,11 +33,44 @@ claude -p --output-format stream-json   ← Claude Code CLI, 사용자 로그인
 - [x] 시작 시 Claude Code 검사 → 없으면 **설치 화면**: `claude --version`으로 설치 여부, `claude auth status`로 로그인 여부 확인. 미설치면 [설치] 버튼이 공식 설치기(`irm https://claude.ai/install.ps1 | iex`, 관리자 권한 불필요)를 별도 PowerShell 창에서 실행. 미로그인이면 [로그인] 버튼이 `claude`를 별도 창에서 띄워 브라우저 로그인 진행. [다시 확인]으로 재검사. Pro/Max/Team 계정 필요(무료 계정은 Claude Code 불가)
 - [x] `npm start`로 실행 (`npm run serve`는 브라우저용, 폴더 열기 버튼 없음)
 
-### P2 — 문서 기능
-- [ ] MD → PDF 내보내기 (Electron `printToPDF`, 한글 폰트 포함)
-- [ ] PDF → MD 변환 (pdf.js 텍스트 추출 → Claude로 제목·표 구조 복원)
-- [ ] PDF 하이라이트·메모 (pdf-lib 주석)
-- [ ] 편집 모드: 선택 영역만 고치기(전체 문서 대신 블록 단위)
+### P2 — PDF 직접 편집 (메인 기능)
+
+**엔진 결정 (2026-09-04):** GenOffice의 PDF 편집도 자체 코드가 아니라 `@embedpdf/pdfium`(PDFium WASM, MIT + Apache-2.0)이다. 같은 패키지를 npm으로 받아 쓴다. 스파이크(`spike-pdfium.js`)로 Node에서 텍스트 객체 열거 → `FPDFText_SetText` → `FPDFPage_GenerateContent` → 저장 → 재로드 확인 → 렌더까지 검증 완료. pdf.js·pdf-lib 없이 PDFium 하나로 렌더·편집·저장을 다 한다.
+
+역할: Fable 5.1이 계획·계약·검수. 구현은 Opus(엔진) / Sonnet(UI·서버·도구)에 위임.
+
+| WP | 담당 | 내용 |
+|---|---|---|
+| A | Opus | `app/pdf-engine.js` — PDFium 래퍼. open/render(PNG)/objects/setText/save/close. 글리프 없는 폰트(서브셋)면 시스템 한글 폰트(`C:\Windows\Fonts\malgun.ttf`)로 새 텍스트 객체 생성해 대체. 자체 검사 스크립트 포함 |
+| B | Sonnet | `server.js` PDF 엔드포인트 + `index.html` PDF 편집 UI. 서버 렌더 PNG(오프라인), 텍스트 객체 클릭 → 인라인 편집 → 재렌더 → 저장. Claude 패널에서 선택 객체를 고치는 흐름 |
+| C | Sonnet | `tools/md2pdf.js` — Electron `printToPDF`로 MD→PDF. 한글 서브셋 폰트가 들어간 실전 테스트 PDF(`workspace/회의록_초안.pdf`) 생성 |
+
+**엔진 계약 (A가 구현, B가 사용):**
+```js
+const { open } = require('./pdf-engine');
+const doc = await open(buffer);           // Buffer → Doc
+doc.pageCount;                            // number
+doc.pageSize(i);                          // {w, h}  (pt)
+await doc.render(i, scale);               // Buffer (PNG)
+doc.objects(i);                           // [{idx, type:'text'|'image'|'path'|'other', text, font, size, bounds:{x0,y0,x1,y1}, color:[r,g,b,a]}]  bounds는 PDF pt, 원점 좌하단
+doc.setText(i, idx, newText);             // {ok, fallbackFont}  fallbackFont=true면 원본 폰트에 글리프가 없어 시스템 폰트로 교체됨
+doc.save();                               // Buffer
+doc.close();
+```
+좌표 변환(UI): `px = x*scale`, `py = (h − y)*scale`.
+
+**서버 엔드포인트 (B):** `GET /api/pdf/info?name` · `GET /api/pdf/page?name&i&scale` (PNG) · `GET /api/pdf/objects?name&i` · `POST /api/pdf/edit {name,i,idx,text}` · `POST /api/pdf/save {name}` · `POST /api/pdf/close {name}`. 문서는 서버 메모리에 name별 캐시.
+
+- [ ] A 엔진
+- [ ] B UI·서버
+- [ ] C MD→PDF 도구 + 한글 테스트 PDF
+- [ ] 검수: 한글 PDF에서 원본 폰트 유지 편집 / 서브셋 폴백 / 저장 후 Acrobat·Edge에서 열림
+
+### P2-후속 — 문서 기능
+- [ ] UI에 "PDF로 내보내기" 버튼 (C의 도구를 연결)
+- [ ] PDF → MD 변환 (PDFium 텍스트 추출 → Claude로 제목·표 구조 복원)
+- [ ] 텍스트 객체 추가·삭제·이동, 이미지 교체
+- [ ] 편집 모드: 선택 영역만 고치기
 - [ ] 자주 쓰는 지시 버튼: 격식체 변환 / 3줄 요약 / 오탈자 / 표로 정리
 
 ### P3 — 배포
