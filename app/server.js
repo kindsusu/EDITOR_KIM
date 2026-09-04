@@ -140,6 +140,54 @@ const server = http.createServer(async (req, res) => {
       entry.dirty = true;
       return json(res, 200, { results, fallbackFont: results.some((r) => r.fallbackFont) });
     }
+    if (url.pathname === '/api/pdf/charboxes' && req.method === 'GET') {
+      const { doc } = await getPdfDoc(url.searchParams.get('name'));
+      return json(res, 200, doc.charBoxes(+url.searchParams.get('i'), +url.searchParams.get('idx')));
+    }
+    if (url.pathname === '/api/pdf/move' && req.method === 'POST') {
+      const { name, i, idxs, dx, dy } = JSON.parse(await body(req));
+      const entry = await getPdfDoc(name);
+      const r = entry.doc.move(i, idxs, dx, dy);
+      entry.dirty = true;
+      return json(res, 200, r);
+    }
+    if (url.pathname === '/api/pdf/rect' && req.method === 'POST') {
+      const { name, i, bounds, color } = JSON.parse(await body(req));
+      const entry = await getPdfDoc(name);
+      const r = entry.doc.addRect(i, bounds, color || [0, 0, 0, 255]);
+      entry.dirty = true;
+      return json(res, 200, r);
+    }
+    if (url.pathname === '/api/pdf/redact' && req.method === 'POST') {
+      const { name, i, idx, from, to } = JSON.parse(await body(req));
+      const entry = await getPdfDoc(name);
+      const r = entry.doc.redact(i, idx, from, to);
+      entry.dirty = true;
+      return json(res, 200, r);
+    }
+    if (url.pathname === '/api/pdf/mask' && req.method === 'POST') {
+      const { name, i, parts, fallbackRects } = JSON.parse(await body(req));
+      const entry = await getPdfDoc(name);
+      const rects = [];
+      // redact가 idx+1에 새 텍스트 객체를 끼워넣어 뒤 인덱스를 밀어내므로, 앞 인덱스가 안 밀리도록 뒤에서부터 처리
+      const sorted = [...parts].sort((a, b) => b.idx - a.idx);
+      for (const { idx, from, to } of sorted) {
+        const r = entry.doc.redact(i, idx, from, to);
+        if (r.ok) { rects.push(...r.rects); continue; } // redact가 이미 검은 사각형을 얹었다
+        if (r.reason === 'charmap') { // 조각 텍스트: 문자맵 매칭이 안 되니 공백으로 지우고 사각형은 따로 덮는다
+          const obj = entry.doc.objects(i)[idx];
+          entry.doc.setText(i, idx, ' ');
+          if (obj && obj.bounds) { entry.doc.addRect(i, obj.bounds, [0, 0, 0, 255]); rects.push(obj.bounds); }
+        }
+      }
+      for (const b of (fallbackRects || [])) { entry.doc.addRect(i, b, [0, 0, 0, 255]); rects.push(b); }
+      entry.dirty = true;
+      return json(res, 200, { ok: true, rects, textLeft: entry.doc.pageText(i) });
+    }
+    if (url.pathname === '/api/pdf/text' && req.method === 'GET') {
+      const { doc } = await getPdfDoc(url.searchParams.get('name'));
+      return json(res, 200, { text: doc.pageText(+url.searchParams.get('i')) });
+    }
     if (url.pathname === '/api/pdf/save' && req.method === 'POST') {
       const { name } = JSON.parse(await body(req));
       const entry = await getPdfDoc(name);

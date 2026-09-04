@@ -58,6 +58,7 @@
 <main>
   <div class="bar"><span id="fname">파일을 선택하세요</span><span id="dirty" hidden>●</span><span class="sp"></span>
     <span id="pdfZoom" hidden><button id="zoomOut">−</button> <span id="zoomPct">150%</span> <button id="zoomIn">+</button></span>
+    <button id="rectTool" hidden>▭ 사각형 가리기</button>
     <button id="save" hidden>저장 (Ctrl+S)</button>
     <button id="saveAs" hidden>다른 이름으로 저장 (Ctrl+Shift+S)</button>
     <span id="diffbar" hidden><button id="reject">취소</button> <button id="accept" class="pri">변경 적용</button></span>
@@ -90,6 +91,7 @@
 const $ = (s) => document.querySelector(s);
 let cur = null, docText = '', savedText = '', pending = null;
 let pdfPages = [], pdfObjects = [], pdfScale = 1.5, pdfDirty = false, selectedObj = null;
+let rectMode = false, rectDrag = null;
 const dirty = () => cur && (cur.endsWith('.pdf') ? pdfDirty : docText !== savedText);
 window.isDirty = dirty;
 const showDirty = () => { $('#dirty').hidden = !dirty(); };
@@ -137,6 +139,7 @@ function removeFile(p) {
     $('#fname').textContent = '파일을 선택하세요'; $('#fname').title = '';
     $('#md').hidden = $('#pdf').hidden = $('#diff').hidden = $('#diffbar').hidden = true;
     $('#save').hidden = $('#saveAs').hidden = $('#pdfZoom').hidden = $('#dirty').hidden = true; $('#send').disabled = true;
+    $('#rectTool').hidden = true; setRectMode(false);
   }
   renderFiles();
 }
@@ -169,7 +172,8 @@ async function open(name) {
   pushRecent(name); renderFiles();
   $('#fname').textContent = basename(name); $('#fname').title = name; $('#diff').hidden = true; $('#diffbar').hidden = true;
   const isPdf = name.endsWith('.pdf');
-  $('#md').hidden = isPdf; $('#pdf').hidden = !isPdf; $('#save').hidden = false; $('#saveAs').hidden = !window.daepil; $('#pdfZoom').hidden = !isPdf;
+  setRectMode(false);
+  $('#md').hidden = isPdf; $('#pdf').hidden = !isPdf; $('#save').hidden = false; $('#saveAs').hidden = !window.daepil; $('#pdfZoom').hidden = !isPdf; $('#rectTool').hidden = !isPdf;
   if (isPdf) { document.querySelector('[value=chat]').checked = true; await renderPdfDoc(name); }
   else { docText = savedText = await (await fetch('/api/file?name=' + encodeURIComponent(name))).text(); $('#src').value = docText; preview(); }
   updateEditRadio(); showDirty(); $('#send').disabled = $('#setup').hidden === false;
@@ -245,7 +249,7 @@ function groupLines(objs) {
   }
   return lines.map((objs) => ({
     objs,
-    text: objs.map((o) => o.text).join('').replace(/ {2,}/g, ' '), // 조각 경계의 공백 중복 정리
+    text: objs.map((o) => o.text).join(''), // 조각을 그대로 이어붙임 (가리기 매핑을 위해 축약하지 않음)
     size: objs[0].size, font: objs[0].font,
     bounds: objs.reduce((b, o) => ({ x0: Math.min(b.x0, o.bounds.x0), y0: Math.min(b.y0, o.bounds.y0), x1: Math.max(b.x1, o.bounds.x1), y1: Math.max(b.y1, o.bounds.y1) }), { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity }),
   }));
@@ -256,10 +260,46 @@ function drawOverlay(wrap, i, objs, h) {
     box.className = 'pdfBox';
     box.style.left = (b.x0 * pdfScale) + 'px'; box.style.top = ((h - b.y1) * pdfScale) + 'px';
     box.style.width = ((b.x1 - b.x0) * pdfScale) + 'px'; box.style.height = ((b.y1 - b.y0) * pdfScale) + 'px';
-    box.onclick = () => selectLine(i, line, wrap, box);
+    attachBoxEvents(box, wrap, i, line);
     wrap.appendChild(box);
     return { line, box };
   });
+}
+// 클릭 = 패널 열기, 3px 넘게 끌면 드래그 이동(mouseup에 /api/pdf/move). rectMode 중에는 사각형 도구에 넘긴다.
+function attachBoxEvents(box, wrap, i, line) {
+  box.onmousedown = (e) => {
+    if (rectMode || e.button !== 0) return;
+    e.preventDefault();
+    const startX = e.clientX, startY = e.clientY, left0 = box.offsetLeft, top0 = box.offsetTop;
+    let dragged = false;
+    const onMove = (e2) => {
+      const dx = e2.clientX - startX, dy = e2.clientY - startY;
+      if (!dragged && Math.hypot(dx, dy) > 3) dragged = true;
+      if (dragged) { box.style.left = (left0 + dx) + 'px'; box.style.top = (top0 + dy) + 'px'; }
+    };
+    const onUp = async (e2) => {
+      document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp);
+      if (!dragged) return;
+      box._dragged = true;
+      const dx = (e2.clientX - startX) / pdfScale, dy = -(e2.clientY - startY) / pdfScale;
+      const idxs = line.objs.map((o) => o.idx);
+      await fetch('/api/pdf/move', { method: 'POST', body: JSON.stringify({ name: cur, i, idxs, dx, dy }) });
+      pdfDirty = true; showDirty();
+      await refreshPage(i);
+    };
+    document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp);
+  };
+  box.onclick = () => { if (box._dragged) return (box._dragged = false); selectLine(i, line, wrap, box); };
+}
+// 선택 범위 [from,to)를 줄을 이루는 조각 객체별 {idx,from,to}로 분해 (line.text는 조각을 그대로 이은 것이라 인덱스가 맞아떨어진다)
+function mapRangeToParts(objs, from, to) {
+  const parts = []; let off = 0;
+  for (const o of objs) {
+    const s = off, e = off + o.text.length; off = e;
+    const a = Math.max(from, s), b = Math.min(to, e);
+    if (a < b) parts.push({ idx: o.idx, from: a - s, to: b - s });
+  }
+  return parts;
 }
 // 방금 고친 줄이 페이지 폭을 넘거나 같은 행의 다른 줄과 겹치면 경고 (재배치는 하지 않음, 다음 편집 전까지 빨간 테두리)
 function checkOverflow(i, editedIdx, boxed) {
@@ -271,7 +311,7 @@ function checkOverflow(i, editedIdx, boxed) {
   if (tooWide || overlaps) { box.style.outline = '1px solid #e07a7a'; flash('글이 원래 자리보다 길어 오른쪽과 겹칩니다 — 줄여 보세요'); }
 }
 function selectLine(i, line, wrap, box) {
-  selectedObj = { i, objs: line.objs, text: line.text, wrap, box, size: line.size, font: line.font };
+  selectedObj = { i, objs: line.objs, text: line.text, wrap, box, size: line.size, font: line.font, bounds: line.bounds };
   updateEditRadio();
   openInlineEditor(line.text);
 }
@@ -287,12 +327,36 @@ function openInlineEditor(initialText) {
   panel.innerHTML = `<h5>이 줄 고치기</h5><div class="hint2">${fontName} · ${Math.round(size)}pt</div>`;
   const ta = document.createElement('textarea');
   ta.value = initialText; ta.rows = 2;
-  ta.oninput = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 180) + 'px'; };
   panel.appendChild(ta);
+
+  // 정렬 유지(왼/가운데/오른쪽) + 화살표 이동(0.5pt, Shift면 5pt)
+  const alignRow = document.createElement('div'); alignRow.className = 'row';
+  const alignLbl = document.createElement('span'); alignLbl.textContent = '정렬 유지:';
+  const alignSel = document.createElement('select');
+  alignSel.innerHTML = '<option value="left">왼쪽</option><option value="center">가운데</option><option value="right">오른쪽</option>';
+  alignSel.value = localStorage.getItem('daepil.align') || 'left';
+  alignSel.onchange = () => localStorage.setItem('daepil.align', alignSel.value);
+  alignRow.append(alignLbl, alignSel);
+  for (const [sym, sx, sy] of [['◀', -1, 0], ['▲', 0, 1], ['▼', 0, -1], ['▶', 1, 0]]) {
+    const b = document.createElement('button'); b.type = 'button'; b.textContent = sym;
+    b.onclick = (e) => nudge(sx * (e.shiftKey ? 5 : 0.5), sy * (e.shiftKey ? 5 : 0.5));
+    alignRow.appendChild(b);
+  }
+  panel.appendChild(alignRow);
+
   const row = document.createElement('div'); row.className = 'row';
   const okBtn = document.createElement('button'); okBtn.className = 'pri'; okBtn.textContent = '적용 (Enter)';
   const cancelBtn = document.createElement('button'); cancelBtn.textContent = '취소 (Esc)';
   row.append(okBtn, cancelBtn); panel.appendChild(row);
+
+  // 가리기: 텍스트가 원문 그대로일 때만(선택 매핑이 정확하도록)
+  const maskRow = document.createElement('div'); maskRow.className = 'row';
+  const maskSelBtn = document.createElement('button'); maskSelBtn.textContent = '선택 글자 가리기';
+  const maskLineBtn = document.createElement('button'); maskLineBtn.textContent = '줄 전체 가리기';
+  maskRow.append(maskSelBtn, maskLineBtn); panel.appendChild(maskRow);
+  const maskHint = document.createElement('div'); maskHint.className = 'tip'; maskHint.textContent = '먼저 원문 상태에서 가릴 부분을 선택하세요';
+  panel.appendChild(maskHint);
+
   const tip = document.createElement('div'); tip.className = 'tip'; tip.textContent = 'Claude에게 맡기려면 오른쪽 패널에서 "편집(선택 객체)" 모드로 지시하세요.';
   panel.appendChild(tip);
   panel.style.visibility = 'hidden';
@@ -305,17 +369,38 @@ function openInlineEditor(initialText) {
     top = Math.max(4, top);
     panel.style.left = left + 'px'; panel.style.top = top + 'px'; panel.style.visibility = 'visible';
   });
+
+  function updateMaskState() {
+    const changed = ta.value !== selectedObj.text;
+    maskSelBtn.disabled = changed; maskHint.hidden = !changed;
+  }
+  ta.oninput = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 180) + 'px'; updateMaskState(); };
+  updateMaskState();
   ta.focus(); ta.select();
+
   const close = () => { panel.remove(); box.classList.remove('editing'); };
+
   const commit = async () => {
-    const newText = ta.value || ' ', { i, objs, text } = selectedObj; // 빈 문자열은 PDFium을 죽이므로 공백으로 대체
+    const newText = ta.value || ' ', align = alignSel.value; // 빈 문자열은 PDFium을 죽이므로 공백으로 대체
+    const { i, objs, text, bounds: oldBounds } = selectedObj;
     close();
     if (newText === text) return; // 변경 없으면 그대로 둔다
+    const idxs = objs.map((o) => o.idx);
     // 줄을 이루는 조각 객체 중 첫 조각에 전체 텍스트를 넣고 나머지는 비운다 (원본 폰트 유지, idx는 편집 후에도 안정적)
     // 빈 문자열("")로 SetText하면 PDFium(WASM)이 unreachable로 죽는다 — 대신 공백 하나로 채운다 (원래도 조각 사이에 공백이 섞여 있어 시각적으로 동일)
     const edits = [{ idx: objs[0].idx, text: newText }, ...objs.slice(1).map((o) => ({ idx: o.idx, text: ' ' }))];
     const r = await (await fetch('/api/pdf/edits', { method: 'POST', body: JSON.stringify({ name: cur, i, edits }) })).json();
-    pdfDirty = true; selectedObj = null; updateEditRadio(); showDirty();
+    pdfDirty = true; showDirty();
+    if (align !== 'left') { // 새 폭을 재서 왼쪽/오른쪽 끝이 원래 자리에 오도록 이동
+      const fresh = await (await fetch(`/api/pdf/objects?name=${encodeURIComponent(cur)}&i=${i}`)).json();
+      const nb = idxs.reduce((b, ix) => {
+        const o = fresh[ix]; if (!o || !o.bounds) return b;
+        return { x0: Math.min(b.x0, o.bounds.x0), y0: Math.min(b.y0, o.bounds.y0), x1: Math.max(b.x1, o.bounds.x1), y1: Math.max(b.y1, o.bounds.y1) };
+      }, { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity });
+      const dx = align === 'center' ? ((oldBounds.x0 + oldBounds.x1) - (nb.x0 + nb.x1)) / 2 : oldBounds.x1 - nb.x1;
+      if (dx) await fetch('/api/pdf/move', { method: 'POST', body: JSON.stringify({ name: cur, i, idxs, dx, dy: 0 }) });
+    }
+    selectedObj = null; updateEditRadio();
     await refreshPage(i, objs[0].idx);
     flash(r.fallbackFont ? '원본 폰트에 없는 글자라 맑은 고딕으로 대체됨' : '저장 전 (Ctrl+S)');
   };
@@ -325,6 +410,35 @@ function openInlineEditor(initialText) {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); commit(); }
     else if (e.key === 'Escape') { e.preventDefault(); close(); }
   };
+
+  // 화살표 이동: 즉시 옮기고 같은 줄을 다시 선택해 패널을 유지한다
+  async function nudge(dx, dy) {
+    const { i, objs } = selectedObj;
+    const idxs = objs.map((o) => o.idx), savedVal = ta.value;
+    await fetch('/api/pdf/move', { method: 'POST', body: JSON.stringify({ name: cur, i, idxs, dx, dy }) });
+    pdfDirty = true; showDirty();
+    const boxed = await refreshPage(i);
+    const hit = boxed.find(({ line }) => line.objs.some((o) => idxs.includes(o.idx)));
+    if (!hit) return;
+    selectedObj = { i, objs: hit.line.objs, text: hit.line.text, wrap, box: hit.box, size: hit.line.size, font: hit.line.font, bounds: hit.line.bounds };
+    openInlineEditor(savedVal);
+  }
+
+  async function maskParts(parts, maskedText) {
+    const { i } = selectedObj;
+    const r = await (await fetch('/api/pdf/mask', { method: 'POST', body: JSON.stringify({ name: cur, i, parts }) })).json();
+    pdfDirty = true; selectedObj = null; updateEditRadio(); showDirty();
+    await refreshPage(i);
+    close();
+    const sub = (maskedText || '').trim();
+    flash(sub && r.textLeft.includes(sub) ? '⚠ 가린 글자가 텍스트에 남아 있습니다' : '가림 완료 — 텍스트에서도 제거됨');
+  }
+  maskSelBtn.onclick = () => {
+    const from = ta.selectionStart, to = ta.selectionEnd;
+    if (from === to) return flash('가릴 범위를 선택하세요');
+    maskParts(mapRangeToParts(selectedObj.objs, from, to), ta.value.slice(from, to));
+  };
+  maskLineBtn.onclick = () => maskParts(selectedObj.objs.map((o) => ({ idx: o.idx, from: 0, to: o.text.length })), selectedObj.text);
 }
 async function refreshPage(i, editedIdx) {
   const wrap = $('#pdf').children[i];
@@ -335,6 +449,7 @@ async function refreshPage(i, editedIdx) {
   const boxed = drawOverlay(wrap, i, objs, pdfPages[i].h);
   rebuildDocText();
   if (editedIdx != null) checkOverflow(i, editedIdx, boxed);
+  return boxed;
 }
 function setZoom(s) { pdfScale = Math.max(0.5, Math.min(3, s)); $('#zoomPct').textContent = Math.round(pdfScale * 100) + '%'; if (cur && cur.endsWith('.pdf')) renderPdfDoc(cur); }
 $('#zoomIn').onclick = () => setZoom(pdfScale + 0.25);
@@ -345,6 +460,52 @@ function updateEditRadio() {
   $('#editRadioLabel').textContent = isPdf ? '편집(선택 객체)' : '편집(MD)';
   if (isPdf && !selectedObj && document.querySelector('[name=mode]:checked').value === 'edit') document.querySelector('[value=chat]').checked = true;
 }
+
+// ---- 사각형 가리기(스캔본용): 드래그로 뽑은 영역에 검은 사각형을 얹는다 ----
+function setRectMode(on) {
+  rectMode = on;
+  $('#rectTool').classList.toggle('pri', on);
+  $('#pdf').style.cursor = on ? 'crosshair' : '';
+}
+$('#rectTool').onclick = () => setRectMode(!rectMode);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && rectMode) setRectMode(false); });
+$('#pdf').addEventListener('mousedown', (e) => {
+  if (!rectMode) return;
+  const wrap = e.target.closest('.pdfPage'); if (!wrap) return;
+  const i = Array.from($('#pdf').children).indexOf(wrap);
+  const r = wrap.getBoundingClientRect();
+  const box = document.createElement('div');
+  box.className = 'pdfBox'; box.style.border = '1px dashed var(--acc)'; box.style.background = '#d9775733';
+  box.style.left = (e.clientX - r.left) + 'px'; box.style.top = (e.clientY - r.top) + 'px'; box.style.width = '0px'; box.style.height = '0px';
+  wrap.appendChild(box);
+  rectDrag = { wrap, i, box, startX: e.clientX - r.left, startY: e.clientY - r.top };
+  e.preventDefault();
+});
+document.addEventListener('mousemove', (e) => {
+  if (!rectDrag) return;
+  const r = rectDrag.wrap.getBoundingClientRect();
+  const x = e.clientX - r.left, y = e.clientY - r.top;
+  const left = Math.min(x, rectDrag.startX), top = Math.min(y, rectDrag.startY);
+  rectDrag.box.style.left = left + 'px'; rectDrag.box.style.top = top + 'px';
+  rectDrag.box.style.width = Math.abs(x - rectDrag.startX) + 'px'; rectDrag.box.style.height = Math.abs(y - rectDrag.startY) + 'px';
+});
+document.addEventListener('mouseup', async (e) => {
+  if (!rectDrag) return;
+  const { wrap, i, box, startX, startY } = rectDrag; rectDrag = null;
+  const r = wrap.getBoundingClientRect();
+  const x = e.clientX - r.left, y = e.clientY - r.top;
+  const left = Math.min(x, startX), top = Math.min(y, startY), w = Math.abs(x - startX), h = Math.abs(y - startY);
+  box.remove();
+  if (w < 3 || h < 3) return; // 클릭 정도는 무시
+  const hpt = pdfPages[i].h;
+  const bounds = { x0: left / pdfScale, x1: (left + w) / pdfScale, y0: hpt - (top + h) / pdfScale, y1: hpt - top / pdfScale };
+  const overImage = (pdfObjects[i] || []).some((o) => o.type === 'image' && o.bounds &&
+    !(bounds.x1 < o.bounds.x0 || bounds.x0 > o.bounds.x1 || bounds.y1 < o.bounds.y0 || bounds.y0 > o.bounds.y1));
+  await fetch('/api/pdf/rect', { method: 'POST', body: JSON.stringify({ name: cur, i, bounds, color: [0, 0, 0, 255] }) });
+  pdfDirty = true; showDirty();
+  await refreshPage(i);
+  if (overImage) flash('이미지 위에 덮기만 했습니다 (이미지 안 글자는 남습니다)');
+});
 
 // ---- Claude 패널 ----
 function add(cls, text) { const d = document.createElement('div'); d.className = 'msg ' + cls; d.textContent = text; $('#log').appendChild(d); $('#log').scrollTop = 1e9; return d; }
