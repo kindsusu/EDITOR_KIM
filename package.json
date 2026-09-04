@@ -1,13 +1,13 @@
 {
   "name": "editor-kim",
   "productName": "EDITOR_KIM",
-  "version": "0.4.1",
-  "description": "Local PDF & Markdown editor with true PDF text editing and redaction — PDFium (WASM) + Claude Code, no API key",
+  "version": "0.5.0",
+  "description": "Local PDF & Markdown editor with true text editing and redaction — Claude Code or ChatGPT/Codex, no API key",
   "main": "app/main.js",
   "scripts": {
     "start": "electron .",
     "serve": "node app/server.js",
-    "test": "node app/pdf-engine.test.js",
+    "test": "node app/pdf-engine.test.js && node app/ai-providers.test.js",
     "dist": "electron-builder --win",
     "md2pdf": "electron tools/md2pdf.js",
     "assets": "node tools/demo-assets.js",
@@ -17,12 +17,46 @@
     "appId": "com.kindsusu.editorkim",
     "productName": "EDITOR_KIM",
     "artifactName": "EDITOR_KIM-${version}-${arch}-${os}.${ext}",
-    "directories": { "output": "dist", "buildResources": "build" },
-    "files": ["app/**", "package.json", "workspace/sample.pdf", "workspace/회의록_초안.md", "workspace/회의록_초안.pdf", "LICENSE"],
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "app/**",
+      "package.json",
+      "workspace/sample.pdf",
+      "workspace/회의록_초안.md",
+      "workspace/회의록_초안.pdf",
+      "LICENSE"
+    ],
     "asar": true,
-    "win": { "target": [{ "target": "portable", "arch": ["x64"] }, { "target": "nsis", "arch": ["x64"] }], "icon": "build/icon.png" },
-    "portable": { "artifactName": "EDITOR_KIM-${version}-portable.exe" },
-    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true, "perMachine": false, "artifactName": "EDITOR_KIM-${version}-setup.exe", "shortcutName": "EDITOR_KIM" }
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png"
+    },
+    "portable": {
+      "artifactName": "EDITOR_KIM-${version}-portable.exe"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "artifactName": "EDITOR_KIM-${version}-setup.exe",
+      "shortcutName": "EDITOR_KIM"
+    }
   },
   "repository": {
     "type": "git",
@@ -38,7 +72,9 @@
     "pdfium",
     "electron",
     "markdown",
-    "claude-code"
+    "claude-code",
+    "codex",
+    "chatgpt"
   ],
   "engines": {
     "node": ">=22"
@@ -51,6 +87,8 @@
   },
   "dependencies": {
     "@embedpdf/pdfium": "^2.15.0",
-    "fontkit": "^2.0.4"
+    "dompurify": "^3.4.13",
+    "fontkit": "^2.0.4",
+    "marked": "^15.0.7"
   }
 }

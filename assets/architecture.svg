@@ -8,7 +8,7 @@
 
   <!-- machine boundary -->
   <rect x="24" y="28" width="760" height="324" rx="14" fill="none" stroke="#33333b" stroke-dasharray="6 6"/>
-  <text x="40" y="54" font-size="13" fill="#9a9aa6">Your machine — documents never leave it</text>
+  <text x="40" y="54" font-size="13" fill="#9a9aa6">Your machine — PDF editing stays local</text>
 
   <!-- Electron window -->
   <g transform="translate(48 84)">
@@ -17,7 +17,7 @@
     <text x="16" y="54" font-size="12" fill="#9a9aa6">app/index.html</text>
     <text x="16" y="74" font-size="12" fill="#e8e8ec">PDF pages as PNG</text>
     <text x="16" y="92" font-size="12" fill="#e8e8ec">clickable text lines</text>
-    <text x="16" y="110" font-size="12" fill="#e8e8ec">Markdown + Claude panel</text>
+    <text x="16" y="110" font-size="12" fill="#e8e8ec">Markdown + AI panel</text>
   </g>
 
   <!-- server -->
@@ -27,7 +27,7 @@
     <text x="16" y="54" font-size="12" fill="#9a9aa6">app/server.js · Node built-ins</text>
     <text x="16" y="74" font-size="12" fill="#e8e8ec">file I/O · PDF endpoints</text>
     <text x="16" y="92" font-size="12" fill="#e8e8ec">undo snapshots</text>
-    <text x="16" y="110" font-size="12" fill="#e8e8ec">Claude Code check</text>
+    <text x="16" y="110" font-size="12" fill="#e8e8ec">AI provider routing</text>
   </g>
 
   <!-- engine -->
@@ -39,14 +39,14 @@
     <text x="16" y="88" font-size="12" fill="#e8e8ec">redact · move · save</text>
   </g>
 
-  <!-- claude cli -->
+  <!-- AI CLIs -->
   <g transform="translate(580 84)">
     <rect width="180" height="120" rx="10" fill="#232329" stroke="#33333b"/>
-    <text x="16" y="30" font-size="15" font-weight="700" fill="#e8e8ec">claude -p</text>
-    <text x="16" y="54" font-size="12" fill="#9a9aa6">Claude Code CLI</text>
-    <text x="16" y="74" font-size="12" fill="#e8e8ec">your own login</text>
+    <text x="16" y="30" font-size="15" font-weight="700" fill="#e8e8ec">AI provider</text>
+    <text x="16" y="54" font-size="12" fill="#9a9aa6">Claude Code · Codex</text>
+    <text x="16" y="74" font-size="12" fill="#e8e8ec">subscription login</text>
     <text x="16" y="92" font-size="12" fill="#e8e8ec">prompt on stdin</text>
-    <text x="16" y="110" font-size="12" fill="#e8e8ec">stream-json out</text>
+    <text x="16" y="110" font-size="12" fill="#e8e8ec">JSONL stream out</text>
   </g>
 
   <!-- fonts -->
@@ -74,8 +74,8 @@
   <!-- outside -->
   <g transform="translate(830 84)">
     <rect width="240" height="120" rx="10" fill="#1b1b1f" stroke="#33333b"/>
-    <text x="16" y="30" font-size="15" font-weight="700" fill="#e8e8ec">Anthropic</text>
-    <text x="16" y="54" font-size="12" fill="#9a9aa6">only what Claude Code sends</text>
+    <text x="16" y="30" font-size="15" font-weight="700" fill="#e8e8ec">Anthropic / OpenAI</text>
+    <text x="16" y="54" font-size="12" fill="#9a9aa6">only what the selected AI sends</text>
     <text x="16" y="76" font-size="12" fill="#e8e8ec">the prompt and the document text</text>
     <text x="16" y="94" font-size="12" fill="#e8e8ec">you chose to ask about</text>
     <text x="16" y="112" font-size="12" fill="#d97757">no key or token stored by EDITOR_KIM</text>

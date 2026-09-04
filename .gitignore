@@ -1,5 +1,6 @@
 node_modules/
 dist/
+tmp/
 workspace/*
 !workspace/sample.pdf
 !workspace/회의록_초안.md

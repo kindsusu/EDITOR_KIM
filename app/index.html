@@ -3,12 +3,15 @@
 <head>
 <meta charset="utf-8">
 <title>EDITOR_KIM</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/15.0.7/marked.min.js"></script>
+<script src="/vendor/marked.js"></script>
+<script src="/vendor/purify.js"></script>
 <style>
   :root{--bg:#1b1b1f;--panel:#232329;--line:#33333b;--fg:#e8e8ec;--mut:#9a9aa6;--acc:#d97757;--add:#1f4d2e;--del:#5a2323}
   *{box-sizing:border-box}body{margin:0;height:100vh;display:grid;grid-template-columns:220px 1fr 380px;grid-template-rows:40px minmax(0,1fr);font:13px/1.5 system-ui,'Malgun Gothic',sans-serif;background:var(--bg);color:var(--fg)}
   body.ai-collapsed{grid-template-columns:220px 1fr 0}body.ai-collapsed .ai{display:none}
-  #aiToggle{background:#2e2e37}#aiToggle.on{background:var(--acc);border-color:var(--acc);color:#fff}
+  #modelPicker{min-width:145px;max-width:260px}#aiToggle.on{background:var(--acc);border-color:var(--acc);color:#fff}
+  #aiRailToggle{position:fixed;z-index:8;right:380px;top:50%;width:26px;height:72px;padding:0;border-radius:8px 0 0 8px;transform:translateY(-50%);background:var(--panel);border-right:0;font-size:20px;box-shadow:-2px 2px 8px #0005}
+  body.ai-collapsed #aiRailToggle{right:0}#aiRailToggle:hover{background:#3a3a45}
   header{grid-column:1/-1;display:flex;align-items:center;gap:12px;padding:0 14px;border-bottom:1px solid var(--line);background:var(--panel)}
   header b{color:var(--acc);font-size:15px}header span{color:var(--mut)}header .sp{flex:1}
   aside{border-right:1px solid var(--line);background:var(--panel);padding:8px;overflow:auto;display:flex;flex-direction:column;gap:4px;min-height:0}
@@ -54,8 +57,8 @@
   [hidden]{display:none!important}
 </style>
 </head>
-<body>
-<header><b>EDITOR_KIM</b><span id="ver" style="color:var(--acc);opacity:.8"></span><span>PDF · Markdown 편집기</span><span class="sp"></span><span id="status">Claude Code 로그인 사용 · API 키 없음</span><button id="aiToggle" title="Claude 패널 열기/닫기 (Ctrl+J)">💬 Claude</button></header>
+<body class="ai-collapsed">
+<header><b>EDITOR_KIM</b><span id="ver" style="color:var(--acc);opacity:.8"></span><span>PDF · Markdown 편집기</span><span class="sp"></span><span id="status">AI 상태 확인 중…</span><select id="modelPicker" title="Claude 또는 ChatGPT(Codex) 모델 선택"><option value="">Select Model</option></select><button id="aiToggle" aria-controls="aiPanel" aria-expanded="false" title="AI 채팅 패널 열기/닫기 (Ctrl+J)">💬 채팅</button></header>
 <aside>
   <button id="openFiles" hidden>📂 파일 열기</button>
   <button id="openFolder" hidden>📁 폴더 열기</button>
@@ -78,11 +81,11 @@
   <div class="pdf" id="pdf" hidden></div>
   <div class="diff" id="diff" hidden></div>
 </main>
-<section class="ai">
-  <div class="bar"><b>Claude</b><span class="sp"></span><button id="newChat" title="이 문서의 대화 기록을 지우고 새로 시작">새 대화</button>
-    <select id="model"><option value="sonnet">Sonnet 5 (기본)</option><option value="opus">Opus 5</option></select></div>
+<button id="aiRailToggle" type="button" aria-controls="aiPanel" aria-expanded="false" title="AI 패널 펼치기">‹</button>
+<section class="ai" id="aiPanel">
+  <div class="bar"><b id="aiTitle">AI</b><span class="sp"></span><button id="newChat" title="이 문서의 대화 기록을 지우고 새로 시작">새 대화</button><button id="aiClose" title="AI 패널 닫기 (Ctrl+J)">×</button></div>
   <div class="log" id="log"><div class="msg bot">문서를 열고 질문하거나, Markdown이면 <b>편집 모드</b>로 수정을 지시하세요.</div></div>
-  <div class="hint">비용 표시는 API 환산액입니다. 구독으로 호출되므로 실제 청구는 없습니다.</div>
+  <div class="hint" id="aiHint">구독 로그인으로 호출하며 API 키를 저장하지 않습니다.</div>
   <div class="ask">
     <textarea id="q" placeholder="예) 2문단을 더 격식 있게 고쳐줘 / 이 문서 3줄 요약  (Ctrl+Enter 전송)"></textarea>
     <div class="row"><label><input type="radio" name="mode" value="chat" checked>질문</label><label><input type="radio" name="mode" value="edit" id="editRadio"><span id="editRadioLabel">편집(MD)</span></label><span class="sp"></span><button id="send" class="pri">보내기</button></div>
@@ -90,48 +93,165 @@
 </section>
 
 <div id="setup" hidden><div class="card">
-  <h2>Claude Code 준비</h2>
-  <p>EDITOR_KIM은 API 키 대신 <b>Claude Code</b>(Claude 구독)로 AI를 호출합니다. Pro·Max·Team 계정이 필요합니다.</p>
+  <h2 id="setupTitle">AI 모델 준비</h2>
+  <p>API 키 대신 PC에 로그인된 구독 계정을 사용합니다.</p>
+  <select id="setupProvider"><option value="claude">Claude Code</option><option value="codex">ChatGPT (Codex)</option></select>
   <div class="st" id="setupStatus">확인 중…</div>
   <p id="setupHelp"></p>
-  <div class="row"><button id="btnInstall" class="pri" hidden>1. Claude Code 설치</button><button id="btnLogin" class="pri" hidden>2. 로그인</button><button id="btnRecheck">다시 확인</button><span class="sp"></span><button id="btnSkip">AI 없이 계속</button></div>
-  <p style="font-size:11px">설치·로그인은 별도 PowerShell 창에서 진행됩니다. 관리자 권한은 필요 없습니다. 창이 끝나면 [다시 확인]을 누르세요.</p>
+  <div class="row"><button id="btnInstall" class="pri" hidden>1. 설치</button><button id="btnLogin" class="pri" hidden>2. 로그인</button><button id="btnRecheck">다시 확인</button><span class="sp"></span><button id="btnSkip">닫기</button></div>
+  <p style="font-size:11px">설치는 Windows 공식 패키지 관리자(WinGet)로 진행됩니다. PowerShell이나 관리자 권한은 필요 없습니다.</p>
 </div></div>
 
 <script type="module">
 const $ = (s) => document.querySelector(s);
-// Claude 패널은 실행할 때마다 접힌 상태로 시작. 버튼 또는 Ctrl+J로 열고 닫는다 (실행 중에만 유지, 다음 실행에 이어지지 않음)
-function setAiOpen(open) { document.body.classList.toggle('ai-collapsed', !open); $('#aiToggle').classList.toggle('on', open); }
+// AI 패널은 실행할 때마다 접힌 상태로 시작. 상단 버튼·옆 탭·Ctrl+J로 언제든 토글한다.
+function setAiOpen(open) {
+  document.body.classList.toggle('ai-collapsed', !open);
+  $('#aiToggle').classList.toggle('on', open);
+  $('#aiToggle').setAttribute('aria-expanded', String(open));
+  $('#aiRailToggle').setAttribute('aria-expanded', String(open));
+  $('#aiRailToggle').textContent = open ? '›' : '‹';
+  $('#aiRailToggle').title = open ? 'AI 패널 접기' : 'AI 패널 펼치기';
+}
 setAiOpen(false); localStorage.removeItem('editorkim.ai');
 $('#aiToggle').onclick = () => setAiOpen(document.body.classList.contains('ai-collapsed'));
+$('#aiRailToggle').onclick = () => setAiOpen(document.body.classList.contains('ai-collapsed'));
+$('#aiClose').onclick = () => setAiOpen(false);
 document.addEventListener('keydown', (e) => { if (e.ctrlKey && e.key.toLowerCase() === 'j') { e.preventDefault(); $('#aiToggle').click(); } });
 let cur = null, docText = '', savedText = '', pending = null;
-let pdfPages = [], pdfObjects = [], pdfScale = 1.5, pdfDirty = false, selectedObj = null, selectedMask = null;
+let pdfPages = [], pdfObjects = [], pdfScale = 1.5, pdfDirty = false, selectedObj = null, selectedMask = null, pdfRenderGeneration = 0;
 let rectMode = false, rectDrag = null;
 let pdfStacks = {}; // ponytail: name → {undoLeft,redoLeft} 클라이언트 캐시(서버가 실제 정본). 문서 전환 시 버튼 상태 복원용
+let aiHealth = null, activeAi = null, setupTarget = 'codex', setupExplicit = false, setupBusy = false, loginPoll = 0;
 const dirty = () => cur && (cur.endsWith('.pdf') ? pdfDirty : docText !== savedText);
 window.isDirty = dirty;
 const showDirty = () => { $('#dirty').hidden = !dirty(); };
 
-// ---- Claude Code 설치·로그인 검사 ----
+// ---- AI 공급자·모델 선택과 설치·로그인 검사 ----
+const providerName = (provider) => provider === 'codex' ? 'ChatGPT (Codex)' : 'Claude Code';
+const choiceValue = (provider, model) => `${provider}:${model}`;
+function readChoice(value) {
+  const at = value.indexOf(':');
+  return at < 0 ? null : { provider: value.slice(0, at), model: value.slice(at + 1) };
+}
+function activeProvider() { return activeAi && aiHealth?.providers?.[activeAi.provider]; }
+function syncAiState() {
+  const state = activeProvider(), ready = !!state?.loggedIn;
+  $('#send').disabled = !cur || !ready;
+  if (!activeAi) { $('#aiTitle').textContent = 'AI'; $('#status').textContent = 'Select Model에서 AI를 선택하세요'; return; }
+  const model = state?.models?.find((item) => item.id === activeAi.model);
+  $('#aiTitle').textContent = `${providerName(activeAi.provider)} · ${model?.name || activeAi.model || '기본 모델'}`;
+  $('#aiHint').textContent = activeAi.provider === 'claude'
+    ? '비용은 API 환산액입니다. Claude 구독으로 호출하며 API 키를 저장하지 않습니다.'
+    : 'PC의 ChatGPT 로그인과 Codex 사용량을 이용하며 API 키를 저장하지 않습니다.';
+  $('#status').textContent = ready
+    ? `${providerName(activeAi.provider)} ${state.version || ''} · ${state.authMethod || '구독'} 로그인 · API 키 없음`
+    : `${providerName(activeAi.provider)} 설정 필요`;
+}
+function renderModelPicker(preferredProvider) {
+  const picker = $('#modelPicker'), saved = localStorage.getItem('editorkim.aiChoice');
+  picker.innerHTML = '<option value="">Select Model</option>';
+  const available = [];
+  for (const provider of ['claude', 'codex']) {
+    const state = aiHealth?.providers?.[provider] || { models: [] };
+    const group = document.createElement('optgroup'); group.label = providerName(provider);
+    if (state.loggedIn) {
+      const models = state.models?.length ? state.models : [{ id: '', name: '기본 모델', isDefault: true }];
+      for (const model of models) {
+        const option = document.createElement('option'); option.value = choiceValue(provider, model.id);
+        option.textContent = `${model.name}${model.isDefault ? ' (기본)' : ''}`; group.appendChild(option); available.push({ provider, model });
+      }
+    } else {
+      const option = document.createElement('option'); option.value = `setup:${provider}`;
+      option.textContent = state.installed ? '로그인 설정…' : '설치 및 로그인 설정…'; group.appendChild(option);
+    }
+    picker.appendChild(group);
+  }
+  const values = [...picker.options].map((option) => option.value);
+  let selected = preferredProvider && available.find((item) => item.provider === preferredProvider && item.model.isDefault);
+  selected ||= values.includes(saved) ? { value: saved } : null;
+  selected ||= available.find((item) => item.provider === 'claude' && item.model.isDefault);
+  selected ||= available.find((item) => item.model.isDefault) || available[0];
+  const value = selected?.value || (selected ? choiceValue(selected.provider, selected.model.id) : '');
+  picker.value = value; activeAi = value ? readChoice(value) : null;
+  if (value) localStorage.setItem('editorkim.aiChoice', value);
+  syncAiState();
+}
+function renderSetup() {
+  const state = aiHealth?.providers?.[setupTarget] || {};
+  $('#setupStatus').classList.remove('bad');
+  $('#setupProvider').value = setupTarget; $('#setupTitle').textContent = `${providerName(setupTarget)} 준비`;
+  $('#btnInstall').textContent = `1. ${setupTarget === 'codex' ? 'Codex' : 'Claude Code'} 설치`;
+  $('#btnLogin').textContent = `2. ${setupTarget === 'codex' ? 'ChatGPT' : 'Claude'} 로그인`;
+  $('#btnInstall').hidden = !!state.installed; $('#btnLogin').hidden = !state.installed || !!state.loggedIn;
+  $('#btnInstall').disabled = $('#btnLogin').disabled = $('#btnRecheck').disabled = setupBusy;
+  $('#setupStatus').innerHTML = state.installed
+    ? `<span class="ok">✔ 설치됨</span> ${state.version || ''}<br>${state.loggedIn ? `<span class="ok">✔ 로그인됨</span> (${state.authMethod || '구독'})` : '<span class="bad">✘ 로그인 안 됨</span>'}`
+    : `<span class="bad">✘ ${providerName(setupTarget)}가 설치되어 있지 않습니다</span>`;
+  $('#setupHelp').textContent = !state.installed ? '[설치]를 누르면 WinGet이 공식 패키지를 설치합니다.'
+    : !state.loggedIn ? (setupTarget === 'codex'
+      ? '[로그인]을 누른 뒤 브라우저에서 ChatGPT 구독 계정으로 로그인하세요.'
+      : '[로그인]을 누른 뒤 브라우저에서 Claude 구독 계정으로 로그인하세요.') : '사용할 준비가 됐습니다.';
+}
+function showSetup(provider, explicit = true) { setupTarget = provider; setupExplicit = explicit; renderSetup(); $('#setup').hidden = false; }
 async function checkHealth() {
   $('#setupStatus').textContent = '확인 중…';
-  const h = await (await fetch('/api/health')).json();
-  if (h.appVersion) { $('#ver').textContent = 'v' + h.appVersion; document.title = `EDITOR_KIM v${h.appVersion}`; }
-  const ok = h.installed && h.loggedIn;
-  $('#setup').hidden = ok;
-  $('#btnInstall').hidden = h.installed; $('#btnLogin').hidden = !h.installed || h.loggedIn;
-  $('#setupStatus').innerHTML = h.installed
-    ? `<span class="ok">✔ 설치됨</span> ${h.version}<br>${h.loggedIn ? `<span class="ok">✔ 로그인됨</span> (${h.authMethod})` : '<span class="bad">✘ 로그인 안 됨</span>'}`
-    : '<span class="bad">✘ Claude Code가 설치되어 있지 않습니다</span>';
-  $('#setupHelp').textContent = !h.installed ? '아래 [설치]를 누르면 공식 설치 스크립트가 실행됩니다. 끝나면 [다시 확인] 후 로그인하세요.' : !h.loggedIn ? '[로그인]을 누르면 브라우저가 열립니다. Claude 계정으로 로그인한 뒤 [다시 확인]을 누르세요.' : '';
-  $('#status').textContent = ok ? `Claude Code ${h.version} · ${h.authMethod} 로그인 · API 키 없음` : 'AI 사용 불가 (Claude Code 미설정)';
-  $('#send').disabled = !ok;
+  aiHealth = await (await fetch('/api/health')).json();
+  if (aiHealth.appVersion) { $('#ver').textContent = 'v' + aiHealth.appVersion; document.title = `EDITOR_KIM v${aiHealth.appVersion}`; }
+  const justReady = setupExplicit && aiHealth.providers?.[setupTarget]?.loggedIn;
+  renderModelPicker(justReady ? setupTarget : null);
+  const anyReady = Object.values(aiHealth.providers || {}).some((state) => state.loggedIn);
+  if (justReady) { setupExplicit = false; $('#setup').hidden = true; setAiOpen(true); }
+  else if (setupExplicit) renderSetup();
+  else if (anyReady) $('#setup').hidden = true;
+  else showSetup('codex', false);
 }
-$('#btnInstall').onclick = () => fetch('/api/setup/install');
-$('#btnLogin').onclick = () => fetch('/api/setup/login');
+$('#modelPicker').onchange = async () => {
+  const value = $('#modelPicker').value;
+  if (value.startsWith('setup:')) { showSetup(value.slice(6)); renderModelPicker(); return; }
+  const next = readChoice(value); if (!next) return;
+  const changed = !activeAi || activeAi.provider !== next.provider || activeAi.model !== next.model;
+  activeAi = next; localStorage.setItem('editorkim.aiChoice', value); syncAiState(); setAiOpen(true);
+  if (changed) { $('#log').innerHTML = ''; add('bot', `${$('#aiTitle').textContent}로 새 대화를 시작합니다.`); }
+};
+$('#setupProvider').onchange = () => { loginPoll++; setupTarget = $('#setupProvider').value; renderSetup(); };
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+async function waitForLogin(provider) {
+  const token = ++loginPoll;
+  for (let i = 0; i < 150 && token === loginPoll && !$('#setup').hidden && setupTarget === provider; i++) {
+    await delay(2000);
+    await checkHealth();
+    if (aiHealth?.providers?.[provider]?.loggedIn) return;
+    $('#setupStatus').innerHTML = '<span class="ok">브라우저 로그인을 기다리는 중…</span>';
+  }
+  if (token === loginPoll && !$('#setup').hidden) $('#setupHelp').textContent = '로그인이 끝났다면 [다시 확인]을 누르세요.';
+}
+async function setupAction(action) {
+  if (setupBusy) return;
+  const provider = setupTarget;
+  setupBusy = true; renderSetup();
+  $('#setupStatus').innerHTML = `<span class="ok">${action === 'install' ? '공식 패키지를 설치하는 중…' : '브라우저 로그인을 여는 중…'}</span>`;
+  try {
+    const response = await fetch('/api/setup', { method: 'POST', body: JSON.stringify({ provider, action }) });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    if (action === 'install') await checkHealth();
+    else await waitForLogin(provider);
+  } catch (error) {
+    $('#setupStatus').textContent = `실패: ${String(error.message || error)}`;
+    $('#setupStatus').classList.add('bad');
+    $('#setupHelp').textContent = '보안 예외를 허용하지 말고, 네트워크 또는 회사 PC의 설치 정책을 확인해 주세요.';
+  } finally {
+    setupBusy = false;
+    if (!$('#setup').hidden) {
+      $('#btnInstall').disabled = $('#btnLogin').disabled = $('#btnRecheck').disabled = false;
+    }
+  }
+}
+$('#btnInstall').onclick = () => setupAction('install');
+$('#btnLogin').onclick = () => setupAction('login');
 $('#btnRecheck').onclick = checkHealth;
-$('#btnSkip').onclick = () => { $('#setup').hidden = true; };
+$('#btnSkip').onclick = () => { loginPoll++; setupExplicit = false; $('#setup').hidden = true; };
 
 // ---- 열어 둔 파일 목록 (절대경로, localStorage에 저장) ----
 let files = [];
@@ -150,11 +270,21 @@ function removeRecentEntry(p) {
   localStorage.setItem('editorkim.recent', JSON.stringify(loadRecent().filter((x) => x !== p)));
   renderRecent();
 }
+function fileEntry(pathValue, recent = false) {
+  const item = document.createElement('div'); item.className = 'f';
+  item.dataset[recent ? 'r' : 'f'] = pathValue; item.title = pathValue;
+  item.append(document.createTextNode(`${pathValue.endsWith('.pdf') ? '📄' : '📝'} ${basename(pathValue)}`));
+  if (!recent) {
+    const close = document.createElement('span'); close.className = 'x'; close.dataset.x = pathValue;
+    close.title = '목록에서 제거'; close.textContent = '×'; item.appendChild(close);
+  }
+  return item;
+}
 function renderRecent() {
   if (!window.editorKim) return;
   const r = loadRecent();
   $('#recentDetails').hidden = !r.length;
-  $('#recentList').innerHTML = r.map((p) => `<div class="f" data-r="${p}" title="${p}">${p.endsWith('.pdf') ? '📄' : '📝'} ${basename(p)}</div>`).join('');
+  $('#recentList').replaceChildren(...r.map((p) => fileEntry(p, true)));
 }
 $('#recentList').onclick = (e) => { const el = e.target.closest('[data-r]'); if (el) openRecent(el.dataset.r); };
 // 서버는 고칠 수 없어 존재 확인은 실제 fetch로 한다. /api/file은 없는 파일이면 헤더만 쓰고 스트림 에러로 응답이 끝나지 않을 수 있어 타임아웃을 둔다.
@@ -170,7 +300,9 @@ async function openRecent(p) {
   else { flash('파일을 찾을 수 없습니다'); removeRecentEntry(p); }
 }
 function renderFiles() {
-  $('#files').innerHTML = files.map((f) => `<div class="f${f === cur ? ' on' : ''}" data-f="${f}" title="${f}">${f.endsWith('.pdf') ? '📄' : '📝'} ${basename(f)}<span class="x" data-x="${f}" title="목록에서 제거">×</span></div>`).join('') || '<div class="f" style="color:var(--mut)">.md / .pdf 파일 없음</div>';
+  const entries = files.map((f) => { const item = fileEntry(f); item.classList.toggle('on', f === cur); return item; });
+  if (!entries.length) { const empty = document.createElement('div'); empty.className = 'f'; empty.style.color = 'var(--mut)'; empty.textContent = '.md / .pdf 파일 없음'; entries.push(empty); }
+  $('#files').replaceChildren(...entries);
 }
 function addFiles(paths) {
   if (!paths || !paths.length) return;
@@ -214,6 +346,7 @@ $('#files').onclick = (e) => {
 async function open(name) {
   if (dirty() && !confirm('저장하지 않은 변경이 있습니다. 버리고 다른 파일을 열까요?')) return;
   if (cur && cur.endsWith('.pdf') && pdfDirty) { await fetch('/api/pdf/close', { method: 'POST', body: JSON.stringify({ name: cur }) }); delete pdfStacks[cur]; }
+  pdfRenderGeneration++; // 이전 문서·확대 렌더가 늦게 끝나도 새 화면을 건드리지 못하게 무효화
   cur = name; pending = null; docText = ''; selectedObj = null; selectedMask = null; pdfDirty = false; $('#send').disabled = true;
   pushRecent(name); renderFiles();
   $('#fname').textContent = basename(name); $('#fname').title = name; $('#diff').hidden = true; $('#diffbar').hidden = true;
@@ -225,9 +358,9 @@ async function open(name) {
   setUndoRedoState(st.undoLeft, st.redoLeft);
   if (isPdf) { document.querySelector('[value=chat]').checked = true; await renderPdfDoc(name); }
   else { docText = savedText = await (await fetch('/api/file?name=' + encodeURIComponent(name))).text(); $('#src').value = docText; preview(); }
-  updateEditRadio(); showDirty(); $('#send').disabled = $('#setup').hidden === false;
+  updateEditRadio(); showDirty(); syncAiState();
 }
-function preview() { $('#prev').innerHTML = marked.parse($('#src').value); }
+function preview() { $('#prev').innerHTML = DOMPurify.sanitize(marked.parse($('#src').value)); }
 $('#src').oninput = () => { docText = $('#src').value; preview(); showDirty(); };
 async function save() {
   if (!cur) return;
@@ -304,21 +437,27 @@ document.addEventListener('keydown', (e) => {
 });
 
 // ---- PDF 뷰(PDFium 서버 렌더) ----
-function pageUrl(name, i) { return `/api/pdf/page?name=${encodeURIComponent(name)}&i=${i}&scale=${pdfScale}&t=${Date.now()}`; }
+function pageUrl(name, i, scale = pdfScale) { return `/api/pdf/page?name=${encodeURIComponent(name)}&i=${i}&scale=${scale}&t=${Date.now()}`; }
 async function renderPdfDoc(name) {
+  const renderGeneration = ++pdfRenderGeneration, scale = pdfScale;
   $('#pdf').innerHTML = '';
   const info = await (await fetch('/api/pdf/info?name=' + encodeURIComponent(name))).json();
-  pdfPages = info.pages; pdfObjects = [];
-  for (let i = 0; i < pdfPages.length; i++) {
-    const { w, h } = pdfPages[i];
+  if (renderGeneration !== pdfRenderGeneration || cur !== name) return;
+  const pages = info.pages, objects = [];
+  pdfPages = pages; pdfObjects = objects;
+  for (let i = 0; i < pages.length; i++) {
+    if (renderGeneration !== pdfRenderGeneration || cur !== name) return;
+    const { w, h } = pages[i];
     const wrap = document.createElement('div');
-    wrap.className = 'pdfPage'; wrap.style.width = (w * pdfScale) + 'px'; wrap.style.height = (h * pdfScale) + 'px';
-    const img = document.createElement('img'); img.src = pageUrl(name, i);
+    wrap.className = 'pdfPage'; wrap.style.width = (w * scale) + 'px'; wrap.style.height = (h * scale) + 'px';
+    const img = document.createElement('img'); img.src = pageUrl(name, i, scale);
     wrap.appendChild(img); $('#pdf').appendChild(wrap);
     const objs = await (await fetch(`/api/pdf/objects?name=${encodeURIComponent(name)}&i=${i}`)).json();
-    pdfObjects[i] = objs;
+    if (renderGeneration !== pdfRenderGeneration || cur !== name) return;
+    objects[i] = objs;
     drawOverlay(wrap, i, objs, h);
   }
+  if (renderGeneration !== pdfRenderGeneration || cur !== name) return;
   rebuildDocText();
   // 투명 글자(그림 위 검색용 텍스트)가 있으면 열 때 한 번만 알린다
   const hiddenCount = pdfObjects.reduce((n, objs) => n + objs.filter((o) => o.type === 'text' && o.hidden).length, 0);
@@ -685,10 +824,13 @@ function openInlineEditor(initialText) {
   maskLineBtn.onclick = () => maskParts(selectedObj.objs.map((o) => ({ idx: o.idx, from: 0, to: o.text.length })), selectedObj.text);
 }
 async function refreshPage(i, editedIdx) {
+  const renderGeneration = pdfRenderGeneration, name = cur;
   clearMulti(); // 상자를 다시 그리므로 다중 선택은 해제
   const wrap = $('#pdf').children[i];
-  wrap.querySelector('img').src = pageUrl(cur, i);
-  const objs = await (await fetch(`/api/pdf/objects?name=${encodeURIComponent(cur)}&i=${i}`)).json();
+  if (!wrap) return [];
+  wrap.querySelector('img').src = pageUrl(name, i);
+  const objs = await (await fetch(`/api/pdf/objects?name=${encodeURIComponent(name)}&i=${i}`)).json();
+  if (renderGeneration !== pdfRenderGeneration || cur !== name || !wrap.isConnected) return [];
   pdfObjects[i] = objs;
   wrap.querySelectorAll('.pdfBox, .pdfEditor').forEach((el) => el.remove());
   const boxed = drawOverlay(wrap, i, objs, pdfPages[i].h);
@@ -696,7 +838,7 @@ async function refreshPage(i, editedIdx) {
   if (editedIdx != null) checkOverflow(i, editedIdx, boxed);
   return boxed;
 }
-function setZoom(s) { pdfScale = Math.max(0.5, Math.min(3, s)); $('#zoomPct').textContent = Math.round(pdfScale * 100) + '%'; if (cur && cur.endsWith('.pdf')) renderPdfDoc(cur); }
+function setZoom(s) { pdfScale = Math.max(0.5, Math.min(3, s)); $('#zoomPct').textContent = Math.round(pdfScale * 100) + '%'; if (cur && cur.endsWith('.pdf')) void renderPdfDoc(cur); }
 $('#zoomIn').onclick = () => setZoom(pdfScale + 0.25);
 $('#zoomOut').onclick = () => setZoom(pdfScale - 0.25);
 function updateEditRadio() {
@@ -757,40 +899,46 @@ document.addEventListener('mouseup', async (e) => {
   if (overImage) flash('이미지 위에 덮기만 했습니다 (이미지 안 글자는 남습니다)');
 });
 
-// ---- Claude 패널 ----
+// ---- AI 패널 ----
 function add(cls, text) { const d = document.createElement('div'); d.className = 'msg ' + cls; d.textContent = text; $('#log').appendChild(d); $('#log').scrollTop = 1e9; return d; }
 function flash(t, ms = 1500) { const s = $('#status').textContent; $('#status').textContent = t; setTimeout(() => ($('#status').textContent = s), ms); }
-$('#newChat').onclick = async () => { if (cur) await fetch('/api/session/reset', { method: 'POST', body: JSON.stringify({ name: cur }) }); $('#log').innerHTML = ''; add('bot', '새 대화를 시작합니다.'); };
+$('#newChat').onclick = async () => { if (cur && activeAi) await fetch('/api/session/reset', { method: 'POST', body: JSON.stringify({ name: cur, provider: activeAi.provider }) }); $('#log').innerHTML = ''; add('bot', '새 대화를 시작합니다.'); };
 $('#q').addEventListener('keydown', (e) => { if (e.ctrlKey && e.key === 'Enter') $('#send').click(); });
 $('#send').onclick = async () => {
-  const q = $('#q').value.trim(); if (!q || !cur) return;
+  const q = $('#q').value.trim(); if (!q || !cur || !activeAi) return;
   let mode = document.querySelector('[name=mode]:checked').value;
   const isPdf = cur.endsWith('.pdf');
   if (mode === 'edit' && isPdf) mode = 'editText'; // PDF에서는 선택 객체 텍스트만 고침
   const sendDoc = mode === 'editText' && selectedObj ? selectedObj.text : docText;
   add('me', (mode !== 'chat' ? '✏️ ' : '') + q); $('#q').value = ''; $('#send').disabled = true;
   const bot = add('bot', mode === 'chat' ? '…' : '문서를 수정하는 중…'); let out = '';
-  const r = await fetch('/api/chat', { method: 'POST', body: JSON.stringify({ mode, doc: sendDoc, name: cur, q, model: $('#model').value }) });
-  const rd = r.body.getReader(), dec = new TextDecoder(); let buf = '';
-  while (true) {
-    const { value, done } = await rd.read(); if (done) break;
-    buf += dec.decode(value, { stream: true });
-    for (const line of buf.split('\n\n').slice(0, -1)) {
-      if (!line.startsWith('data: ')) continue; const ev = JSON.parse(line.slice(6));
-      if (ev.delta) { out += ev.delta; bot.textContent = mode === 'chat' ? out : `문서를 수정하는 중… ${out.length}자`; }
-      if (ev.error) bot.textContent = '오류: ' + ev.error;
-      if (ev.done) {
-        out = out || ev.done.text;
-        const meta = document.createElement('small'); meta.textContent = `${ev.done.model || ''} · ${(ev.done.ms / 1000).toFixed(1)}s · API 환산 $${(ev.done.cost || 0).toFixed(3)}`;
-        const clean = out.replace(/^```(?:markdown|md)?\n|\n```$/g, '').trim();
-        if (mode === 'edit') { bot.textContent = '수정안을 만들었습니다. 왼쪽에서 변경 내용을 확인하고 적용하세요.'; showDiff(docText, clean); }
-        else if (mode === 'editText' && selectedObj) { bot.textContent = '수정안을 만들었습니다. 문서에서 확인하고 Enter로 확정하세요.'; openInlineEditor(clean); }
-        bot.appendChild(meta);
+  try {
+    const r = await fetch('/api/chat', { method: 'POST', body: JSON.stringify({ mode, doc: sendDoc, name: cur, q, provider: activeAi.provider, model: activeAi.model }) });
+    if (!r.ok || !r.body) throw new Error((await r.json().catch(() => null))?.error || `HTTP ${r.status}`);
+    const rd = r.body.getReader(), dec = new TextDecoder(); let buf = '';
+    while (true) {
+      const { value, done } = await rd.read(); if (done) break;
+      buf += dec.decode(value, { stream: true });
+      for (const line of buf.split('\n\n').slice(0, -1)) {
+        if (!line.startsWith('data: ')) continue; const ev = JSON.parse(line.slice(6));
+        if (ev.delta) { out += ev.delta; bot.textContent = mode === 'chat' ? out : `문서를 수정하는 중… ${out.length}자`; }
+        if (ev.error) bot.textContent = '오류: ' + ev.error;
+        if (ev.done) {
+          out = ev.done.text || out;
+          const seconds = Number.isFinite(ev.done.ms) ? `${(ev.done.ms / 1000).toFixed(1)}s` : '';
+          const billing = Number.isFinite(ev.done.cost) ? `API 환산 $${ev.done.cost.toFixed(3)}` : (ev.done.billing || '구독');
+          const meta = document.createElement('small'); meta.textContent = [ev.done.model, seconds, billing].filter(Boolean).join(' · ');
+          const clean = out.replace(/^```(?:markdown|md)?\n|\n```$/g, '').trim();
+          if (mode === 'edit') { bot.textContent = '수정안을 만들었습니다. 왼쪽에서 변경 내용을 확인하고 적용하세요.'; showDiff(docText, clean); }
+          else if (mode === 'editText' && selectedObj) { bot.textContent = '수정안을 만들었습니다. 문서에서 확인하고 Enter로 확정하세요.'; openInlineEditor(clean); }
+          else bot.textContent = out;
+          bot.appendChild(meta);
+        }
       }
+      buf = buf.split('\n\n').slice(-1)[0];
     }
-    buf = buf.split('\n\n').slice(-1)[0];
-  }
-  $('#send').disabled = false;
+  } catch (error) { bot.textContent = '오류: ' + error.message; }
+  finally { syncAiState(); }
 };
 
 // ---- 줄 단위 diff (LCS) ----

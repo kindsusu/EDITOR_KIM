@@ -4,11 +4,29 @@ All notable changes to EDITOR_KIM are recorded here. The format follows [Keep a 
 
 ## [Unreleased]
 
-- PDF → Markdown conversion (PDFium text extraction, structure restored by Claude)
-- "Export as PDF" button for Markdown documents (the `md2pdf` tool exists; the UI button does not yet)
-- One-click prompts in the Claude panel (formal tone, 3-line summary, typo pass, table)
-- Installers built by CI on tag push
-- Font subsetting for the fallback font is per document; a future version may dedupe glyphs across edits
+- No pending release notes.
+
+## [0.5.0] - 2026-09-04
+
+### Added
+- **ChatGPT through Codex** with no API key. The app reuses the local `codex login` session, discovers the account's available models through Codex App Server, and streams replies over JSONL.
+- Provider-aware setup and health checks for both Claude Code and Codex. Either provider can be used independently.
+- Per-document, per-provider conversation sessions. Switching models starts a separate conversation.
+- One-click CLI installation through the official WinGet packages (`Anthropic.ClaudeCode` and `OpenAI.Codex`), with no PowerShell script or terminal input.
+- A persistent arrow tab on the AI panel boundary, so the panel can be collapsed and reopened independently of model selection.
+
+### Changed
+- Replaced the header's Claude toggle with a grouped **Select Model** picker for Claude Code and ChatGPT (Codex) models.
+- Restored a separate header chat toggle so the right panel can always be opened and closed with one click or Ctrl+J.
+- Codex document conversations run as ephemeral threads in an isolated temporary directory with a read-only sandbox and tool use disabled by instruction.
+- AI response metadata identifies the selected model, elapsed time, and subscription source.
+- Markdown rendering libraries are bundled locally, and preview HTML is sanitized before display.
+- Public documentation and roadmap were reduced to current user and contributor information; the editor-specific launch file was removed.
+
+### Fixed
+- Rapid PDF zooming or switching documents no longer lets stale asynchronous renders append pages from an earlier render into the current page list.
+- Claude setup no longer uses `ExecutionPolicy Bypass` or pipes a downloaded PowerShell script into execution, avoiding the command pattern that Windows Defender blocked.
+- File-list labels are built as text nodes, relative paths are checked with `path.relative`, and cross-origin requests to the local server are rejected.
 
 ## [0.4.1] - 2026-09-04
 
@@ -66,7 +84,7 @@ Feedback round on a real 10-page contract PDF (Word/Excel export, subset Malgun 
 First working release.
 
 ### Added
-- **Electron shell** with a Claude Code check at startup: detects `claude`, its login state, and offers install (`irm https://claude.ai/install.ps1 | iex`) and `claude auth login` in a separate PowerShell window. No API key is ever stored; the app spawns `claude -p` under the user's own login.
+- **Electron shell** with a Claude Code check at startup. The original release used a PowerShell-based installer; v0.5.0 replaced it with WinGet after Windows Defender feedback. No API key is stored by the app.
 - **PDF direct editing** on PDFium (WebAssembly, `@embedpdf/pdfium`): server-side page rendering to PNG, text-object enumeration, `FPDFText_SetText` in the original font, save through PDFium's writer. No pdf.js, no pdf-lib.
 - **Missing-glyph detection** for subset fonts by comparing `FPDFFont_GetGlyphPath` against the font's `.notdef` pointer; fallback to Malgun Gothic (bold variant when the original is bold).
 - **Fallback font subsetting** with fontkit plus a hand-written cmap format 4 table. A 51 KB Korean PDF grows by ~8 KB per fallback edit instead of ~7.5 MB.

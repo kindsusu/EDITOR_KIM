@@ -1,24 +1,25 @@
-// EDITOR_KIM 백엔드: 정적 UI + 파일 읽기/쓰기 + Claude Code CLI 호출 (API 키 없음, 구독 로그인 사용)
+// EDITOR_KIM 백엔드: 정적 UI + 파일 읽기/쓰기 + Claude Code/Codex 호출 (API 키 없음, 구독 로그인 사용)
 const http = require('http');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { spawn, execFile } = require('child_process');
 
 const ROOT = __dirname;
-const PORT = 4747;
+const PORT = Number(process.env.EDITORKIM_PORT) || 4747;
+const MARKED_BROWSER = path.join(path.dirname(require.resolve('marked')), 'marked.umd.js');
+const DOMPURIFY_BROWSER = path.join(path.dirname(require.resolve('dompurify')), 'purify.min.js');
 const CONF = path.join(os.homedir(), '.editor-kim.json');
 { // 옛 이름 시절 설정 파일을 새 경로로 1회 이전
   const OLD_CONF = path.join(os.homedir(), '.su-da' + 'epil.json');
   if (!fs.existsSync(CONF) && fs.existsSync(OLD_CONF)) { try { fs.renameSync(OLD_CONF, CONF); } catch {} }
 }
-const ENV = { ...process.env, CLAUDECODE: '' }; // 중첩 세션 검사 회피
 const pdfEngine = require('./pdf-engine');
 const APP_VERSION = require('../package.json').version;
+const ai = require('./ai-providers').createProviders({ version: APP_VERSION });
 
 let conf = {}; try { conf = JSON.parse(fs.readFileSync(CONF, 'utf8')); } catch {}
 let WS = conf.workspace && fs.existsSync(conf.workspace) ? conf.workspace : path.join(ROOT, '..', 'workspace');
-const sessions = {}; // 문서명 → claude 세션 ID (대화 이어가기)
+const sessions = {}; // `${provider}\0${문서명}` → { model, id }
 const pdfDocs = {}; // 파일명 → { doc, mtimeMs, dirty }
 
 // 캐시된 PDF 문서를 반환. 없거나 디스크에서 파일이 바뀌었으면 (다시) 연다 — 미저장 편집은 버려짐.
@@ -42,59 +43,16 @@ function snapshot(entry, i) {
 }
 const stacks = (entry) => ({ undoLeft: entry.undo.length, redoLeft: entry.redo.length });
 
-// 절대경로는 그대로 씀 (로컬 단일 사용자 데스크톱 앱, OS 파일 대화상자에서 온 경로). 상대경로는 여전히 WS 안으로 제한.
+// 절대경로는 그대로 씀 (로컬 단일 사용자 데스크톱 앱, OS 파일 대화상자에서 온 경로). 상대경로는 WS 밖으로 나갈 수 없다.
 const safe = (p) => {
   if (p && path.isAbsolute(p)) return path.resolve(p);
-  const abs = path.resolve(WS, p || ''); if (!abs.startsWith(WS)) throw new Error('bad path'); return abs;
+  const abs = path.resolve(WS, p || ''), relative = path.relative(path.resolve(WS), abs);
+  if (relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('bad path');
+  return abs;
 };
 const json = (res, code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(obj)); };
 const body = (req) => new Promise((r) => { let b = ''; req.on('data', (c) => (b += c)); req.on('end', () => r(b)); });
-// claude 실행 파일 위치 (설치 후 [다시 확인] 시 재탐색). npm 설치본은 .cmd라 shell 필요
-let CLAUDE = null;
-const findClaude = () => new Promise((r) => execFile(process.platform === 'win32' ? 'where' : 'which', ['claude'], (e, out) => {
-  const lines = e ? [] : String(out).split(/\r?\n/).filter(Boolean);
-  r(CLAUDE = lines.find((l) => /\.exe$/i.test(l)) || lines[0] || null);
-}));
-const opts = () => ({ env: ENV, shell: /\.cmd$/i.test(CLAUDE || '') });
-const run = (args) => new Promise((r) => CLAUDE ? execFile(CLAUDE, args, opts(), (e, out) => r(e ? null : String(out).trim())) : r(null));
-
-// ---- Claude Code 설치·로그인 상태 ----
-async function health() {
-  if (!CLAUDE) await findClaude();
-  const version = await run(['--version']);
-  if (!version) return { installed: false, appVersion: APP_VERSION };
-  let auth = {}; try { auth = JSON.parse(await run(['auth', 'status'])); } catch {}
-  return { installed: true, version, loggedIn: !!auth.loggedIn, authMethod: auth.authMethod, appVersion: APP_VERSION };
-}
-// 사용자가 진행 상황을 보도록 별도 PowerShell 창에서 실행
-const openConsole = (cmd) => spawn('powershell', ['-NoExit', '-ExecutionPolicy', 'Bypass', '-Command', cmd], { detached: true, stdio: 'ignore', env: ENV }).unref();
-
-// ---- Claude 호출: stdin으로 프롬프트, stream-json으로 토큰 단위 수신 ----
-function askClaude({ prompt, model, session }, onDelta) {
-  return new Promise((resolve, reject) => {
-    const args = ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--model', model || 'sonnet'];
-    if (session) args.push('--resume', session);
-    if (!CLAUDE) return reject(new Error('Claude Code가 설치되어 있지 않습니다'));
-    const child = spawn(CLAUDE, args, opts());
-    let buf = '', text = '', result = null, err = '';
-    child.stdout.on('data', (d) => {
-      buf += d;
-      const lines = buf.split('\n'); buf = lines.pop();
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        let ev; try { ev = JSON.parse(line); } catch { continue; }
-        if (ev.type === 'stream_event' && ev.event?.delta?.type === 'text_delta') { text += ev.event.delta.text; onDelta(ev.event.delta.text); }
-        else if (ev.type === 'result') result = ev;
-      }
-    });
-    child.stderr.on('data', (d) => (err += d));
-    child.on('close', (code) => {
-      if (code !== 0 && !result) return reject(new Error(err || `claude exit ${code}`));
-      resolve({ text: text || result?.result || '', cost: result?.total_cost_usd, ms: result?.duration_api_ms, session: result?.session_id, model: result?.modelUsage && Object.keys(result.modelUsage)[0] });
-    });
-    child.stdin.end(prompt);
-  });
-}
+const trustedOrigin = (req) => !req.headers.origin || [`http://127.0.0.1:${PORT}`, `http://localhost:${PORT}`].includes(req.headers.origin);
 
 const PROMPTS = {
   chat: (doc, name, q) => `아래는 사용자가 열어둔 문서 "${name}"의 내용이다. 문서에 근거해 한국어로 간결하게 답하라. 도구는 쓰지 말 것.\n\n<document>\n${doc}\n</document>\n\n질문: ${q}`,
@@ -106,10 +64,16 @@ const PROMPTS = {
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
   try {
+    if (!trustedOrigin(req)) return json(res, 403, { error: '허용되지 않은 요청 출처' });
     if (url.pathname === '/') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); return fs.createReadStream(path.join(ROOT, 'index.html')).pipe(res); }
-    if (url.pathname === '/api/health') return json(res, 200, await health());
-    if (url.pathname === '/api/setup/install') { openConsole('irm https://claude.ai/install.ps1 | iex'); return json(res, 200, { ok: true }); }
-    if (url.pathname === '/api/setup/login') { openConsole('claude auth login'); return json(res, 200, { ok: true }); }
+    if (url.pathname === '/vendor/marked.js') { res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }); return fs.createReadStream(MARKED_BROWSER).pipe(res); }
+    if (url.pathname === '/vendor/purify.js') { res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }); return fs.createReadStream(DOMPURIFY_BROWSER).pipe(res); }
+    if (url.pathname === '/api/health') return json(res, 200, { appVersion: APP_VERSION, providers: await ai.health() });
+    if (url.pathname === '/api/setup' && req.method === 'POST') {
+      const { provider, action } = JSON.parse(await body(req));
+      if (!['claude', 'codex'].includes(provider) || !['install', 'login'].includes(action)) return json(res, 400, { error: '잘못된 AI 설정 요청' });
+      return json(res, 200, action === 'install' ? await ai.install(provider) : await ai.login(provider));
+    }
     if (url.pathname === '/api/workspace' && req.method === 'GET') return json(res, 200, { path: WS });
     if (url.pathname === '/api/workspace' && req.method === 'POST') {
       const { path: p } = JSON.parse(await body(req));
@@ -128,7 +92,12 @@ const server = http.createServer(async (req, res) => {
       return fs.createReadStream(p).on('error', () => res.destroy()).pipe(res);
     }
     if (url.pathname === '/api/file' && req.method === 'PUT') { fs.writeFileSync(safe(url.searchParams.get('name')), await body(req)); return json(res, 200, { ok: true }); }
-    if (url.pathname === '/api/session/reset' && req.method === 'POST') { delete sessions[JSON.parse(await body(req)).name]; return json(res, 200, { ok: true }); }
+    if (url.pathname === '/api/session/reset' && req.method === 'POST') {
+      const { name, provider } = JSON.parse(await body(req));
+      if (provider) delete sessions[`${provider}\0${name}`];
+      else for (const key of Object.keys(sessions)) if (key.endsWith(`\0${name}`)) delete sessions[key];
+      return json(res, 200, { ok: true });
+    }
     if (url.pathname === '/api/pdf/info' && req.method === 'GET') {
       const { doc } = await getPdfDoc(url.searchParams.get('name'));
       return json(res, 200, { pages: Array.from({ length: doc.pageCount }, (_, i) => doc.pageSize(i)) });
@@ -282,15 +251,18 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true });
     }
     if (url.pathname === '/api/chat' && req.method === 'POST') {
-      const { mode, doc, name, q, model } = JSON.parse(await body(req));
+      const { mode, doc, name, q, model, provider = 'claude' } = JSON.parse(await body(req));
+      if (!['claude', 'codex'].includes(provider)) return json(res, 400, { error: '지원하지 않는 AI 공급자' });
       res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache' });
       const send = (o) => res.write(`data: ${JSON.stringify(o)}\n\n`);
       try {
-        const session = mode === 'chat' ? sessions[name] : undefined; // 편집은 매번 문서 전체를 새로 넘김
+        const key = `${provider}\0${name}`;
+        const saved = mode === 'chat' && sessions[key]?.model === model ? sessions[key] : null;
+        const session = saved && ai.sessionValid(provider, saved.id) ? saved.id : undefined; // 편집은 매번 문서 전체를 새로 넘김
         const prompt = PROMPTS[mode === 'chat' && session ? 'chatMore' : mode](doc, name, q);
-        const r = await askClaude({ prompt, model, session }, (t) => send({ delta: t }));
-        if (mode === 'chat' && r.session) sessions[name] = r.session;
-        send({ done: r });
+        const result = await ai.ask(provider, { prompt, model, session }, (text) => send({ delta: text }));
+        if (mode === 'chat' && result.session) sessions[key] = { model, id: result.session };
+        send({ done: { ...result, provider } });
       } catch (e) { send({ error: e.message }); }
       return res.end();
     }
@@ -299,4 +271,5 @@ const server = http.createServer(async (req, res) => {
 });
 server.on('error', (e) => console.error('server:', e.message));
 server.listen(PORT, '127.0.0.1', () => console.log(`EDITOR_KIM → http://localhost:${PORT}  workspace=${WS}`));
+process.once('exit', () => ai.close());
 module.exports = { PORT };

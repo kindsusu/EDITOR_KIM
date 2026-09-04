@@ -1,1 +1,0 @@
-{ "version": "0.0.1", "configurations": [ { "name": "serve", "runtimeExecutable": "node", "runtimeArgs": ["app/server.js"], "port": 4747 } ] }
