@@ -7,7 +7,8 @@
   "scripts": {
     "start": "electron .",
     "serve": "node app/server.js",
-    "dist": "electron-builder --win"
+    "dist": "electron-builder --win",
+    "md2pdf": "electron tools/md2pdf.js"
   },
   "license": "MIT",
   "private": true,
