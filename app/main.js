@@ -1,7 +1,11 @@
 // Electron 셸: 서버를 같은 프로세스에서 띄우고 창을 연다
-const { app, BrowserWindow, dialog, ipcMain } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, Menu } = require('electron');
 const path = require('path');
 const { PORT } = require('./server.js');
+
+// 기본 메뉴를 쓰지 않는다: 그 단축키(Ctrl+R 새로고침, Ctrl+=/− 페이지 전체 확대, Ctrl+W 닫기)가 편집기 단축키(PDF 확대·축소)를 가로채고,
+// 새로고침은 편집 중인 화면 상태를 날린다. 개발자 도구는 F12로 연다.
+Menu.setApplicationMenu(null);
 
 app.whenReady().then(() => {
   const win = new BrowserWindow({
@@ -10,6 +14,11 @@ app.whenReady().then(() => {
   });
   win.loadURL(`http://localhost:${PORT}`);
   win.on('page-title-updated', (e) => e.preventDefault());
+  win.webContents.on('before-input-event', (e, input) => {
+    if (input.type === 'keyDown' && input.key === 'F12') { win.webContents.toggleDevTools(); e.preventDefault(); }
+  });
+  // 페이지 전체 확대(Chromium 줌)는 쓰지 않는다 — PDF 확대는 렌더러가 Ctrl+휠·Ctrl+=/−로 처리한다
+  win.webContents.on('did-finish-load', () => { win.webContents.setZoomFactor(1); win.webContents.setVisualZoomLevelLimits(1, 1).catch(() => {}); });
 
   ipcMain.handle('openFolder', async () => {
     const r = await dialog.showOpenDialog(win, { properties: ['openDirectory'], title: '작업 폴더 선택' });

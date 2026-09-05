@@ -27,7 +27,9 @@
   .split{flex:1;display:grid;grid-template-columns:1fr 1fr;min-height:0}
   textarea{width:100%;height:100%;resize:none;border:0;border-right:1px solid var(--line);background:var(--bg);color:var(--fg);padding:18px;font:13px/1.6 Consolas,'D2Coding',monospace;outline:none}
   .prev{overflow:auto;padding:18px 26px;background:#fff;color:#222}.prev h1,.prev h2{margin-top:.6em}.prev table{border-collapse:collapse}.prev td,.prev th{border:1px solid #ccc;padding:3px 8px}
-  .pdf{flex:1;overflow:auto;background:#3a3a40;padding:20px;text-align:center}
+  .pdf{position:relative;flex:1;overflow:auto;background:#3a3a40;padding:20px;text-align:center} /* relative: 페이지 offsetTop이 이 스크롤 영역 기준이 되어 확대 시 커서 위치 고정에 쓴다 */
+  #zoomPct{display:inline-block;min-width:44px;text-align:center;cursor:pointer}#zoomPct:hover{color:var(--fg)}
+  #stop{background:#5a2323;border-color:#7a3030}#stop:hover{background:#6e2c2c}
   .pdfPage{position:relative;display:inline-block;background:#fff;box-shadow:0 2px 12px #0008;margin-bottom:16px}.pdfPage img{display:block;width:100%;height:100%}
   .pdfBox{position:absolute}.pdfBox:hover{outline:1px solid var(--acc)}
   .pdfBox.editing{outline:2px solid var(--acc)}
@@ -68,7 +70,7 @@
 </aside>
 <main>
   <div class="bar"><span id="fname">파일을 선택하세요</span><span id="dirty" hidden>●</span><span class="sp"></span>
-    <span id="pdfZoom" hidden><button id="zoomOut">−</button> <span id="zoomPct">150%</span> <button id="zoomIn">+</button></span>
+    <span id="pdfZoom" hidden><button id="zoomOut" title="축소 (Ctrl+− 또는 Ctrl+휠)">−</button> <span id="zoomPct" title="클릭하면 100%">150%</span> <button id="zoomIn" title="확대 (Ctrl+= 또는 Ctrl+휠)">+</button> <button id="zoomFit" title="페이지 폭을 화면에 맞춤 (Ctrl+0)">폭 맞춤</button></span>
     <button id="undoBtn" hidden disabled>↶ 실행 취소</button>
     <button id="redoBtn" hidden disabled>↷ 다시 실행</button>
     <button id="rectTool" hidden>▭ 마스킹 삽입</button>
@@ -87,8 +89,8 @@
   <div class="log" id="log"><div class="msg bot">문서를 열고 질문하거나, Markdown이면 <b>편집 모드</b>로 수정을 지시하세요.</div></div>
   <div class="hint" id="aiHint">구독 로그인으로 호출하며 API 키를 저장하지 않습니다.</div>
   <div class="ask">
-    <textarea id="q" placeholder="예) 2문단을 더 격식 있게 고쳐줘 / 이 문서 3줄 요약  (Ctrl+Enter 전송)"></textarea>
-    <div class="row"><label><input type="radio" name="mode" value="chat" checked>질문</label><label><input type="radio" name="mode" value="edit" id="editRadio"><span id="editRadioLabel">편집(MD)</span></label><span class="sp"></span><button id="send" class="pri">보내기</button></div>
+    <textarea id="q" placeholder="예) 2문단을 더 격식 있게 고쳐줘 / 이 문서 3줄 요약  (Enter 전송 · Shift+Enter 줄바꿈)"></textarea>
+    <div class="row"><label><input type="radio" name="mode" value="chat" checked>질문</label><label><input type="radio" name="mode" value="edit" id="editRadio"><span id="editRadioLabel">편집(MD)</span></label><span class="sp"></span><button id="stop" hidden title="응답 생성 중지 (Esc)">■ 중지</button><button id="send" class="pri">보내기</button></div>
   </div>
 </section>
 
@@ -104,6 +106,22 @@
 
 <script type="module">
 const $ = (s) => document.querySelector(s);
+const escapeHtml = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+// 상단 상태 표시: setStatus는 기본 문구, flash는 잠깐 보였다가 기본 문구로 돌아간다.
+// (flash가 겹치면 이전 flash 문구가 기본 문구인 줄 알고 되돌리던 문제 → 기본 문구를 따로 기억하고 타이머는 하나만 둔다)
+let statusBase = '', statusTimer = 0;
+function setStatus(text) { statusBase = text; if (!statusTimer) $('#status').textContent = text; }
+function flash(text, ms = 1500) {
+  clearTimeout(statusTimer); $('#status').textContent = text;
+  statusTimer = setTimeout(() => { statusTimer = 0; $('#status').textContent = statusBase; }, ms);
+}
+// 서버 POST 공통: JSON 응답을 돌려주고, HTTP 오류나 {error}면 상태줄에 알린 뒤 예외를 던진다 (조용히 성공한 척하지 않는다)
+async function apiPost(path, payload) {
+  let r; try { r = await fetch(path, { method: 'POST', body: JSON.stringify(payload) }); } catch (error) { flash('⚠ 서버에 연결할 수 없습니다', 4000); throw error; }
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok || data.error) { const message = data.error || `HTTP ${r.status}`; flash('⚠ ' + message, 5000); throw new Error(message); }
+  return data;
+}
 // AI 패널은 실행할 때마다 접힌 상태로 시작. 상단 버튼·옆 탭·Ctrl+J로 언제든 토글한다.
 function setAiOpen(open) {
   document.body.classList.toggle('ai-collapsed', !open);
@@ -119,9 +137,11 @@ $('#aiRailToggle').onclick = () => setAiOpen(document.body.classList.contains('a
 $('#aiClose').onclick = () => setAiOpen(false);
 document.addEventListener('keydown', (e) => { if (e.ctrlKey && e.key.toLowerCase() === 'j') { e.preventDefault(); $('#aiToggle').click(); } });
 let cur = null, docText = '', savedText = '', pending = null;
-let pdfPages = [], pdfObjects = [], pdfScale = 1.5, pdfDirty = false, selectedObj = null, selectedMask = null, pdfRenderGeneration = 0;
+const ZOOM_MIN = 0.5, ZOOM_MAX = 3, ZOOM_DEFAULT = 1.5;
+const clampZoom = (s) => Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, Math.round((+s || ZOOM_DEFAULT) * 100) / 100));
+let pdfPages = [], pdfObjects = [], pdfScale = clampZoom(localStorage.getItem('editorkim.zoom')), pdfDirty = false, selectedObj = null, selectedMask = null, pdfRenderGeneration = 0;
 let rectMode = false, rectDrag = null;
-let pdfStacks = {}; // ponytail: name → {undoLeft,redoLeft} 클라이언트 캐시(서버가 실제 정본). 문서 전환 시 버튼 상태 복원용
+// 미저장 여부·실행취소 스택은 서버(/api/pdf/info)가 정본이다. 새로고침이나 목록에서 닫았다가 다시 열어도 화면이 서버 상태와 어긋나지 않는다
 let aiHealth = null, activeAi = null, setupTarget = 'codex', setupExplicit = false, setupBusy = false, loginPoll = 0;
 const dirty = () => cur && (cur.endsWith('.pdf') ? pdfDirty : docText !== savedText);
 window.isDirty = dirty;
@@ -138,15 +158,15 @@ function activeProvider() { return activeAi && aiHealth?.providers?.[activeAi.pr
 function syncAiState() {
   const state = activeProvider(), ready = !!state?.loggedIn;
   $('#send').disabled = !cur || !ready;
-  if (!activeAi) { $('#aiTitle').textContent = 'AI'; $('#status').textContent = 'Select Model에서 AI를 선택하세요'; return; }
+  if (!activeAi) { $('#aiTitle').textContent = 'AI'; setStatus('Select Model에서 AI를 선택하세요'); return; }
   const model = state?.models?.find((item) => item.id === activeAi.model);
   $('#aiTitle').textContent = `${providerName(activeAi.provider)} · ${model?.name || activeAi.model || '기본 모델'}`;
   $('#aiHint').textContent = activeAi.provider === 'claude'
     ? '비용은 API 환산액입니다. Claude 구독으로 호출하며 API 키를 저장하지 않습니다.'
     : 'PC의 ChatGPT 로그인과 Codex 사용량을 이용하며 API 키를 저장하지 않습니다.';
-  $('#status').textContent = ready
+  setStatus(ready
     ? `${providerName(activeAi.provider)} ${state.version || ''} · ${state.authMethod || '구독'} 로그인 · API 키 없음`
-    : `${providerName(activeAi.provider)} 설정 필요`;
+    : `${providerName(activeAi.provider)} 설정 필요`);
 }
 function renderModelPicker(preferredProvider) {
   const picker = $('#modelPicker'), saved = localStorage.getItem('editorkim.aiChoice');
@@ -186,7 +206,8 @@ function renderSetup() {
   $('#btnInstall').hidden = !!state.installed; $('#btnLogin').hidden = !state.installed || !!state.loggedIn;
   $('#btnInstall').disabled = $('#btnLogin').disabled = $('#btnRecheck').disabled = setupBusy;
   $('#setupStatus').innerHTML = state.installed
-    ? `<span class="ok">✔ 설치됨</span> ${state.version || ''}<br>${state.loggedIn ? `<span class="ok">✔ 로그인됨</span> (${state.authMethod || '구독'})` : '<span class="bad">✘ 로그인 안 됨</span>'}`
+    ? `<span class="ok">✔ 설치됨</span> ${escapeHtml(state.version || '')}<br>${state.loggedIn ? `<span class="ok">✔ 로그인됨</span> (${escapeHtml(state.authMethod || '구독')})` : '<span class="bad">✘ 로그인 안 됨</span>'}`
+      + (state.error ? `<br><span class="bad">모델 목록을 가져오지 못했습니다: ${escapeHtml(state.error)}</span>` : '')
     : `<span class="bad">✘ ${providerName(setupTarget)}가 설치되어 있지 않습니다</span>`;
   $('#setupHelp').textContent = !state.installed ? '[설치]를 누르면 WinGet이 공식 패키지를 설치합니다.'
     : !state.loggedIn ? (setupTarget === 'codex'
@@ -194,9 +215,14 @@ function renderSetup() {
       : '[로그인]을 누른 뒤 브라우저에서 Claude 구독 계정으로 로그인하세요.') : '사용할 준비가 됐습니다.';
 }
 function showSetup(provider, explicit = true) { setupTarget = provider; setupExplicit = explicit; renderSetup(); $('#setup').hidden = false; }
-async function checkHealth() {
+// only='claude'|'codex'면 그 공급자만 다시 검사하고 나머지는 이전 결과를 유지한다(로그인 대기 중 2초마다 부르므로 CLI 4개를 매번 띄우지 않게)
+async function checkHealth(only) {
   $('#setupStatus').textContent = '확인 중…';
-  aiHealth = await (await fetch('/api/health')).json();
+  let fresh;
+  try { fresh = await (await fetch('/api/health' + (only ? '?provider=' + only : ''))).json(); }
+  catch (error) { setStatus('AI 상태를 확인하지 못했습니다 — ' + error.message); $('#setupStatus').textContent = '서버에 연결할 수 없습니다'; return; }
+  const checked = Object.fromEntries(Object.entries(fresh.providers || {}).filter(([, state]) => state));
+  aiHealth = { ...fresh, providers: { ...(aiHealth?.providers || {}), ...checked } };
   if (aiHealth.appVersion) { $('#ver').textContent = 'v' + aiHealth.appVersion; document.title = `EDITOR_KIM v${aiHealth.appVersion}`; }
   const justReady = setupExplicit && aiHealth.providers?.[setupTarget]?.loggedIn;
   renderModelPicker(justReady ? setupTarget : null);
@@ -220,7 +246,7 @@ async function waitForLogin(provider) {
   const token = ++loginPoll;
   for (let i = 0; i < 150 && token === loginPoll && !$('#setup').hidden && setupTarget === provider; i++) {
     await delay(2000);
-    await checkHealth();
+    await checkHealth(provider);
     if (aiHealth?.providers?.[provider]?.loggedIn) return;
     $('#setupStatus').innerHTML = '<span class="ok">브라우저 로그인을 기다리는 중…</span>';
   }
@@ -250,7 +276,7 @@ async function setupAction(action) {
 }
 $('#btnInstall').onclick = () => setupAction('install');
 $('#btnLogin').onclick = () => setupAction('login');
-$('#btnRecheck').onclick = checkHealth;
+$('#btnRecheck').onclick = () => checkHealth();
 $('#btnSkip').onclick = () => { loginPoll++; setupExplicit = false; $('#setup').hidden = true; };
 
 // ---- 열어 둔 파일 목록 (절대경로, localStorage에 저장) ----
@@ -309,10 +335,12 @@ function addFiles(paths) {
   for (const p of paths) if (!files.includes(p)) files.push(p);
   saveFilesLS(); renderFiles(); open(paths[0]);
 }
-function removeFile(p) {
+async function removeFile(p) {
+  if (cur === p && dirty() && !confirm('저장하지 않은 변경이 있습니다. 버리고 목록에서 닫을까요?')) return;
   files = files.filter((f) => f !== p); saveFilesLS();
   if (cur === p) {
-    cur = null; docText = savedText = ''; selectedObj = null; pdfDirty = false;
+    pdfRenderGeneration++; closeAnyPanel(); clearMulti();
+    cur = null; docText = savedText = ''; selectedObj = null; pdfDirty = false; pdfPages = []; pdfObjects = []; $('#pdf').innerHTML = '';
     $('#fname').textContent = '파일을 선택하세요'; $('#fname').title = '';
     $('#md').hidden = $('#pdf').hidden = $('#diff').hidden = $('#diffbar').hidden = true;
     $('#save').hidden = $('#saveAs').hidden = $('#pdfZoom').hidden = $('#dirty').hidden = true; $('#send').disabled = true;
@@ -320,6 +348,8 @@ function removeFile(p) {
     $('#undoBtn').hidden = $('#redoBtn').hidden = true;
   }
   renderFiles();
+  // 서버 캐시의 미저장 편집도 함께 버린다 — 남겨 두면 다음에 같은 파일을 열 때 "깨끗한 문서"인 척 이전 편집이 나타난다
+  if (p.endsWith('.pdf')) await apiPost('/api/pdf/close', { name: p }).catch(() => {});
 }
 async function initFiles() {
   if (window.editorKim) {
@@ -345,8 +375,9 @@ $('#files').onclick = (e) => {
 
 async function open(name) {
   if (dirty() && !confirm('저장하지 않은 변경이 있습니다. 버리고 다른 파일을 열까요?')) return;
-  if (cur && cur.endsWith('.pdf') && pdfDirty) { await fetch('/api/pdf/close', { method: 'POST', body: JSON.stringify({ name: cur }) }); delete pdfStacks[cur]; }
+  if (cur && cur.endsWith('.pdf') && pdfDirty) await apiPost('/api/pdf/close', { name: cur }).catch(() => {}); // 버리기로 했으니 서버 캐시도 닫는다
   pdfRenderGeneration++; // 이전 문서·확대 렌더가 늦게 끝나도 새 화면을 건드리지 못하게 무효화
+  closeAnyPanel(); clearMulti();
   cur = name; pending = null; docText = ''; selectedObj = null; selectedMask = null; pdfDirty = false; $('#send').disabled = true;
   pushRecent(name); renderFiles();
   $('#fname').textContent = basename(name); $('#fname').title = name; $('#diff').hidden = true; $('#diffbar').hidden = true;
@@ -354,27 +385,40 @@ async function open(name) {
   setRectMode(false);
   $('#md').hidden = isPdf; $('#pdf').hidden = !isPdf; $('#save').hidden = false; $('#saveAs').hidden = !window.editorKim; $('#pdfZoom').hidden = !isPdf; $('#rectTool').hidden = !isPdf; $('#maskColor').hidden = !isPdf;
   $('#undoBtn').hidden = $('#redoBtn').hidden = !isPdf;
-  const st = pdfStacks[name] || { undoLeft: 0, redoLeft: 0 };
-  setUndoRedoState(st.undoLeft, st.redoLeft);
-  if (isPdf) { document.querySelector('[value=chat]').checked = true; await renderPdfDoc(name); }
-  else { docText = savedText = await (await fetch('/api/file?name=' + encodeURIComponent(name))).text(); $('#src').value = docText; preview(); }
+  setUndoRedoState(0, 0);
+  if (isPdf) { document.querySelector('[value=chat]').checked = true; await renderPdfDoc(name); } // 미저장 여부·실행취소 스택은 서버 info로 채워진다
+  else {
+    const r = await fetch('/api/file?name=' + encodeURIComponent(name));
+    if (!r.ok) { flash('⚠ 파일을 읽지 못했습니다', 4000); return removeFile(name); }
+    docText = savedText = await r.text(); $('#src').value = docText; preview();
+  }
+  if (cur !== name) return; // 읽는 동안 다른 파일로 넘어갔다
   updateEditRadio(); showDirty(); syncAiState();
 }
 function preview() { $('#prev').innerHTML = DOMPurify.sanitize(marked.parse($('#src').value)); }
 $('#src').oninput = () => { docText = $('#src').value; preview(); showDirty(); };
+// Markdown 저장. 실패(파일 잠김·권한)를 그대로 알리고 미저장 표시를 유지한다 — 조용히 "저장됨"으로 넘어가면 닫을 때 편집을 잃는다
+async function putText(name, text) {
+  let r; try { r = await fetch('/api/file?name=' + encodeURIComponent(name), { method: 'PUT', body: text }); } catch (error) { throw new Error('서버에 연결할 수 없습니다'); }
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `HTTP ${r.status}`);
+}
 async function save() {
   if (!cur) return;
-  if (cur.endsWith('.pdf')) { await fetch('/api/pdf/save', { method: 'POST', body: JSON.stringify({ name: cur }) }); pdfDirty = false; }
-  else { await fetch('/api/file?name=' + encodeURIComponent(cur), { method: 'PUT', body: $('#src').value }); savedText = docText; }
-  showDirty(); flash('저장됨');
+  try {
+    if (cur.endsWith('.pdf')) { await apiPost('/api/pdf/save', { name: cur }); pdfDirty = false; }
+    else { await putText(cur, $('#src').value); savedText = docText; }
+    showDirty(); flash('저장됨');
+  } catch (error) { flash('⚠ ' + error.message, 5000); }
 }
 $('#save').onclick = save;
 async function saveAs() {
   if (!cur || !window.editorKim) return;
   const to = await window.editorKim.saveAs(cur);
   if (!to) return;
-  if (cur.endsWith('.pdf')) { await fetch('/api/pdf/saveas', { method: 'POST', body: JSON.stringify({ name: cur, to }) }); pdfDirty = false; }
-  else { await fetch('/api/file?name=' + encodeURIComponent(to), { method: 'PUT', body: $('#src').value }); savedText = docText; }
+  try {
+    if (cur.endsWith('.pdf')) { await apiPost('/api/pdf/saveas', { name: cur, to }); pdfDirty = false; }
+    else { await putText(to, $('#src').value); savedText = docText; }
+  } catch (error) { flash('⚠ ' + error.message, 5000); return; }
   if (!files.includes(to)) files.push(to);
   saveFilesLS(); cur = to; pushRecent(to); renderFiles();
   $('#fname').textContent = basename(to); $('#fname').title = to;
@@ -391,13 +435,10 @@ document.addEventListener('keydown', (e) => {
 window.onbeforeunload = (e) => { if (dirty() && !window.editorKim) { e.preventDefault(); e.returnValue = ''; } };
 
 // ---- 실행 취소 / 다시 실행 ----
-function setUndoRedoState(u, r) {
-  $('#undoBtn').disabled = !u; $('#redoBtn').disabled = !r;
-  if (cur) pdfStacks[cur] = { undoLeft: u, redoLeft: r };
-}
-// PDF를 바꾸는 모든 호출을 여기로 통일: dirty 표시 + 실행취소/다시실행 버튼 상태 갱신
+function setUndoRedoState(u, r) { $('#undoBtn').disabled = !u; $('#redoBtn').disabled = !r; }
+// PDF를 바꾸는 모든 호출을 여기로 통일: dirty 표시 + 실행취소/다시실행 버튼 상태 갱신. 실패하면 상태줄에 알리고 예외(apiPost)
 async function pdfMutate(path, payload) {
-  const r = await (await fetch(path, { method: 'POST', body: JSON.stringify(payload) })).json();
+  const r = await apiPost(path, payload);
   pdfDirty = true; showDirty();
   if ('undoLeft' in r) setUndoRedoState(r.undoLeft, r.redoLeft);
   return r;
@@ -410,7 +451,7 @@ function closeAnyPanel() {
 async function undo() {
   if (!cur || !cur.endsWith('.pdf') || $('#undoBtn').disabled) return;
   closeAnyPanel();
-  const r = await (await fetch('/api/pdf/undo', { method: 'POST', body: JSON.stringify({ name: cur }) })).json();
+  const r = await apiPost('/api/pdf/undo', { name: cur });
   if (!r.ok) return;
   pdfDirty = true; showDirty(); setUndoRedoState(r.undoLeft, r.redoLeft);
   await refreshPage(r.page);
@@ -419,7 +460,7 @@ async function undo() {
 async function redo() {
   if (!cur || !cur.endsWith('.pdf') || $('#redoBtn').disabled) return;
   closeAnyPanel();
-  const r = await (await fetch('/api/pdf/redo', { method: 'POST', body: JSON.stringify({ name: cur }) })).json();
+  const r = await apiPost('/api/pdf/redo', { name: cur });
   if (!r.ok) return;
   pdfDirty = true; showDirty(); setUndoRedoState(r.undoLeft, r.redoLeft);
   await refreshPage(r.page);
@@ -437,27 +478,38 @@ document.addEventListener('keydown', (e) => {
 });
 
 // ---- PDF 뷰(PDFium 서버 렌더) ----
-function pageUrl(name, i, scale = pdfScale) { return `/api/pdf/page?name=${encodeURIComponent(name)}&i=${i}&scale=${scale}&t=${Date.now()}`; }
+// 화면 픽셀 밀도(125%·150% 배율 노트북)만큼 더 크게 렌더해 글자가 흐릿하지 않게 한다. 표시 크기는 pdfScale 그대로(img가 틀에 맞춰 줄어든다)
+const renderScale = (scale) => Math.min(4, Math.round(scale * Math.min(window.devicePixelRatio || 1, 2) * 1000) / 1000);
+function pageUrl(name, i, scale = pdfScale) { return `/api/pdf/page?name=${encodeURIComponent(name)}&i=${i}&scale=${renderScale(scale)}&t=${Date.now()}`; }
+// 페이지 틀을 한 번에 만든다: 전체 높이가 바로 정해져 스크롤 위치를 유지할 수 있고, 이미지는 보이는 페이지부터(lazy) 서버에 요청한다
+function buildPages(name, scale) {
+  const frag = document.createDocumentFragment();
+  pdfPages.forEach(({ w, h }, i) => {
+    const wrap = document.createElement('div');
+    wrap.className = 'pdfPage'; wrap.style.width = (w * scale) + 'px'; wrap.style.height = (h * scale) + 'px';
+    const img = document.createElement('img'); img.loading = i < 2 ? 'eager' : 'lazy'; img.decoding = 'async'; img.src = pageUrl(name, i, scale); // 첫 두 쪽은 즉시, 나머지는 보일 때
+    wrap.appendChild(img); frag.appendChild(wrap);
+  });
+  $('#pdf').replaceChildren(frag);
+}
 async function renderPdfDoc(name) {
   const renderGeneration = ++pdfRenderGeneration, scale = pdfScale;
   $('#pdf').innerHTML = '';
-  const info = await (await fetch('/api/pdf/info?name=' + encodeURIComponent(name))).json();
+  let info;
+  try { info = await (await fetch('/api/pdf/info?name=' + encodeURIComponent(name))).json(); } catch (error) { info = { error: error.message }; }
   if (renderGeneration !== pdfRenderGeneration || cur !== name) return;
-  const pages = info.pages, objects = [];
-  pdfPages = pages; pdfObjects = objects;
-  for (let i = 0; i < pages.length; i++) {
+  if (!info.pages) { flash('⚠ PDF를 열지 못했습니다: ' + (info.error || '알 수 없는 오류'), 6000); return; }
+  pdfPages = info.pages; pdfObjects = [];
+  pdfDirty = !!info.dirty; showDirty(); setUndoRedoState(info.undoLeft, info.redoLeft); // 서버가 기억하는 미저장 편집·실행취소 스택을 그대로 이어받는다
+  buildPages(name, scale);
+  for (let i = 0; i < pdfPages.length; i++) {
+    let objs;
+    try { objs = await (await fetch(`/api/pdf/objects?name=${encodeURIComponent(name)}&i=${i}`)).json(); } catch { objs = []; }
     if (renderGeneration !== pdfRenderGeneration || cur !== name) return;
-    const { w, h } = pages[i];
-    const wrap = document.createElement('div');
-    wrap.className = 'pdfPage'; wrap.style.width = (w * scale) + 'px'; wrap.style.height = (h * scale) + 'px';
-    const img = document.createElement('img'); img.src = pageUrl(name, i, scale);
-    wrap.appendChild(img); $('#pdf').appendChild(wrap);
-    const objs = await (await fetch(`/api/pdf/objects?name=${encodeURIComponent(name)}&i=${i}`)).json();
-    if (renderGeneration !== pdfRenderGeneration || cur !== name) return;
-    objects[i] = objs;
-    drawOverlay(wrap, i, objs, h);
+    pdfObjects[i] = Array.isArray(objs) ? objs : [];
+    const wrap = $('#pdf').children[i];
+    if (wrap && !wrap.querySelector('.pdfBox')) drawOverlay(wrap, i, pdfObjects[i], pdfPages[i].h); // 로딩 중 확대했으면 applyZoom이 이미 그렸다
   }
-  if (renderGeneration !== pdfRenderGeneration || cur !== name) return;
   rebuildDocText();
   // 투명 글자(그림 위 검색용 텍스트)가 있으면 열 때 한 번만 알린다
   const hiddenCount = pdfObjects.reduce((n, objs) => n + objs.filter((o) => o.type === 'text' && o.hidden).length, 0);
@@ -658,8 +710,10 @@ function checkOverflow(i, editedIdx, boxed) {
   const overlaps = boxed.some(({ line: o }) => o !== line && Math.abs(o.bounds.y0 - b.y0) < 0.3 * size && b.x0 < o.bounds.x1 && b.x1 > o.bounds.x0);
   if (tooWide || overlaps) { box.style.outline = '1px solid #e07a7a'; flash('글이 원래 자리보다 길어 오른쪽과 겹칩니다 — 줄여 보세요'); }
 }
+// 선택 상태(selectedObj)는 항상 이 모양으로 만든다. seps(가리기 범위 매핑)·group(그룹 해제 버튼)을 빠뜨리면 이동·확대 후 기능이 사라진다
+const lineSelection = (i, line, wrap, box) => ({ i, objs: line.objs, seps: line.seps, text: line.text, wrap, box, size: line.size, font: line.font, bounds: line.bounds, group: line.group || null });
 function selectLine(i, line, wrap, box) {
-  selectedObj = { i, objs: line.objs, seps: line.seps, text: line.text, wrap, box, size: line.size, font: line.font, bounds: line.bounds, group: line.group || null };
+  selectedObj = lineSelection(i, line, wrap, box);
   updateEditRadio();
   openInlineEditor(line.text);
 }
@@ -803,7 +857,7 @@ function openInlineEditor(initialText) {
     const boxed = await refreshPage(i);
     const hit = boxed.find(({ line }) => line.objs.some((o) => idxs.includes(o.idx)));
     if (!hit) return;
-    selectedObj = { i, objs: hit.line.objs, text: hit.line.text, wrap, box: hit.box, size: hit.line.size, font: hit.line.font, bounds: hit.line.bounds };
+    selectedObj = lineSelection(i, hit.line, wrap, hit.box);
     openInlineEditor(savedVal);
   }
 
@@ -838,9 +892,69 @@ async function refreshPage(i, editedIdx) {
   if (editedIdx != null) checkOverflow(i, editedIdx, boxed);
   return boxed;
 }
-function setZoom(s) { pdfScale = Math.max(0.5, Math.min(3, s)); $('#zoomPct').textContent = Math.round(pdfScale * 100) + '%'; if (cur && cur.endsWith('.pdf')) void renderPdfDoc(cur); }
-$('#zoomIn').onclick = () => setZoom(pdfScale + 0.25);
-$('#zoomOut').onclick = () => setZoom(pdfScale - 0.25);
+// ---- 확대/축소 ----
+// anchor = 화면 좌표 {x,y}: 그 지점(커서 아래 글자)이 확대 뒤에도 같은 자리에 오게 스크롤을 맞춘다. 없으면 화면 가운데 기준.
+// 틀과 상자는 즉시 새 배율로 바꾸고(브라우저가 기존 이미지를 늘려 보여 준다), 선명한 이미지는 휠이 멈춘 뒤 한 번만 서버에 요청한다
+// (휠 한 칸마다 전 페이지를 다시 렌더하면 서버가 몇 초씩 막힌다). 편집 패널이 열려 있으면 입력 중이던 글을 유지한 채 다시 연다.
+let zoomTimer = 0;
+function showZoom() { $('#zoomPct').textContent = Math.round(pdfScale * 100) + '%'; }
+function applyZoom(next, anchor) {
+  next = clampZoom(next);
+  if (next === pdfScale) return;
+  const el = $('#pdf'), wraps = [...el.children];
+  if (!cur || !cur.endsWith('.pdf') || !wraps.length) { pdfScale = next; showZoom(); localStorage.setItem('editorkim.zoom', pdfScale); return; }
+  const rect = el.getBoundingClientRect();
+  const ax = anchor ? anchor.x - rect.left : el.clientWidth / 2, ay = anchor ? anchor.y - rect.top : el.clientHeight / 2;
+  const docX = el.scrollLeft + ax, docY = el.scrollTop + ay;
+  // 기준 페이지: 커서가 놓인 페이지(없으면 가장 가까운 페이지) 안의 상대 위치(fx, fy)를 기억했다가 새 크기에서 같은 자리로 스크롤
+  const target = wraps.find((w) => docY >= w.offsetTop && docY <= w.offsetTop + w.offsetHeight)
+    || wraps.reduce((best, w) => (Math.abs(w.offsetTop - docY) < Math.abs(best.offsetTop - docY) ? w : best), wraps[0]);
+  const fx = (docX - target.offsetLeft) / target.offsetWidth, fy = (docY - target.offsetTop) / target.offsetHeight;
+  const editing = selectedObj && { i: selectedObj.i, idxs: selectedObj.objs.map((o) => o.idx), text: el.querySelector('.pdfEditor textarea')?.value };
+  closeAnyPanel(); clearMulti();
+  pdfScale = next; showZoom(); localStorage.setItem('editorkim.zoom', pdfScale);
+  const boxedByPage = wraps.map((wrap, i) => {
+    const { w, h } = pdfPages[i];
+    wrap.style.width = (w * pdfScale) + 'px'; wrap.style.height = (h * pdfScale) + 'px';
+    wrap.querySelectorAll('.pdfBox, .pdfEditor').forEach((b) => b.remove());
+    return pdfObjects[i] ? drawOverlay(wrap, i, pdfObjects[i], h) : [];
+  });
+  el.scrollTop = target.offsetTop + fy * target.offsetHeight - ay;
+  el.scrollLeft = target.offsetLeft + fx * target.offsetWidth - ax;
+  if (editing) {
+    const hit = boxedByPage[editing.i].find(({ line }) => line.objs.some((o) => editing.idxs.includes(o.idx)));
+    if (hit) { selectedObj = lineSelection(editing.i, hit.line, wraps[editing.i], hit.box); updateEditRadio(); openInlineEditor(editing.text ?? hit.line.text); }
+  }
+  clearTimeout(zoomTimer);
+  zoomTimer = setTimeout(() => {
+    if (!cur || !cur.endsWith('.pdf')) return;
+    [...$('#pdf').children].forEach((wrap, i) => { const img = wrap.querySelector('img'); if (img) img.src = pageUrl(cur, i); });
+  }, 200);
+}
+function fitWidth() {
+  if (!pdfPages.length) return;
+  const el = $('#pdf'), pad = 2 * parseFloat(getComputedStyle(el).paddingLeft || '20');
+  applyZoom((el.clientWidth - pad - 4) / Math.max(...pdfPages.map((p) => p.w)));
+}
+showZoom();
+$('#zoomIn').onclick = () => applyZoom(pdfScale + 0.25);
+$('#zoomOut').onclick = () => applyZoom(pdfScale - 0.25);
+$('#zoomPct').onclick = () => applyZoom(1);
+$('#zoomFit').onclick = fitWidth;
+// Ctrl+휠: 커서 위치 기준 확대/축소. 마우스 휠 한 칸(±100)은 약 10%, 터치패드 핀치(작은 delta)는 그만큼 미세하게
+$('#pdf').addEventListener('wheel', (e) => {
+  if (!e.ctrlKey) return; // 그냥 휠은 스크롤
+  e.preventDefault();
+  applyZoom(pdfScale * Math.max(0.8, Math.min(1.25, Math.exp(-e.deltaY / 1000))), { x: e.clientX, y: e.clientY });
+}, { passive: false });
+// PDF 밖(Markdown 편집기 등)에서의 Ctrl+휠은 Chromium의 페이지 전체 확대가 되어 화면이 어긋난다 → 막는다
+document.addEventListener('wheel', (e) => { if (e.ctrlKey) e.preventDefault(); }, { passive: false });
+document.addEventListener('keydown', (e) => {
+  if (!e.ctrlKey || e.altKey || !cur || !cur.endsWith('.pdf')) return;
+  if (e.key === '=' || e.key === '+') { e.preventDefault(); applyZoom(pdfScale * 1.1); }
+  else if (e.key === '-') { e.preventDefault(); applyZoom(pdfScale / 1.1); }
+  else if (e.key === '0') { e.preventDefault(); fitWidth(); }
+});
 function updateEditRadio() {
   const isPdf = cur && cur.endsWith('.pdf');
   $('#editRadio').disabled = isPdf ? !selectedObj : false;
@@ -901,19 +1015,27 @@ document.addEventListener('mouseup', async (e) => {
 
 // ---- AI 패널 ----
 function add(cls, text) { const d = document.createElement('div'); d.className = 'msg ' + cls; d.textContent = text; $('#log').appendChild(d); $('#log').scrollTop = 1e9; return d; }
-function flash(t, ms = 1500) { const s = $('#status').textContent; $('#status').textContent = t; setTimeout(() => ($('#status').textContent = s), ms); }
-$('#newChat').onclick = async () => { if (cur && activeAi) await fetch('/api/session/reset', { method: 'POST', body: JSON.stringify({ name: cur, provider: activeAi.provider }) }); $('#log').innerHTML = ''; add('bot', '새 대화를 시작합니다.'); };
-$('#q').addEventListener('keydown', (e) => { if (e.ctrlKey && e.key === 'Enter') $('#send').click(); });
+$('#newChat').onclick = async () => { if (cur && activeAi) await apiPost('/api/session/reset', { name: cur, provider: activeAi.provider }).catch(() => {}); $('#log').innerHTML = ''; add('bot', '새 대화를 시작합니다.'); };
+// Enter 전송, Shift+Enter 줄바꿈 (Ctrl+Enter도 전송). 한글 조합 중(isComposing)의 Enter는 조합 확정이므로 보내지 않는다
+$('#q').addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return;
+  if (e.shiftKey && !e.ctrlKey) return;
+  e.preventDefault(); $('#send').click();
+});
+let chatAbort = null; // 응답 생성 중이면 AbortController — [중지] 버튼·Esc가 끊는다(서버는 연결이 끊기면 CLI 호출도 중단)
+$('#stop').onclick = () => chatAbort?.abort();
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && chatAbort && document.activeElement === $('#q')) chatAbort.abort(); });
 $('#send').onclick = async () => {
-  const q = $('#q').value.trim(); if (!q || !cur || !activeAi) return;
+  const q = $('#q').value.trim(); if (!q || !cur || !activeAi || chatAbort) return;
   let mode = document.querySelector('[name=mode]:checked').value;
   const isPdf = cur.endsWith('.pdf');
   if (mode === 'edit' && isPdf) mode = 'editText'; // PDF에서는 선택 객체 텍스트만 고침
   const sendDoc = mode === 'editText' && selectedObj ? selectedObj.text : docText;
   add('me', (mode !== 'chat' ? '✏️ ' : '') + q); $('#q').value = ''; $('#send').disabled = true;
   const bot = add('bot', mode === 'chat' ? '…' : '문서를 수정하는 중…'); let out = '';
+  chatAbort = new AbortController(); $('#stop').hidden = false;
   try {
-    const r = await fetch('/api/chat', { method: 'POST', body: JSON.stringify({ mode, doc: sendDoc, name: cur, q, provider: activeAi.provider, model: activeAi.model }) });
+    const r = await fetch('/api/chat', { method: 'POST', body: JSON.stringify({ mode, doc: sendDoc, name: cur, q, provider: activeAi.provider, model: activeAi.model }), signal: chatAbort.signal });
     if (!r.ok || !r.body) throw new Error((await r.json().catch(() => null))?.error || `HTTP ${r.status}`);
     const rd = r.body.getReader(), dec = new TextDecoder(); let buf = '';
     while (true) {
@@ -922,6 +1044,7 @@ $('#send').onclick = async () => {
       for (const line of buf.split('\n\n').slice(0, -1)) {
         if (!line.startsWith('data: ')) continue; const ev = JSON.parse(line.slice(6));
         if (ev.delta) { out += ev.delta; bot.textContent = mode === 'chat' ? out : `문서를 수정하는 중… ${out.length}자`; }
+        if (ev.notice) flash(ev.notice, 4000);
         if (ev.error) bot.textContent = '오류: ' + ev.error;
         if (ev.done) {
           out = ev.done.text || out;
@@ -937,8 +1060,8 @@ $('#send').onclick = async () => {
       }
       buf = buf.split('\n\n').slice(-1)[0];
     }
-  } catch (error) { bot.textContent = '오류: ' + error.message; }
-  finally { syncAiState(); }
+  } catch (error) { bot.textContent = error.name === 'AbortError' ? (out ? `${out}\n\n(중지됨)` : '중지됨') : '오류: ' + error.message; }
+  finally { chatAbort = null; $('#stop').hidden = true; syncAiState(); }
 };
 
 // ---- 줄 단위 diff (LCS) ----

@@ -4,7 +4,24 @@ All notable changes to EDITOR_KIM are recorded here. The format follows [Keep a 
 
 ## [Unreleased]
 
-- No pending release notes.
+### Added
+- **Ctrl + mouse wheel zoom** on PDFs, anchored at the cursor (the text under the pointer stays put). `Ctrl+=` / `Ctrl+-` step the zoom, `Ctrl+0` and the new **폭 맞춤** button fit the page width, clicking the percentage resets to 100%. Wheel events resize the page frames immediately and request crisp renders only after the wheel stops. The zoom level is remembered between launches, and an open edit panel survives zooming with its typed text.
+- **Stop** button (and `Esc` in the prompt box) while an AI reply is streaming. The server aborts the Claude process or interrupts the Codex turn when the client disconnects.
+- `Enter` sends the AI prompt, `Shift+Enter` inserts a newline (`Ctrl+Enter` still sends). Enter during Hangul composition is ignored.
+- Pages render at the display's pixel density (capped at 2×) so text is sharp on 125 % / 150 % scaled screens; page images load lazily, so long documents open with only the visible pages rendered.
+- When a resumed chat session no longer exists on the CLI side (update, cleared session files), the request is retried automatically as a fresh conversation with the document re-attached.
+
+### Fixed
+- **Codex reported as "not installed" although it was**: with an npm install, `where codex` lists the extension-less shell script before `codex.cmd`, and the app tried to run the script. Executable discovery now prefers `.exe`, then `.cmd`, ignores extension-less entries, and also finds the `codex.exe` bundled with the Codex desktop app.
+- Codex App Server failures no longer hang: a spawn error or a failed `initialize` rejects pending requests immediately instead of waiting for the 15 s timeout, and a half-initialized process is no longer kept as "running".
+- Save failures (file locked by another program, permission denied) were shown as "저장됨" and the dirty marker cleared; now the reason is shown, the document stays dirty, and the temporary file is removed.
+- Removing an edited PDF from the file list left its unsaved edits in the server cache, so reopening the file showed them as a clean document. Removal now asks when dirty and closes the server document; dirty state and undo/redo depth are read from the server on open.
+- Rotated or skewed text could not be masked: `/api/pdf/mask` now handles it like fragment text (blank the whole object and cover its bounds) instead of silently skipping it while reporting success.
+- Overlapping status flashes left a stale message in the status bar permanently.
+- Nudging an edited line with the arrow buttons dropped the group-ungroup button and the mask selection mapping.
+- Login polling checked both CLIs every 2 s; it now checks only the provider being set up. Login itself runs in a visible console window, because Claude's login asks which account type to use and a hidden process cannot answer.
+- The default Electron menu is removed so `Ctrl+R` (reload, which lost the editing state) and `Ctrl+=` (page-wide zoom) no longer hijack editor shortcuts; DevTools opens with `F12`. Pinch/page zoom is locked.
+- The server checks the `Host` header, closing the DNS-rebinding path to local files, and executable paths containing spaces work in `.cmd` (shell) mode.
 
 ## [0.5.0] - 2026-09-04
 

@@ -86,7 +86,11 @@ Text redaction removes the selected characters from the PDF object, adds a recta
 | `Ctrl+Shift+S` | Save as |
 | `Ctrl+Z` / `Ctrl+Y` | Undo / redo |
 | `Ctrl+J` | Toggle AI panel |
-| `Ctrl+Enter` | Send AI request |
+| `Ctrl` + mouse wheel | Zoom the PDF around the cursor |
+| `Ctrl+=` / `Ctrl+-` / `Ctrl+0` | Zoom in / out / fit page width |
+| `Enter` / `Shift+Enter` | Send AI request / new line in the prompt |
+| `Esc` (in the prompt) | Stop the streaming AI reply |
+| `F12` | Developer tools |
 
 ## Development and verification
 
