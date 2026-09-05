@@ -413,8 +413,9 @@ async function open(buffer) {
     // 객체가 맨 뒤로 가므로 idx가 바뀐다 → {idx}로 돌려준다.
     _setOne(i, idx, newText) {
       const p = page(i), o0 = P.FPDFPage_GetObject(p, idx);
+      if (!o0 || P.FPDFPageObj_GetType(o0) !== OBJ_TEXT) return { ok: false, fallbackFont: false };
       const hidden = !!(o0 && P.FPDFPageObj_GetType(o0) === OBJ_TEXT && [3, 7].includes(P.FPDFTextObj_GetTextRenderMode(o0)) || (o0 && (() => { const c = mal(16); try { return P.FPDFPageObj_GetFillColor(o0, c, c + 4, c + 8, c + 12) && i32(c + 12) === 0; } finally { free(c); } })()));
-      let cover = null, ink = null;
+      let cover = null, ink = null, background = null;
       if (hidden) { // 편집 전에 재야 한다: 그림(보이는 글자)이 아직 있을 때 배경색·글자색을 뽑는다
         const all = api.objects(i), b = all[idx].bounds, pad = 3;
         cover = { x0: b.x0 - pad, y0: b.y0 - pad, x1: b.x1 + pad, y1: b.y1 + pad };
@@ -433,7 +434,7 @@ async function open(buffer) {
         // 텍스트 상자 가운데에서 좌우로 나가며 잉크 없는 빈 열이 gap(글자 크기의 0.25) 이상 이어지면 멈춘다
         cover = api._inkExtent(i, cover, b);
         ink = api.sampleInk(i, cover);
-        api.addRect(i, cover, api.sampleColor(i, cover));
+        background = api.sampleColor(i, cover);
       }
       // 투명 글자는 항상 새 객체로 다시 만든다(forceNew): 제자리 SetText면 옛 객체의 ExtGState(ca 0)가 저장 시 그대로 기록돼 다시 투명해진다
       const r = api._setOneRaw(i, idx, newText, hidden);
@@ -442,6 +443,8 @@ async function open(buffer) {
       P.FPDFTextObj_SetTextRenderMode(o, 0);
       // 알파 254: PDFium은 알파가 정확히 1.0이면 gs를 안 써서 원래의 ca 0(투명)이 저장 후 되살아난다. 1.0이 아닌 값이어야 명시적으로 기록된다
       P.FPDFPageObj_SetFillColor(o, ink[0], ink[1], ink[2], 254);
+      // 폰트/글리프 검사에 실패하면 원본 화면을 그대로 둔다. 배경은 교체 전에 측정하되 덮개는 성공 후에만 추가한다.
+      api.addRect(i, cover, background);
       P.FPDFPage_RemoveObject(p, o); P.FPDFPage_InsertObject(p, o); // 맨 위(z-순서)로
       P.FPDFPage_GenerateContent(p);
       return { ...r, idx: P.FPDFPage_CountObjects(p) - 1, revealed: true, ink };
@@ -488,7 +491,9 @@ async function open(buffer) {
         if (!P.FPDFPage_InsertObjectAtIndex(p, neo, idx)) P.FPDFPage_InsertObject(p, neo);
         P.FPDFPage_RemoveObject(p, o);
         P.FPDFPageObj_Destroy(o); // 페이지에서 뗀 객체는 직접 해제해야 샘 안 남
-        P.FPDFPage_GenerateContent(p);
+        // 투명 글자 교체는 _setOne에서 색/알파를 확정한 뒤 콘텐츠를 만든다.
+        // ca=0인 중간 객체를 먼저 기록하면 PDFium의 ExtGState 리소스가 재사용돼 저장 후 다시 투명해질 수 있다.
+        if (!forceNew) P.FPDFPage_GenerateContent(p);
         return { ok: true, fallbackFont: !usingOrig };
       } finally { free(u16); free(scratch); }
     },

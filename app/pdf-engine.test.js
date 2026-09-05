@@ -290,6 +290,29 @@ const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     d.close();
   }
 
+  // 투명 글자 편집 실패: 덮개만 남아서 그림 속 원문을 지우면 안 된다.
+  {
+    const d = await open(src);
+    const b = d.objects(0)[1].bounds;
+    assert.ok(d._setFillColor(0, 1, [0, 0, 0, 0]));
+    d.addRect(0, b, [20, 60, 180, 255]); // 보이는 그림을 흉내 낸다.
+    const before = d.objects(0), pixels = d._renderRaw(0, 1).data;
+    const r = d.setText(0, 1, '\u{10ffff}'); // 원본·폴백 폰트 모두 지원하지 않는 문자
+    assert.strictEqual(r.ok, false);
+    assert.deepStrictEqual(d.objects(0), before, '실패하면 덮개 추가 없이 원본 객체 보존');
+    assert.ok(d._renderRaw(0, 1).data.equals(pixels), '실패하면 원본 픽셀 보존');
+    const reopened = await open(d.save());
+    assert.strictEqual(reopened.objects(0).length, before.length, '저장 후에도 불필요한 덮개 없음');
+    assert.ok(reopened._renderRaw(0, 1).data.equals(pixels), '저장·재열기 후에도 원본 화면 보존');
+    reopened.close();
+    const { idx } = d.addRect(0, b, [0, 0, 0, 0]);
+    const shapes = d.objects(0);
+    assert.strictEqual(d.setText(0, idx, 'invalid').ok, false, '투명 도형은 텍스트 편집 대상 아님');
+    assert.deepStrictEqual(d.objects(0), shapes, '투명 도형 편집 실패 시에도 객체 보존');
+    d.close();
+    console.log('투명 글자 편집 실패 시 원본 보존 OK');
+  }
+
   // 투명 글자(알파 0, PowerPoint 그림 위 검색용) 편집: 배경 사각형으로 덮고 글자를 보이게 맨 위에 다시 그린다
   {
     const d = await open(src);
@@ -297,7 +320,7 @@ const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     d.addRect(0, b, [255, 255, 255, 255]); // 원래 글자를 흰 사각형으로 가려 "글자 없는" 그림 상태를 흉내
     assert.ok(d._setFillColor(0, 1, [0, 0, 0, 0]), '알파 0');
     const hiddenObj = d.objects(0)[1];
-    assert.ok(!hiddenObj.hidden || true, 'hidden 플래그는 렌더 모드 기준(알파는 _setOne이 직접 검사)');
+    assert.strictEqual(hiddenObj.hidden, true, '알파 0 텍스트는 hidden으로 표시');
     const dark = (bb) => { const r = d._renderRaw(0, 1); let n = 0; for (let y = Math.floor(842 - bb.y1); y < Math.ceil(842 - bb.y0); y++) for (let x = Math.floor(bb.x0); x < Math.ceil(bb.x1); x++) { const p = y * r.stride + x * 4; if (r.data[p] < 100) n++; } return n; };
     assert.strictEqual(dark(b), 0, '편집 전: 글자가 보이지 않음');
     const r = d.setText(0, 1, 'REVEALED');
