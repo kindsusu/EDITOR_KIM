@@ -4,6 +4,8 @@ All notable changes to EDITOR_KIM are recorded here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-05
+
 ### Added
 - Font matching for a single ungrouped text line: installed static TTF selection, desktop TTF import, glyph checks, size/width controls, and a saved-and-reopened preview before applying with undo support. Selected font IDs are embedded for later edits.
 - Claude/Codex image-based font recommendations are gated on PDFium capability: only hidden image-backed text or unsupported source glyphs can call AI. Normal editable text skips AI on both client and server. Recommendations use the selected region and an allowlist of supported installed fonts; manual selection remains available.
