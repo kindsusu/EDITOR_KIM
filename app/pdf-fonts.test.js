@@ -22,14 +22,18 @@ const src = fs.readFileSync(path.join(__dirname, '../workspace/sample.pdf'));
       assert.ok(Buffer.from(options.images[0], 'base64').subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10])), 'AI receives PNG crop');
       return { text: JSON.stringify({ candidates: [{ fontId: font.id, reason: '비교 후보' }], note: '확정 아님' }) };
     } };
-    const skipped = await service.recommend(doc, q, ai);
-    assert.ok(skipped.skipped); assert.strictEqual(calls, 0, 'PDFium-editable text never calls AI');
+    for (const provider of ['claude', 'codex']) {
+      const skipped = await service.recommend(doc, { ...q, provider }, ai);
+      assert.ok(skipped.skipped); assert.strictEqual(calls, 0, `${provider}: PDFium-editable text never calls AI`);
+    }
     assert.strictEqual(doc.fontStatus(0, 1, '한글').needsAi, true, 'missing source glyphs require assistance');
     doc._setFillColor(0, 1, [0,0,0,0]);
     q.token = service.context(doc, 0, 1, q.text).token;
     assert.strictEqual(doc.fontStatus(0, 1, q.text).needsAi, true, 'hidden image text requires assistance');
-    assert.strictEqual((await service.recommend(doc, q, ai)).candidates[0].fontId, font.id);
-    assert.strictEqual(calls, 1);
+    for (const provider of ['claude', 'codex']) {
+      assert.strictEqual((await service.recommend(doc, { ...q, provider }, ai)).candidates[0].fontId, font.id);
+    }
+    assert.strictEqual(calls, 2);
     const before = doc.objects(0), raw = doc._renderRaw(0, 1).data;
     const request = { ...q, text: '한글 폰트 검사', fontId: font.id, size: 18, fit: true };
     const prepared = await service.prepare(doc, request);

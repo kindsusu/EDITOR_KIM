@@ -15,6 +15,7 @@ All notable changes to EDITOR_KIM are recorded here. The format follows [Keep a 
 - When a resumed chat session no longer exists on the CLI side (update, cleared session files), the request is retried automatically as a fresh conversation with the document re-attached.
 
 ### Fixed
+- Claude responses preserve Korean characters split across stream chunks and consume the final result even without a trailing newline. Font matching uses the completed JSON, rejects failed/truncated responses even after partial output, and cancels promptly during CLI discovery or generation. Regression coverage includes text-only session resume; live Sonnet/Opus font recommendation and PDF save/reopen checks passed.
 - **Codex reported as "not installed" although it was**: with an npm install, `where codex` lists the extension-less shell script before `codex.cmd`, and the app tried to run the script. Executable discovery now prefers `.exe`, then `.cmd`, ignores extension-less entries, and also finds the `codex.exe` bundled with the Codex desktop app.
 - Codex App Server failures no longer hang: a spawn error or a failed `initialize` rejects pending requests immediately instead of waiting for the 15 s timeout, and a half-initialized process is no longer kept as "running".
 - Save failures (file locked by another program, permission denied) were shown as "저장됨" and the dirty marker cleared; now the reason is shown, the document stays dirty, and the temporary file is removed.

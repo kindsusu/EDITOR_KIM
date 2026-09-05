@@ -3,6 +3,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const readline = require('readline');
+const { StringDecoder } = require('string_decoder');
 const { EventEmitter } = require('events');
 const { execFile, spawn } = require('child_process');
 
@@ -313,32 +314,43 @@ function createProviders({ version }) {
     if (signal?.aborted) throw abortError();
     const executable = await findClaude();
     if (!executable) throw new Error('Claude Code가 설치되어 있지 않습니다');
+    if (signal?.aborted) throw abortError();
     return new Promise((resolve, reject) => {
       const args = ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--model', model || 'sonnet'];
       if (images.length) args.push('--input-format', 'stream-json', '--tools', '', '--disallowedTools', 'mcp__*');
       if (session) args.push('--resume', session);
       const child = spawn(commandFile(executable), args, { ...commandOpts(executable), stdio: ['pipe', 'pipe', 'pipe'] });
-      let buf = '', text = '', result = null, error = '';
-      const onAbort = () => { try { child.kill(); } catch {} };
+      let buf = '', text = '', result = null, error = '', settled = false;
+      const decoder = new StringDecoder('utf8');
+      const finish = (failure, value) => {
+        if (settled) return;
+        settled = true; signal?.removeEventListener('abort', onAbort);
+        if (failure) reject(failure); else resolve(value);
+      };
+      const onAbort = () => { try { child.kill(); } catch {} finish(abortError()); };
       signal?.addEventListener('abort', onAbort, { once: true });
+      const consume = (line) => {
+        if (settled || !line.trim()) return;
+        let event; try { event = JSON.parse(line); } catch { return; }
+        if (event.type === 'stream_event' && event.event?.delta?.type === 'text_delta') { text += event.event.delta.text; onDelta(event.event.delta.text); }
+        else if (event.type === 'result') result = event;
+      };
       child.stdout.on('data', (data) => {
-        buf += data; const lines = buf.split('\n'); buf = lines.pop();
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          let event; try { event = JSON.parse(line); } catch { continue; }
-          if (event.type === 'stream_event' && event.event?.delta?.type === 'text_delta') { text += event.event.delta.text; onDelta(event.event.delta.text); }
-          else if (event.type === 'result') result = event;
-        }
+        if (settled) return;
+        buf += decoder.write(data); const lines = buf.split('\n'); buf = lines.pop();
+        lines.forEach(consume);
       });
       child.stderr.on('data', (data) => { error += data; });
       child.stdin.on('error', () => {}); // 프로세스가 먼저 죽으면 EPIPE — close에서 처리
-      child.on('error', reject);
+      child.on('error', (error) => finish(error));
       child.on('close', (code) => {
-        signal?.removeEventListener('abort', onAbort);
-        if (signal?.aborted) return reject(abortError());
-        if (code !== 0 && !result) return reject(new Error(error.trim() || `claude exit ${code}`));
-        if (result?.is_error && !text) return reject(new Error(result.result || error.trim() || 'Claude 호출 오류'));
-        resolve({ text: text || result?.result || '', cost: result?.total_cost_usd, ms: result?.duration_api_ms,
+        if (settled) return;
+        consume(buf + decoder.end());
+        if (signal?.aborted) return finish(abortError());
+        if (result?.is_error) return finish(new Error(result.result || result.errors?.join('\n') || error.trim() || 'Claude 호출 오류'));
+        if (code !== 0) return finish(new Error(error.trim() || `Claude 프로세스가 종료되었습니다 (${code})`));
+        if (!result) return finish(new Error('Claude 완료 응답을 받지 못했습니다. 다시 시도하세요.'));
+        finish(null, { text: result.result ?? text, cost: result.total_cost_usd, ms: result.duration_api_ms,
           session: result?.session_id, model: result?.modelUsage && Object.keys(result.modelUsage)[0], billing: 'Claude 구독' });
       });
       child.stdin.end(images.length ? claudeInput(prompt, images) : prompt);
