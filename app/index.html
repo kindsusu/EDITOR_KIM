@@ -513,7 +513,7 @@ async function renderPdfDoc(name) {
   rebuildDocText();
   // 투명 글자(그림 위 검색용 텍스트)가 있으면 열 때 한 번만 알린다
   const hiddenCount = pdfObjects.reduce((n, objs) => n + objs.filter((o) => o.type === 'text' && o.hidden).length, 0);
-  if (hiddenCount) flash(`이 문서의 글자 ${hiddenCount}개는 그림 위 투명 글자입니다 — 고치면 그림을 덮고 새로 그립니다`, 4000);
+  if (hiddenCount) flash(`이 문서의 텍스트 상자 ${hiddenCount}개는 투명합니다 — 수정 시 그림을 덮고 새로 그리며, 글꼴 모양이 달라질 수 있습니다`, 6000);
 }
 function rebuildDocText() { docText = pdfObjects.map((objs, i) => `[p.${i + 1}] ` + objs.filter((o) => o.type === 'text').map((o) => o.text).join(' ')).join('\n'); }
 // 상자 = 텍스트 객체 하나. 자동으로 묶지 않는다(표의 옆 칸 같은 다른 상자를 잘못 묶던 문제).
@@ -726,8 +726,11 @@ function openInlineEditor(initialText) {
   const fontName = (font || '').replace(/^[A-Z]+\+/, '') || '기본 글꼴';
   const panel = document.createElement('div');
   panel.className = 'pdfEditor';
-  const hiddenNote = selectedObj.objs.some((o) => o.hidden) ? ' · 투명 글자(그림 위) — 적용하면 그림을 덮고 새로 그립니다' : '';
-  panel.innerHTML = `<h5>이 줄 고치기</h5><div class="hint2">${fontName} · ${Math.round(size)}pt${hiddenNote}</div>`;
+  const hiddenNote = selectedObj.objs.some((o) => o.hidden) ? ' · 검색용 투명 글자: 표시된 글꼴은 그림 속 서체와 다를 수 있습니다. 적용하면 그림을 덮고 새로 그립니다.' : '';
+  const heading = document.createElement('h5'); heading.textContent = '이 줄 고치기';
+  const fontHint = document.createElement('div'); fontHint.className = 'hint2';
+  fontHint.textContent = `${fontName} · ${Math.round(size)}pt${hiddenNote}`;
+  panel.append(heading, fontHint);
   const ta = document.createElement('textarea');
   ta.value = initialText; ta.rows = 2;
   panel.appendChild(ta);

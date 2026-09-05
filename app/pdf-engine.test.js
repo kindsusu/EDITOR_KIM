@@ -346,6 +346,36 @@ const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     d.close();
   }
 
+  // 파일에 이미 ca=0 리소스가 있는 경우: 메모리에서 투명도를 바꾸는 검사만으로는
+  // 중간 GenerateContent가 잘못된 ExtGState를 재사용하는 저장 회귀를 잡지 못한다.
+  for (const replacement of ['RELOADED', '저장 후에도 보이는 글자']) {
+    const seed = await open(src);
+    const bounds = seed.objects(0)[1].bounds;
+    seed.addRect(0, bounds, [255, 255, 255, 255]);
+    seed._setFillColor(0, 1, [0, 0, 0, 0]);
+    const input = seed.save();
+    seed.close();
+    const d = await open(input);
+    assert.strictEqual(d.objects(0)[1].hidden, true, '파일에서 읽은 투명 글자');
+    const r = d.setText(0, 1, replacement);
+    assert.ok(r.ok && r.revealed, '불러온 투명 글자 편집 성공');
+    assert.strictEqual(r.fallbackFont, replacement !== 'RELOADED', '원본·폴백 폰트 각각 검사');
+    const reopened = await open(d.save());
+    const edited = reopened.objects(0).find((o) => o.text === replacement);
+    assert.ok(edited && !edited.hidden && edited.color[3] >= 250, '편집·저장·재열기 뒤에도 표시 텍스트');
+    const raw = reopened._renderRaw(0, 1), height = reopened.pageSize(0).h;
+    let dark = 0;
+    for (let y = Math.max(0, Math.floor(height - edited.bounds.y1)); y < Math.min(raw.h, Math.ceil(height - edited.bounds.y0)); y++) {
+      for (let x = Math.max(0, Math.floor(edited.bounds.x0)); x < Math.min(raw.w, Math.ceil(edited.bounds.x1)); x++) {
+        if (raw.data[y * raw.stride + x * 4] < 100) dark++;
+      }
+    }
+    assert.ok(dark > 20, '재열기한 편집 영역에 실제 글자 픽셀 존재');
+    reopened.close();
+    d.close();
+  }
+  console.log('파일에서 읽은 투명 글자: 원본·폴백 폰트 저장 회귀 OK');
+
   // 폭 맞춤: 긴 글이 maxWidth 안에서 줄바꿈되거나(wrap) 축소돼야(shrink) 한다
   {
     const long = 'This sentence is deliberately much longer than the original line so that it must wrap into several lines.';
