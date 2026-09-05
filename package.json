@@ -7,7 +7,7 @@
   "scripts": {
     "start": "electron .",
     "serve": "node app/server.js",
-    "test": "node app/pdf-engine.test.js && node app/ai-providers.test.js",
+    "test": "node app/pdf-engine.test.js && node app/ai-providers.test.js && node app/pdf-fonts.test.js",
     "dist": "electron-builder --win",
     "md2pdf": "electron tools/md2pdf.js",
     "assets": "node tools/demo-assets.js",

@@ -2,6 +2,7 @@
 // 계약: PLAN.md P2 "엔진 계약" 참고.
 const fs = require('fs');
 const fontkit = require('fontkit');
+const fontRegistry = require('./pdf-fonts');
 
 const MARK_MASK = 'EditorKimMask', MARK_GROUP = 'EditorKimGroup';
 const LEGACY = { EditorKimMask: 'DaepilMask', EditorKimGroup: 'DaepilGroup' }; // 옛 이름으로 저장된 파일 호환용 — 읽기 전용
@@ -138,6 +139,20 @@ async function open(buffer) {
   //   새 글자만 담으면 중복은 없지만 편집마다 폰트 객체가 늘어나고 헤더/공통 테이블이 매번 붙는다. 편집 수십 건 규모라 합집합이 싸다.
   const fbPtrs = [];                        // 문서가 닫힐 때까지 살려둬야 하는 폰트 버퍼 (PDFium이 복사하지 않는다)
   const fb = { regular: null, bold: null }; // { font, chars:Set }
+  const customFonts = new Map();
+  let selectedFont = null;
+  function customFont(entry, text) {
+    const cur = customFonts.get(entry.id);
+    if (cur && [...text].every((c) => cur.chars.has(c))) return cur.font;
+    const chars = new Set([...(cur?.chars || []), ...text]);
+    const data = subsetTTF(entry.path, chars), ptr = mal(data.length);
+    heap().set(data, ptr); fbPtrs.push(ptr);
+    const font = P.FPDFText_LoadFont(doc, ptr, data.length, FPDF_FONT_TRUETYPE, true);
+    if (!font) throw new Error('선택한 폰트를 PDF에 넣지 못했습니다.');
+    customFonts.set(entry.id, { font, chars });
+    fbBold.set(font, /bold|black|heavy/i.test(entry.label));
+    return font;
+  }
   function fallbackFont(bold, text) {
     const key = bold ? 'bold' : 'regular';
     const cur = fb[key];
@@ -226,6 +241,14 @@ async function open(buffer) {
     } finally { free(n); }
   };
   const groupOf = (o) => { const mk = findMark(o, MARK_GROUP); return mk ? markParam(mk, 'id') : null; };
+  const fontOf = (o) => { const mk = findMark(o, 'EditorKimFont'); return mk ? markParam(mk, 'id') : null; };
+  const chosenFont = (o) => selectedFont || (fontOf(o) ? fontRegistry.get(fontOf(o)) : null);
+  const tagFont = (o, entry) => {
+    let mk; while ((mk = findMark(o, 'EditorKimFont'))) P.FPDFPageObj_RemoveMark(o, mk);
+    mk = P.FPDFPageObj_AddMark(o, 'EditorKimFont');
+    P.FPDFPageObjMark_SetStringParam(doc, o, mk, 'id', entry.id);
+    P.FPDFPageObjMark_SetStringParam(doc, o, mk, 'label', entry.label);
+  };
   const tagGroup = (o, id) => { // id=null이면 해제
     let mk; while ((mk = findMark(o, MARK_GROUP))) P.FPDFPageObj_RemoveMark(o, mk);
     if (id) { mk = P.FPDFPageObj_AddMark(o, MARK_GROUP); if (mk) P.FPDFPageObjMark_SetStringParam(doc, o, mk, 'id', id); }
@@ -265,6 +288,72 @@ async function open(buffer) {
       });
     },
 
+    // Render only the selected region; no full document image is sent to AI.
+    renderRegion(i, bounds, scale = 2) {
+      const size = api.pageSize(i);
+      if (!bounds || !Object.values(bounds).every(Number.isFinite)) throw new Error('잘못된 미리보기 범위');
+      const x = Math.max(0, bounds.x0 - 8), top = Math.max(0, size.h - bounds.y1 - 8);
+      const w = Math.min(size.w - x, bounds.x1 + 8 - x), h = Math.min(size.h - top, size.h - bounds.y0 + 8 - top);
+      if (!(w > 0 && h > 0)) throw new Error('선택 영역이 페이지 밖에 있습니다.');
+      const s = Math.min(scale, 1600 / w, 600 / h), pw = Math.max(1, Math.ceil(w * s)), ph = Math.max(1, Math.ceil(h * s));
+      const bmp = P.FPDFBitmap_Create(pw, ph, 0), outPP = mal(4);
+      if (!bmp) { free(outPP); throw new Error('미리보기 생성 실패'); }
+      try {
+        P.FPDFBitmap_FillRect(bmp, 0, 0, pw, ph, 0xffffffff);
+        P.FPDF_RenderPageBitmap(bmp, page(i), -Math.round(x * s), -Math.round(top * s), Math.round(size.w * s), Math.round(size.h * s), 0, RENDER_FLAGS);
+        const len = P.EPDF_PNG_EncodeRGBA(P.FPDFBitmap_GetBuffer(bmp), pw, ph, P.FPDFBitmap_GetStride(bmp), 6, outPP);
+        const ptr = i32(outPP);
+        if (!len || !ptr) throw new Error('미리보기 PNG 생성 실패');
+        try { return Buffer.from(heap().subarray(ptr, ptr + len)); } finally { free(ptr); }
+      } finally { free(outPP); P.FPDFBitmap_Destroy(bmp); }
+    },
+
+    setFontText(i, idx, text, { fontId, size, fit = true }) {
+      const o = P.FPDFPage_GetObject(page(i), idx);
+      if (!o || P.FPDFPageObj_GetType(o) !== OBJ_TEXT) throw new Error('텍스트 상자를 선택하세요.');
+      if (typeof text !== 'string' || !text.trim() || text.length > 2000 || /[\r\n]/.test(text)) throw new Error('폰트 맞추기는 2,000자 이하의 한 줄씩 적용하세요.');
+      if (!Number.isFinite(size) || size < 1 || size > 300) throw new Error('글자 크기는 1~300pt 범위로 입력하세요.');
+      const entry = fontRegistry.get(fontId), absent = fontRegistry.missing(entry, text);
+      if (absent.length) throw new Error(`선택한 폰트에 없는 글자: ${absent.slice(0, 12).join(' ')}`);
+      const before = api.objects(i)[idx], previous = selectedFont;
+      selectedFont = entry;
+      try {
+        // Preserve the old bounds for image covering; change size on the newly created object.
+        selectedFont = { ...entry, size };
+        const r = api.setText(i, idx, text);
+        if (!r.ok) throw new Error('선택한 폰트로 글자를 그리지 못했습니다.');
+        const index = r.idx ?? idx, neo = P.FPDFPage_GetObject(page(i), index);
+        const after = api.objects(i)[index], width = after.bounds.x1 - after.bounds.x0;
+        const maxWidth = before.bounds.x1 - before.bounds.x0;
+        if (fit && width > maxWidth && maxWidth > 0) {
+          const factor = maxWidth / width, m = mal(24);
+          try {
+            if (P.FPDFPageObj_GetMatrix(neo, m)) {
+              for (const k of [0, 4, 8, 12]) M.setValue(m + k, f32(m + k) * factor, 'float');
+              P.FPDFPageObj_SetMatrix(neo, m);
+            }
+          } finally { free(m); }
+        }
+        P.FPDFPage_GenerateContent(page(i));
+        return { ...r, idx: index, fontId, fontLabel: entry.label };
+      } finally { selectedFont = previous; }
+    },
+
+    fontStatus(i, idx, text) {
+      const object = api.objects(i)[idx];
+      if (!object || object.type !== 'text') throw new Error('텍스트 상자를 선택하세요.');
+      const o = P.FPDFPage_GetObject(page(i), idx);
+      if (object.hidden) return { needsAi: true, reason: '화면 글자가 그림으로 표시되어 검색용 폰트만으로 같은 모양을 재현할 수 없습니다.' };
+      if (object.fontId) {
+        try {
+          if (!fontRegistry.missing(fontRegistry.get(object.fontId), text).length) return { needsAi: false, reason: '지정한 폰트로 직접 편집할 수 있습니다.' };
+        } catch {}
+        return { needsAi: true, reason: '지정한 폰트가 없거나 입력한 글자를 지원하지 않습니다.' };
+      }
+      if (canRender(P.FPDFTextObj_GetFont(o), text, object.size)) return { needsAi: false, reason: 'PDFium이 현재 폰트로 직접 편집할 수 있습니다.' };
+      return { needsAi: true, reason: '원본 폰트를 재사용할 수 없거나 입력한 글리프가 없습니다.' };
+    },
+
     // 자체 검사용: PNG 인코딩 없이 RGBA 원본 픽셀
     _renderRaw(i, scale = 1) {
       return withBitmap(i, scale, (bmp, pw, ph) => {
@@ -292,6 +381,8 @@ async function open(buffer) {
           // 보이지 않는 글자: 채움 알파 0 또는 렌더 모드 3(invisible)/7(clip). PowerPoint가 글자 효과를 그림으로 내보내며 검색용으로 깔아 둔 투명 글자
           if (t === OBJ_TEXT) { const rm = P.FPDFTextObj_GetTextRenderMode(o); item.hidden = rm === 3 || rm === 7; }
           item.group = groupOf(o); // 줄바꿈 줄들·사용자 그룹 (없으면 null)
+          const fm = findMark(o, 'EditorKimFont');
+          if (fm) { item.fontId = markParam(fm, 'id'); item.fontLabel = markParam(fm, 'label'); }
           P.FPDFPageObj_GetBounds(o, scratch, scratch + 4, scratch + 8, scratch + 12);
           item.bounds = { x0: f32(scratch), y0: f32(scratch + 4), x1: f32(scratch + 8), y1: f32(scratch + 12) };
           if (P.FPDFPageObj_GetFillColor(o, scratch, scratch + 4, scratch + 8, scratch + 12)) {
@@ -325,6 +416,10 @@ async function open(buffer) {
     setText(i, idx, newText) {
       const lines = String(newText ?? '').split(/\r?\n/);
       const p = page(i), orig = P.FPDFPage_GetObject(p, idx);
+      if (orig && P.FPDFPageObj_GetType(orig) === OBJ_TEXT) {
+        const entry = chosenFont(orig);
+        if (entry && fontRegistry.missing(entry, lines.join('')).length) return { ok: false, reason: '선택한 폰트에 입력한 글자가 없습니다.', fallbackFont: false };
+      }
       // 굵기는 원래 객체에서 읽어 둔다 — _setOne이 폴백으로 바꾸면 폰트 이름이 "Untitled"라 굵기를 잃는다
       const bold = orig && P.FPDFPageObj_GetType(orig) === OBJ_TEXT ? isBold(orig) : false;
       const r = api._setOne(i, idx, lines[0]);
@@ -349,7 +444,8 @@ async function open(buffer) {
         let fallback = r.fallbackFont; const lineIdxs = [idx];
         for (let k = 1; k < lines.length; k++) {
           const text = lines[k] || ' ';
-          let font = P.FPDFTextObj_GetFont(o), fb = false;
+          const entry = chosenFont(o);
+          let font = entry ? customFont(entry, text) : P.FPDFTextObj_GetFont(o), fb = false;
           if (!canRender(font, text, size)) { font = fallbackFont(bold, text); fb = true; if (!font || !canRender(font, text, size)) continue; }
           const neo = P.FPDFPageObj_CreateTextObj(doc, font, size);
           const u = utf16(text); const ok = neo && P.FPDFText_SetText(neo, u); free(u);
@@ -358,6 +454,7 @@ async function open(buffer) {
           if (color) P.FPDFPageObj_SetFillColor(neo, color[0], color[1], color[2], color[3]);
           // 맨 뒤(가장 위 z-순서)에 넣는다. 원래 글자 바로 뒤에 끼우면 표 셀 배경 같은 뒤쪽 채움 도형이 새 줄을 덮어 글자가 사라진다
           tagGroup(neo, gid);
+          if (entry) tagFont(neo, entry);
           P.FPDFPage_InsertObject(p, neo);
           lineIdxs.push(P.FPDFPage_CountObjects(p) - 1); fallback = fallback || fb;
         }
@@ -460,11 +557,12 @@ async function open(buffer) {
       const u16 = utf16(newText);
       try {
         P.FPDFTextObj_GetFontSize(o, scratch);
-        const size = f32(scratch);
+        const entry = chosenFont(o);
+        const size = selectedFont?.size || f32(scratch);
         // 우리가 넣은 대체 폰트("Untitled")는 제자리 SetText를 하지 않는다: 저장·재열기(실행 취소) 뒤에 그 객체를 다시 SetText하면
         // PDFium이 임베드 폰트 대신 시스템 폰트로 대체해 가늘고 벌어진 글자가 된다(사용자 보고). 항상 새 서브셋으로 객체를 다시 만든다.
         const nb0 = mal(256); const fname = P.FPDFFont_GetBaseFontName(P.FPDFTextObj_GetFont(o), nb0, 256) ? M.UTF8ToString(nb0) : ''; free(nb0);
-        const origOk = fname !== 'Untitled' && canRender(P.FPDFTextObj_GetFont(o), newText, size);
+        const origOk = !entry && fname !== 'Untitled' && canRender(P.FPDFTextObj_GetFont(o), newText, size);
         if (origOk && !forceNew) {
           const ok = !!P.FPDFText_SetText(o, u16);
           if (ok) P.FPDFPage_GenerateContent(p);
@@ -474,7 +572,7 @@ async function open(buffer) {
         const bold = isBold(o);
         // forceNew이고 원본 폰트로 그릴 수 있으면 원본 폰트로 새 객체(폰트 보존), 아니면 대체 폰트
         const usingOrig = origOk && forceNew;
-        const font = usingOrig ? P.FPDFTextObj_GetFont(o) : fallbackFont(bold, newText);
+        const font = entry ? customFont(entry, newText) : usingOrig ? P.FPDFTextObj_GetFont(o) : fallbackFont(bold, newText);
         // 시스템 한글 폰트가 없거나, 서브셋에도 없는 글자(폰트 자체에 글리프 없음)면 두부(□)로 그려질 테니 거절
         if (!font || !canRender(font, newText, size)) return { ok: false, fallbackFont: false };
 
@@ -487,6 +585,8 @@ async function open(buffer) {
         if (P.FPDFPageObj_GetFillColor(o, scratch, scratch + 4, scratch + 8, scratch + 12)) {
           P.FPDFPageObj_SetFillColor(neo, i32(scratch), i32(scratch + 4), i32(scratch + 8), i32(scratch + 12));
         }
+        if (entry) tagFont(neo, entry);
+        const gid = groupOf(o); if (gid) tagGroup(neo, gid);
         // 같은 자리에 넣어 idx가 밀리지 않게 한다
         if (!P.FPDFPage_InsertObjectAtIndex(p, neo, idx)) P.FPDFPage_InsertObject(p, neo);
         P.FPDFPage_RemoveObject(p, o);
@@ -494,7 +594,7 @@ async function open(buffer) {
         // 투명 글자 교체는 _setOne에서 색/알파를 확정한 뒤 콘텐츠를 만든다.
         // ca=0인 중간 객체를 먼저 기록하면 PDFium의 ExtGState 리소스가 재사용돼 저장 후 다시 투명해질 수 있다.
         if (!forceNew) P.FPDFPage_GenerateContent(p);
-        return { ok: true, fallbackFont: !usingOrig };
+        return { ok: true, fallbackFont: !usingOrig && !entry };
       } finally { free(u16); free(scratch); }
     },
 

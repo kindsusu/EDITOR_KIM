@@ -14,6 +14,8 @@ const CONF = path.join(os.homedir(), '.editor-kim.json');
   if (!fs.existsSync(CONF) && fs.existsSync(OLD_CONF)) { try { fs.renameSync(OLD_CONF, CONF); } catch {} }
 }
 const pdfEngine = require('./pdf-engine');
+const pdfFonts = require('./pdf-fonts');
+const fontService = require('./pdf-font-service');
 const APP_VERSION = require('../package.json').version;
 const ai = require('./ai-providers').createProviders({ version: APP_VERSION });
 
@@ -82,6 +84,7 @@ const server = http.createServer(async (req, res) => {
   try {
     if (!trustedRequest(req)) return json(res, 403, { error: '허용되지 않은 요청 출처' });
     if (url.pathname === '/') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); return fs.createReadStream(path.join(ROOT, 'index.html')).pipe(res); }
+    if (url.pathname === '/font-editor.js') { res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }); return fs.createReadStream(path.join(ROOT, 'font-editor.js')).pipe(res); }
     if (url.pathname === '/vendor/marked.js') { res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }); return fs.createReadStream(MARKED_BROWSER).pipe(res); }
     if (url.pathname === '/vendor/purify.js') { res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }); return fs.createReadStream(DOMPURIFY_BROWSER).pipe(res); }
     if (url.pathname === '/api/health') { // ?provider=claude|codex 이면 그 공급자만 검사(로그인 대기 중 2초마다 부르므로)
@@ -130,6 +133,44 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/pdf/objects' && req.method === 'GET') {
       const { doc } = await getPdfDoc(url.searchParams.get('name'));
       return json(res, 200, doc.objects(+url.searchParams.get('i')));
+    }
+    if (url.pathname === '/api/fonts' && req.method === 'GET') return json(res, 200, pdfFonts.list(url.searchParams.get('text') || ''));
+    if (url.pathname === '/api/fonts/add' && req.method === 'POST') {
+      const { path: file } = JSON.parse(await body(req));
+      return json(res, 200, pdfFonts.publicInfo(pdfFonts.register(file)));
+    }
+    if (url.pathname === '/api/pdf/font-context' && req.method === 'POST') {
+      const q = JSON.parse(await body(req)), { doc } = await getPdfDoc(q.name);
+      const ctx = fontService.context(doc, q.i, q.idx, q.text, q.token);
+      return json(res, 200, { ...ctx, ...doc.fontStatus(q.i, q.idx, q.text), fonts: pdfFonts.list(q.text), image: doc.renderRegion(q.i, ctx.object.bounds).toString('base64') });
+    }
+    if (url.pathname === '/api/pdf/font-status' && req.method === 'POST') {
+      const q = JSON.parse(await body(req)), { doc } = await getPdfDoc(q.name);
+      fontService.context(doc, q.i, q.idx, q.text);
+      return json(res, 200, doc.fontStatus(q.i, q.idx, q.text));
+    }
+    if (url.pathname === '/api/pdf/font-recommend' && req.method === 'POST') {
+      const q = JSON.parse(await body(req)), { doc } = await getPdfDoc(q.name);
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 120000);
+      res.on('close', () => { if (!res.writableFinished) controller.abort(); });
+      try { return json(res, 200, await fontService.recommend(doc, q, ai, controller.signal)); }
+      finally { clearTimeout(timer); }
+    }
+    if (['/api/pdf/font-preview', '/api/pdf/font-apply'].includes(url.pathname) && req.method === 'POST') {
+      const q = JSON.parse(await body(req)), entry = await getPdfDoc(q.name);
+      const prepared = await fontService.prepare(entry.doc, q);
+      if (await getPdfDoc(q.name) !== entry) throw new Error('파일이 변경됐습니다. 다시 선택하세요.');
+      fontService.context(entry.doc, q.i, q.idx, q.text, q.token);
+      if (url.pathname.endsWith('font-apply')) {
+        const next = await pdfEngine.open(prepared.bytes);
+        try {
+          fontService.context(entry.doc, q.i, q.idx, q.text, q.token);
+          snapshot(entry, q.i);
+        } catch (error) { next.close(); throw error; }
+        entry.doc.close(); entry.doc = next; entry.dirty = true;
+      }
+      return json(res, 200, { ...prepared.result, image: prepared.image, ...stacks(entry) });
     }
     if (url.pathname === '/api/pdf/edit' && req.method === 'POST') {
       const { name, i, idx, text } = JSON.parse(await body(req));

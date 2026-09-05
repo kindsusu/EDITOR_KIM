@@ -5,6 +5,9 @@ All notable changes to EDITOR_KIM are recorded here. The format follows [Keep a 
 ## [Unreleased]
 
 ### Added
+- Font matching for a single ungrouped text line: installed static TTF selection, desktop TTF import, glyph checks, size/width controls, and a saved-and-reopened preview before applying with undo support. Selected font IDs are embedded for later edits.
+- Claude/Codex image-based font recommendations are gated on PDFium capability: only hidden image-backed text or unsupported source glyphs can call AI. Normal editable text skips AI on both client and server. Recommendations use the selected region and an allowlist of supported installed fonts; manual selection remains available.
+- Regression tests cover the AI gate, selected-font persistence, unsupported glyph preservation, and stale selection rejection. Font previews leave the current document untouched; application rejects a changed document.
 - **Ctrl + mouse wheel zoom** on PDFs, anchored at the cursor (the text under the pointer stays put). `Ctrl+=` / `Ctrl+-` step the zoom, `Ctrl+0` and the new **폭 맞춤** button fit the page width, clicking the percentage resets to 100%. Wheel events resize the page frames immediately and request crisp renders only after the wheel stops. The zoom level is remembered between launches, and an open edit panel survives zooming with its typed text.
 - **Stop** button (and `Esc` in the prompt box) while an AI reply is streaming. The server aborts the Claude process or interrupts the Codex turn when the client disconnects.
 - `Enter` sends the AI prompt, `Shift+Enter` inserts a newline (`Ctrl+Enter` still sends). Enter during Hangul composition is ignored.

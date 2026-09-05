@@ -30,6 +30,11 @@ app.whenReady().then(() => {
     return r.canceled ? [] : r.filePaths;
   });
 
+  ipcMain.handle('openFont', async () => {
+    const r = await dialog.showOpenDialog(win, { properties: ['openFile'], filters: [{ name: 'TrueType 폰트', extensions: ['ttf'] }], title: '사용할 TTF 폰트 선택' });
+    return r.canceled ? null : r.filePaths[0];
+  });
+
   ipcMain.handle('saveAs', async (_e, defaultPath) => {
     const isPdf = /\.pdf$/i.test(defaultPath || '');
     const filters = isPdf ? [{ name: 'PDF', extensions: ['pdf'] }] : [{ name: 'Markdown', extensions: ['md'] }];

@@ -5,6 +5,7 @@
 <title>EDITOR_KIM</title>
 <script src="/vendor/marked.js"></script>
 <script src="/vendor/purify.js"></script>
+<script src="/font-editor.js"></script>
 <style>
   :root{--bg:#1b1b1f;--panel:#232329;--line:#33333b;--fg:#e8e8ec;--mut:#9a9aa6;--acc:#d97757;--add:#1f4d2e;--del:#5a2323}
   *{box-sizing:border-box}body{margin:0;height:100vh;display:grid;grid-template-columns:220px 1fr 380px;grid-template-rows:40px minmax(0,1fr);font:13px/1.5 system-ui,'Malgun Gothic',sans-serif;background:var(--bg);color:var(--fg)}
@@ -57,6 +58,12 @@
   #setup h2{margin:0 0 8px;color:var(--acc)}#setup p{color:var(--mut);margin:6px 0}#setup .row{display:flex;gap:8px;margin-top:16px}#setup .st{padding:10px 12px;background:#1b1b1f;border-radius:8px;margin:12px 0;font-family:Consolas,monospace;font-size:12px}
   .ok{color:#7cc47f}.bad{color:#e07a7a}
   [hidden]{display:none!important}
+  #fontEditor{width:min(820px,95vw);max-height:90vh;overflow:auto;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:12px;padding:24px}
+  #fontEditor::backdrop{background:#000a}#fontEditor h3{margin-top:0}#fontEditor label{display:flex;gap:8px;align-items:center}
+  #fontEditor .fontText{flex:1;min-width:0}#fontEditor .fontControls{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:14px}
+  #fontEditor .fontSelect{max-width:360px}#fontEditor .fontSize{width:80px}#fontEditor .fontDisclosure{color:var(--mut);font-size:12px}
+  #fontEditor .fontCompare{display:grid;gap:12px;margin:16px 0}#fontEditor figure{margin:0}#fontEditor figcaption{color:var(--mut);margin-bottom:5px}
+  #fontEditor img{max-width:100%;max-height:180px;object-fit:contain;background:white}#fontEditor .fontCandidates{display:flex;gap:8px;flex-wrap:wrap}
 </style>
 </head>
 <body class="ai-collapsed">
@@ -723,7 +730,7 @@ function openInlineEditor(initialText) {
   $('#pdf').querySelectorAll('.pdfEditor').forEach((el) => el.remove());
   $('#pdf').querySelectorAll('.pdfBox.editing').forEach((el) => el.classList.remove('editing'));
   box.classList.add('editing');
-  const fontName = (font || '').replace(/^[A-Z]+\+/, '') || '기본 글꼴';
+  const fontName = selectedObj.objs[0]?.fontLabel || (font || '').replace(/^[A-Z]+\+/, '') || '기본 글꼴';
   const panel = document.createElement('div');
   panel.className = 'pdfEditor';
   const hiddenNote = selectedObj.objs.some((o) => o.hidden) ? ' · 검색용 투명 글자: 표시된 글꼴은 그림 속 서체와 다를 수 있습니다. 적용하면 그림을 덮고 새로 그립니다.' : '';
@@ -731,9 +738,26 @@ function openInlineEditor(initialText) {
   const fontHint = document.createElement('div'); fontHint.className = 'hint2';
   fontHint.textContent = `${fontName} · ${Math.round(size)}pt${hiddenNote}`;
   panel.append(heading, fontHint);
+  const fontButton = document.createElement('button'); fontButton.textContent = '폰트 맞추기';
+  fontButton.title = '직접 편집이 어려운 글자는 AI 후보 추천을 사용할 수 있습니다.';
+  fontButton.disabled = selectedObj.objs.length !== 1 || !!selectedObj.group;
+  panel.appendChild(fontButton);
   const ta = document.createElement('textarea');
   ta.value = initialText; ta.rows = 2;
   panel.appendChild(ta);
+  const openFonts = (autoRecommend = false) => {
+    const selection = selectedObj, name = cur;
+    return window.openPdfFontEditor({ name, i: selection.i, idx: selection.objs[0].idx, text: ta.value,
+      provider: activeAi?.provider, model: activeAi?.model, autoRecommend,
+      onApply: async (result) => {
+        if (cur !== name) return;
+        pdfDirty = true; showDirty(); setUndoRedoState(result.undoLeft, result.redoLeft);
+        selectedObj = null; updateEditRadio(); panel.remove();
+        await refreshPage(selection.i, result.idx);
+        flash(`${result.fontLabel} 적용됨 (Ctrl+S로 저장)`);
+      } });
+  };
+  fontButton.onclick = () => openFonts(false);
 
   // 정렬 유지(왼/가운데/오른쪽) + 화살표 이동(0.5pt, Shift면 5pt)
   const alignRow = document.createElement('div'); alignRow.className = 'row';
@@ -798,6 +822,14 @@ function openInlineEditor(initialText) {
   const commit = async () => {
     const newText = ta.value || ' ', align = alignSel.value; // 빈 문자열은 PDFium을 죽이므로 공백으로 대체
     const { i, objs, text, bounds: oldBounds } = selectedObj;
+    if (newText !== text && newText.trim() && !/[\r\n]/.test(newText) && objs.length === 1 && !selectedObj.group) {
+      const selection = selectedObj, name = cur;
+      try {
+        const status = await apiPost('/api/pdf/font-status', { name, i, idx: objs[0].idx, text: newText });
+        if (selection !== selectedObj || name !== cur || newText !== (ta.value || ' ')) return;
+        if (status.needsAi) { await openFonts(true); return; }
+      } catch (error) { flash(error.message); return; }
+    }
     close();
     if (newText === text) return; // 변경 없으면 그대로 둔다
     let idxs = objs.map((o) => o.idx);

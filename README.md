@@ -72,7 +72,11 @@ Sending an AI request sends the current document text to the selected provider. 
 
 ![Architecture](assets/architecture.svg)
 
-Click text, edit it, and press Enter. If the original font lacks a glyph, the engine embeds a small fallback subset matching the original weight. Stale renders are discarded during rapid zoom or document switches, preventing pages from different documents from mixing.
+Click text, edit it, and press Enter. Text that PDFium can handle keeps the normal editing path. Stale renders are discarded during rapid zoom or document switches, preventing pages from different documents from mixing.
+
+**폰트 맞추기 (Match font)** handles a single ungrouped text box, one line of up to 2,000 characters. Hidden image-backed text or missing source glyphs open the font dialog; a connected AI recommends candidates only for these exceptional cases. Select an installed font or import a static TTF in the Electron app, adjust size and width fitting, preview the saved-and-reopened result, then apply and save. Undo and redo are supported. Later supported edits with the selected font do not call AI.
+
+Font recommendations send only the selected region image, its text, and the supported font catalog to the selected provider. AI suggests similar installed fonts; it does not identify the original with certainty or generate font files. Supply the original TTF for the same typeface. OTF/CFF and variable fonts are not supported. Imported external TTF files must be added again after restarting for further editing; saved PDFs still display their embedded subsets. Manual selection works without AI.
 
 ![Redaction pipeline](assets/redaction.svg)
 
