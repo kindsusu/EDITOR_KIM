@@ -4,6 +4,13 @@ All notable changes to EDITOR_KIM are recorded here. The format follows [Keep a 
 
 ## [Unreleased]
 
+### Changed
+- Pressing Enter in the line editor opens the font dialog only for hidden (image-backed) text or a line that already has a chosen font. Replacement characters missing from the original font go straight to the Malgun Gothic fallback as before; the dialog stays available through the **폰트 맞추기** button. AI font recommendations now run only when the dialog's button is pressed, never automatically, so sending the region image and waiting on the model is always an explicit choice.
+
+### Fixed
+- The installed-font catalog kept a parsed fontkit face for every TTF (about 600 MB of resident memory after the first scan of ~480 fonts). It now stores only each font's code-point set; glyph checks are unchanged and retained heap drops to ~60 MB.
+- The font dialog now preselects the installed font whose name matches the PDF font (e.g. MalgunGothicBold → Malgun Gothic Bold) instead of the first alphabetical entry.
+
 ## [0.6.0] - 2026-09-05
 
 ### Added

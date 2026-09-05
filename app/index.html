@@ -739,7 +739,7 @@ function openInlineEditor(initialText) {
   fontHint.textContent = `${fontName} · ${Math.round(size)}pt${hiddenNote}`;
   panel.append(heading, fontHint);
   const fontButton = document.createElement('button'); fontButton.textContent = '폰트 맞추기';
-  fontButton.title = '직접 편집이 어려운 글자는 AI 후보 추천을 사용할 수 있습니다.';
+  fontButton.title = '설치된 TTF 폰트로 이 줄을 다시 그립니다. 투명 글자처럼 직접 편집이 어려운 경우 대화상자에서 AI 후보 추천을 누를 수 있습니다.';
   fontButton.disabled = selectedObj.objs.length !== 1 || !!selectedObj.group;
   panel.appendChild(fontButton);
   const ta = document.createElement('textarea');
@@ -822,12 +822,15 @@ function openInlineEditor(initialText) {
   const commit = async () => {
     const newText = ta.value || ' ', align = alignSel.value; // 빈 문자열은 PDFium을 죽이므로 공백으로 대체
     const { i, objs, text, bounds: oldBounds } = selectedObj;
-    if (newText !== text && newText.trim() && !/[\r\n]/.test(newText) && objs.length === 1 && !selectedObj.group) {
+    // 폰트 대화상자는 투명 글자(그림 속 서체)이거나 이미 폰트를 지정한 줄에서만 자동으로 연다. 원본 폰트에 없는 글자를 넣는 흔한 경우는
+    // 예전처럼 맑은 고딕 폴백으로 바로 고친다(대화상자는 [폰트 맞추기] 버튼으로 언제든 열 수 있다).
+    // AI 추천은 대화상자의 버튼을 눌렀을 때만 실행한다 — 선택 영역 이미지 전송과 수십 초 대기를 사용자가 결정한다.
+    if (newText !== text && newText.trim() && !/[\r\n]/.test(newText) && objs.length === 1 && !selectedObj.group && (objs[0].hidden || objs[0].fontId)) {
       const selection = selectedObj, name = cur;
       try {
         const status = await apiPost('/api/pdf/font-status', { name, i, idx: objs[0].idx, text: newText });
         if (selection !== selectedObj || name !== cur || newText !== (ta.value || ' ')) return;
-        if (status.needsAi) { await openFonts(true); return; }
+        if (status.needsAi) { await openFonts(false); return; }
       } catch (error) { flash(error.message); return; }
     }
     close();

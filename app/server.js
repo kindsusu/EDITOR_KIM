@@ -141,8 +141,8 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/pdf/font-context' && req.method === 'POST') {
       const q = JSON.parse(await body(req)), { doc } = await getPdfDoc(q.name);
-      const ctx = fontService.context(doc, q.i, q.idx, q.text, q.token);
-      return json(res, 200, { ...ctx, ...doc.fontStatus(q.i, q.idx, q.text), fonts: pdfFonts.list(q.text), image: doc.renderRegion(q.i, ctx.object.bounds).toString('base64') });
+      const ctx = fontService.context(doc, q.i, q.idx, q.text, q.token), fonts = pdfFonts.list(q.text);
+      return json(res, 200, { ...ctx, ...doc.fontStatus(q.i, q.idx, q.text), fonts, suggestedFontId: pdfFonts.suggest(ctx.object.font, fonts), image: doc.renderRegion(q.i, ctx.object.bounds).toString('base64') });
     }
     if (url.pathname === '/api/pdf/font-status' && req.method === 'POST') {
       const q = JSON.parse(await body(req)), { doc } = await getPdfDoc(q.name);

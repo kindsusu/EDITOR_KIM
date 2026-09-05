@@ -11,7 +11,9 @@ const src = fs.readFileSync(path.join(__dirname, '../workspace/sample.pdf'));
   const available = fonts.list('한글 폰트 검사');
   const font = available.find((f) => f.supported && /malgun.*bold/i.test(f.label)) || available.find((f) => f.supported);
   assert.ok(font, 'Korean static TTF is available');
-  assert.ok(!available.some((f) => 'path' in f || 'face' in f), 'font catalog does not expose paths or bytes');
+  assert.ok(!available.some((f) => 'path' in f || 'face' in f || 'chars' in f), 'font catalog does not expose paths or bytes');
+  if (/malgun.*bold/i.test(font.label)) assert.strictEqual(fonts.suggest('ABCDEF+MalgunGothicBold', available), font.id, 'PDF font name maps to the matching installed font');
+  assert.strictEqual(fonts.suggest('', available), null);
   const doc = await open(src);
   try {
     const q = { i: 0, idx: 1, text: 'REPLACED', provider: 'codex' };

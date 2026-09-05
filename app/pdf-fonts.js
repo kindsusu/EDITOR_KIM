@@ -18,7 +18,9 @@ function register(file) {
   const face = fontkit.create(data);
   if (!face.directory?.tables?.glyf || Object.keys(face.variationAxes || {}).length) throw new Error('가변 폰트와 CFF 폰트는 아직 지원하지 않습니다. 일반 TTF를 선택하세요.');
   const label = face.fullName || face.postscriptName || path.basename(absolute);
-  const entry = { id, label, family: face.familyName || label, style: face.subfamilyName || '', path: absolute, face };
+  // 글리프 검사용 코드포인트 집합만 남기고 폰트 객체·바이트는 버린다. 설치 폰트 478개의 face를 전부 들고 있으면 서버 메모리가 600MB를 넘는다
+  const chars = new Set(face.characterSet);
+  const entry = { id, label, family: face.familyName || label, style: face.subfamilyName || '', path: absolute, chars };
   fonts.set(id, entry);
   return entry;
 }
@@ -45,7 +47,23 @@ function get(id) {
   return font;
 }
 function missing(font, text) {
-  return [...new Set([...String(text)].filter((c) => !/\s/.test(c) && (c.codePointAt(0) >= 0xffff || !font.face.hasGlyphForCodePoint(c.codePointAt(0)))))];
+  return [...new Set([...String(text)].filter((c) => !/\s/.test(c) && (c.codePointAt(0) >= 0xffff || !font.chars.has(c.codePointAt(0)))))];
+}
+// PDF에 적힌 폰트 이름("ABCDEF+MalgunGothicBold", "Malgun Gothic,Bold" 등)과 가장 비슷한 설치 폰트의 id. 대화상자의 기본 선택용, 없으면 null
+function suggest(pdfFontName, list) {
+  const norm = (s) => String(s || '').replace(/^[A-Z]{6}\+/, '').toLowerCase().replace(/[^a-z0-9가-힣]/g, '');
+  const want = norm(pdfFontName);
+  if (!want) return null;
+  const score = (f) => {
+    const label = norm(f.label), familyStyle = norm(f.family + f.style), family = norm(f.family);
+    if (label === want || familyStyle === want) return 3;
+    if (want.includes(label) || label.includes(want)) return 2;
+    if (family && want.includes(family)) return 1;
+    return 0;
+  };
+  let best = null, bestScore = 0;
+  for (const f of list) { if (!f.supported) continue; const s = score(f); if (s > bestScore) { best = f; bestScore = s; } }
+  return best ? best.id : null;
 }
 const publicInfo = ({ id, label, family, style }) => ({ id, label, family, style });
 function list(text = '') {
@@ -73,4 +91,4 @@ PDF의 검색용 폰트 이름은 그림 속 글꼴과 다를 수 있다. 이미
 데이터: ${JSON.stringify({ pdfFont: object.font, hidden: !!object.hidden, originalText: object.text, replacementText: text,
     fonts: candidates.filter((f) => f.supported).map((f) => ({ fontId: f.id, name: f.label })) })}`;
 }
-module.exports = { register, get, list, missing, publicInfo, parseRecommendation, recommendationPrompt };
+module.exports = { register, get, list, missing, suggest, publicInfo, parseRecommendation, recommendationPrompt };

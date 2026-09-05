@@ -40,7 +40,7 @@ window.openPdfFontEditor = async function ({ name, i, idx, text, provider, model
     ctx = next;
     el('.fontStatus').textContent = ctx.reason;
     el('.fontBefore').src = 'data:image/png;base64,' + ctx.image;
-    const previous = select.value || ctx.object.fontId;
+    const previous = select.value || ctx.object.fontId || ctx.suggestedFontId; // 이미 지정한 폰트 > PDF 폰트 이름과 비슷한 설치 폰트 > 첫 후보
     select.replaceChildren();
     for (const font of ctx.fonts) {
       const option = new Option(font.label + (font.supported ? '' : ' (일부 글자 없음)'), font.id);
