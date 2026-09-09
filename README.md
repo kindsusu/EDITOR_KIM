@@ -4,7 +4,7 @@
 
 A local Windows editor that changes PDF text objects directly and removes sensitive text for real. It also includes Markdown editing and a document assistant powered by Claude Code or ChatGPT through Codex. The app does not require an AI API key.
 
-[한국어](README.ko.md) · [Changelog](CHANGELOG.md) · [Plan](PLAN.md)
+[한국어](README.ko.md) · [Plan](PLAN.md)
 
 ## Features
 
