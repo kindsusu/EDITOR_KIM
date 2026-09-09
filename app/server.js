@@ -20,7 +20,28 @@ const APP_VERSION = require('../package.json').version;
 const ai = require('./ai-providers').createProviders({ version: APP_VERSION });
 
 let conf = {}; try { conf = JSON.parse(fs.readFileSync(CONF, 'utf8')); } catch {}
-let WS = conf.workspace && fs.existsSync(conf.workspace) ? conf.workspace : path.join(ROOT, '..', 'workspace');
+// 기본 작업 폴더. 패키징된 앱에서는 __dirname이 app.asar 안이라 소스 옆 workspace는 읽기만 되고 저장이 실패한다
+// → 사용자 문서 폴더 아래 EDITOR_KIM을 만들고 첫 실행에만 샘플을 복사해 쓴다. 개발 실행(npm start / node server.js)은 저장소의 workspace 그대로
+const SAMPLES = path.join(ROOT, '..', 'workspace');
+const PACKAGED = /[\\/]app\.asar[\\/]/i.test(ROOT);
+function defaultWorkspace() {
+  if (!PACKAGED) return SAMPLES;
+  let documents = path.join(os.homedir(), 'Documents');
+  try { documents = require('electron').app.getPath('documents'); } catch {}
+  for (const dir of [path.join(documents, 'EDITOR_KIM'), path.join(os.homedir(), 'EDITOR_KIM')]) {
+    try {
+      if (!fs.existsSync(dir)) { // 사용자가 지운 샘플을 되살리지 않도록 폴더가 없을 때만 복사
+        fs.mkdirSync(dir, { recursive: true });
+        for (const name of ['sample.pdf', '회의록_초안.md', '회의록_초안.pdf']) {
+          try { fs.copyFileSync(path.join(SAMPLES, name), path.join(dir, name)); } catch {}
+        }
+      }
+      return dir;
+    } catch (e) { console.error(`workspace ${dir}: ${e.message}`); }
+  }
+  return os.tmpdir();
+}
+let WS = conf.workspace && fs.existsSync(conf.workspace) ? conf.workspace : defaultWorkspace();
 const sessions = {}; // `${provider}\0${문서명}` → { model, id }
 const pdfDocs = {}; // 파일명 → { doc, mtimeMs, dirty }
 const MAX_RENDER_SCALE = 4; // A4 기준 2380×3368px. 그 이상은 WASM 힙만 먹고 화면에서 구분되지 않는다
@@ -68,9 +89,10 @@ function writeAtomic(p, data) {
 const json = (res, code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(obj)); };
 const body = (req) => new Promise((r) => { let b = ''; req.on('data', (c) => (b += c)); req.on('end', () => r(b)); });
 // 로컬 요청만 받는다. Host 검사는 DNS 리바인딩(외부 도메인을 127.0.0.1로 돌려 같은 출처처럼 요청) 방지, Origin 검사는 다른 사이트의 교차 출처 요청 방지
-const LOCAL_HOSTS = new Set([`127.0.0.1:${PORT}`, `localhost:${PORT}`, `[::1]:${PORT}`]);
-const trustedRequest = (req) => LOCAL_HOSTS.has(req.headers.host || '')
-  && (!req.headers.origin || [...LOCAL_HOSTS].map((h) => `http://${h}`).includes(req.headers.origin));
+let port = PORT; // 실제로 연 포트 — 기본 포트가 다른 프로그램에 잡혀 있으면 아래 listen이 다음 포트로 옮긴다
+const localHosts = () => [`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`];
+const trustedRequest = (req) => localHosts().includes(req.headers.host || '')
+  && (!req.headers.origin || localHosts().map((h) => `http://${h}`).includes(req.headers.origin));
 
 const PROMPTS = {
   chat: (doc, name, q) => `아래는 사용자가 열어둔 문서 "${name}"의 내용이다. 문서에 근거해 한국어로 간결하게 답하라. 도구는 쓰지 말 것.\n\n<document>\n${doc}\n</document>\n\n질문: ${q}`,
@@ -339,7 +361,24 @@ const server = http.createServer(async (req, res) => {
     json(res, 404, { error: 'not found' });
   } catch (e) { if (!res.headersSent) json(res, 500, { error: e.message }); else res.end(); }
 });
-server.on('error', (e) => console.error('server:', e.message));
-server.listen(PORT, '127.0.0.1', () => console.log(`EDITOR_KIM → http://localhost:${PORT}  workspace=${WS}`));
+// 기본 포트가 사용 중이면(다른 프로그램, 개발용 서버) 다음 포트를 차례로 시도한다. ready는 실제로 연 포트로 resolve — Electron 창은 이 포트로 접속
+// listen(p, cb)의 cb는 'listening' 리스너로 남아 실패한 시도의 것까지 다음 성공 때 함께 불린다 → 리스너를 직접 달고 실패하면 떼어 낸다
+const ready = new Promise((resolve, reject) => {
+  const listen = (p, retries) => {
+    const onError = (e) => {
+      server.off('listening', onListening);
+      if (e.code === 'EADDRINUSE' && retries > 0) { console.warn(`포트 ${p} 사용 중 → ${p + 1} 시도`); return listen(p + 1, retries - 1); }
+      reject(e);
+    };
+    const onListening = () => {
+      server.off('error', onError); server.on('error', (e) => console.error('server:', e.message));
+      port = server.address().port; console.log(`EDITOR_KIM → http://localhost:${port}  workspace=${WS}`); resolve(port);
+    };
+    server.once('error', onError); server.once('listening', onListening);
+    server.listen(p, '127.0.0.1');
+  };
+  listen(PORT, 10);
+});
+ready.catch((e) => console.error('server:', e.message));
 process.once('exit', () => ai.close());
-module.exports = { PORT };
+module.exports = { PORT, ready, port: () => port };

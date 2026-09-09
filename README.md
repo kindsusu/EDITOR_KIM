@@ -39,7 +39,7 @@ Unsigned development builds may trigger Windows SmartScreen. Run them only after
 
 ## AI installation and sign-in
 
-Choose a provider under **Select Model**. If it is not ready, the app provides installation and login buttons. See OpenAI's [official authentication guide](https://learn.chatgpt.com/docs/auth) for the Codex sign-in behavior.
+Nothing is asked at launch; PDF and Markdown editing work without any account. The first time you open the chat panel (💬 or Ctrl+J), press **Send**, or request an AI font recommendation, the app asks you to choose **Claude** (Claude Code) or **ChatGPT** (Codex) and walks you through installation and sign-in for that provider only. A provider that is already signed in on the PC is used immediately. **Select Model** switches between signed-in providers and models later. See OpenAI's [official authentication guide](https://learn.chatgpt.com/docs/auth) for the Codex sign-in behavior.
 
 1. WinGet installs the official `Anthropic.ClaudeCode` or `OpenAI.Codex` package for the current user.
 2. The app launches the provider's browser authentication.

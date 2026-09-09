@@ -1,5 +1,7 @@
 // UI for the exceptional path: PDFium keeps handling text it can edit directly.
-window.openPdfFontEditor = async function ({ name, i, idx, text, provider, model, autoRecommend = false, onApply }) {
+// ai()는 현재 선택된 공급자·모델을 돌려주는 getter(대화상자가 열린 채 로그인을 마쳐도 반영), ensureAi()는 로그인 안 됐을 때 선택·로그인 대화상자를 연다
+window.openPdfFontEditor = async function ({ name, i, idx, text, ai = () => null, ensureAi = null, autoRecommend = false, onApply }) {
+  const provider = () => ai()?.provider || null, model = () => ai()?.model || null;
   if (document.querySelector('#fontEditor')) return;
   const dialog = document.createElement('dialog'); dialog.id = 'fontEditor';
   dialog.innerHTML = `<h3>폰트 맞추기</h3>
@@ -48,8 +50,8 @@ window.openPdfFontEditor = async function ({ name, i, idx, text, provider, model
     }
     select.value = ctx.fonts.find((f) => f.id === previous && f.supported)?.id || ctx.fonts.find((f) => f.supported)?.id || '';
     if (!size.value) size.value = Number(ctx.object.size.toFixed(1));
-    rec.disabled = !ctx.needsAi || !provider || !!aiAbort;
-    rec.title = !ctx.needsAi ? 'PDFium이 직접 처리할 수 있어 AI를 호출하지 않습니다.' : !provider ? '상단에서 AI 모델을 선택하세요.' : '선택 영역으로 폰트 후보 추천';
+    rec.disabled = !ctx.needsAi || !!aiAbort;
+    rec.title = !ctx.needsAi ? 'PDFium이 직접 처리할 수 있어 AI를 호출하지 않습니다.' : !provider() ? 'AI 로그인이 필요합니다. 누르면 Claude/ChatGPT 선택 화면을 엽니다.' : '선택 영역으로 폰트 후보 추천';
     return true;
   }
   async function preview() {
@@ -67,13 +69,14 @@ window.openPdfFontEditor = async function ({ name, i, idx, text, provider, model
     finally { busy = false; }
   }
   async function recommend() {
-    if (aiAbort || closed || !provider) return;
+    if (aiAbort || closed) return;
+    if (!provider()) { ensureAi?.(); return; } // 로그인 뒤 다시 누르면 ai()가 선택된 공급자를 돌려준다
     aiAbort = new AbortController(); rec.disabled = true; el('.fontStop').hidden = false;
     try {
       if (!await loadContext() || !ctx.needsAi) return;
       const expected = input.value;
       note.textContent = 'AI가 선택한 글자 이미지와 설치 폰트 목록을 비교하는 중…';
-      const result = await post('/api/pdf/font-recommend', { ...base(), provider, model }, aiAbort.signal);
+      const result = await post('/api/pdf/font-recommend', { ...base(), provider: provider(), model: model() }, aiAbort.signal);
       if (closed || expected !== input.value) return;
       el('.fontAdvice').textContent = result.note;
       el('.fontCandidates').replaceChildren();
@@ -86,7 +89,7 @@ window.openPdfFontEditor = async function ({ name, i, idx, text, provider, model
       }
       if (result.candidates.length) { select.value = result.candidates[0].fontId; await preview(); }
     } catch (error) { if (!closed) note.textContent = error.name === 'AbortError' ? '추천을 중지했습니다. 직접 선택할 수 있습니다.' : error.message; }
-    finally { aiAbort = null; if (!closed) { rec.disabled = !ctx?.needsAi || !provider; el('.fontStop').hidden = true; } }
+    finally { aiAbort = null; if (!closed) { rec.disabled = !ctx?.needsAi; el('.fontStop').hidden = true; } }
   }
   rec.onclick = recommend; el('.fontPreview').onclick = preview;
   select.onchange = () => { invalidate(); preview(); };
@@ -111,9 +114,9 @@ window.openPdfFontEditor = async function ({ name, i, idx, text, provider, model
     } catch (error) {
       note.textContent = error.message;
       dialog.querySelectorAll('input,select,button').forEach((node) => { node.disabled = false; });
-      previewKey = ''; apply.disabled = true; rec.disabled = !ctx?.needsAi || !provider;
+      previewKey = ''; apply.disabled = true; rec.disabled = !ctx?.needsAi;
     } finally { busy = false; }
   };
-  try { if (await loadContext() && autoRecommend && ctx.needsAi && provider) await recommend(); }
+  try { if (await loadContext() && autoRecommend && ctx.needsAi && provider()) await recommend(); }
   catch (error) { note.textContent = error.message; }
 };

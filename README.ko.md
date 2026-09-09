@@ -39,7 +39,7 @@ npm start
 
 ## AI 설치와 로그인
 
-오른쪽 위 **Select Model**에서 Claude 또는 ChatGPT(Codex)를 선택합니다. 준비되지 않은 공급자를 선택하면 앱 안에서 설치·로그인을 진행할 수 있습니다. Codex 인증 동작은 [OpenAI의 공식 인증 안내](https://learn.chatgpt.com/ko-KR/docs/auth)에서 확인할 수 있습니다.
+실행할 때는 아무것도 묻지 않으며, PDF·Markdown 편집은 계정 없이 됩니다. 채팅 패널(💬 또는 Ctrl+J)을 열거나 **보내기**를 누르거나 AI 폰트 추천을 요청하는 첫 순간에 **Claude**(Claude Code)와 **ChatGPT**(Codex) 중 하나를 고르는 창이 뜨고, 고른 서비스에 대해서만 설치·로그인을 안내합니다. PC에 이미 로그인된 서비스는 바로 사용됩니다. 이후 **Select Model**에서 로그인된 서비스와 모델을 바꿀 수 있습니다. Codex 인증 동작은 [OpenAI의 공식 인증 안내](https://learn.chatgpt.com/ko-KR/docs/auth)에서 확인할 수 있습니다.
 
 1. **설치**: Windows 공식 패키지 관리자 WinGet이 `Anthropic.ClaudeCode` 또는 `OpenAI.Codex` 패키지를 사용자 범위에 설치합니다.
 2. **로그인**: 앱이 해당 CLI의 브라우저 인증을 엽니다.

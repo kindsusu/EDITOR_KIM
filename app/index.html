@@ -53,7 +53,8 @@
   .ask textarea{height:70px;border:1px solid var(--line);border-radius:8px;padding:8px;font:inherit}
   .ask .row{display:flex;gap:6px;align-items:center}.ask label{color:var(--mut);display:flex;gap:4px;align-items:center}
   .hint{color:var(--mut);font-size:11px;padding:0 12px 8px}
-  #setup{position:fixed;inset:0;background:#000c;display:flex;align-items:center;justify-content:center;z-index:9}
+  #setup{border:0;padding:0;background:transparent;max-width:none;max-height:none}#setup::backdrop{background:#000c}
+  #setup .choice{flex:1;padding:14px 12px;font-size:16px;line-height:1.4;text-align:center}#setup .choice small{display:block;font-size:11px;font-weight:normal;opacity:.85;margin-top:4px}
   #setup .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:28px 32px;width:520px;line-height:1.7}
   #setup h2{margin:0 0 8px;color:var(--acc)}#setup p{color:var(--mut);margin:6px 0}#setup .row{display:flex;gap:8px;margin-top:16px}#setup .st{padding:10px 12px;background:#1b1b1f;border-radius:8px;margin:12px 0;font-family:Consolas,monospace;font-size:12px}
   .ok{color:#7cc47f}.bad{color:#e07a7a}
@@ -101,15 +102,18 @@
   </div>
 </section>
 
-<div id="setup" hidden><div class="card">
-  <h2 id="setupTitle">AI 모델 준비</h2>
-  <p>API 키 대신 PC에 로그인된 구독 계정을 사용합니다.</p>
-  <select id="setupProvider"><option value="claude">Claude Code</option><option value="codex">ChatGPT (Codex)</option></select>
-  <div class="st" id="setupStatus">확인 중…</div>
-  <p id="setupHelp"></p>
-  <div class="row"><button id="btnInstall" class="pri" hidden>1. 설치</button><button id="btnLogin" class="pri" hidden>2. 로그인</button><button id="btnRecheck">다시 확인</button><span class="sp"></span><button id="btnSkip">닫기</button></div>
-  <p style="font-size:11px">설치는 Windows 공식 패키지 관리자(WinGet)로 진행됩니다. PowerShell이나 관리자 권한은 필요 없습니다.</p>
-</div></div>
+<dialog id="setup"><div class="card">
+  <h2 id="setupTitle">AI 기능 사용 준비</h2>
+  <p id="setupIntro"></p>
+  <div id="setupChoice" class="row"><button class="pri choice" data-provider="claude">Claude</button><button class="pri choice" data-provider="codex">ChatGPT</button></div>
+  <div id="setupSteps" hidden>
+    <div class="st" id="setupStatus">확인 중…</div>
+    <p id="setupHelp"></p>
+    <div class="row"><button id="btnInstall" class="pri" hidden>1. 설치</button><button id="btnLogin" class="pri" hidden>2. 로그인</button><button id="btnRecheck">다시 확인</button><button id="btnBack">다른 서비스</button></div>
+    <p style="font-size:11px">설치는 Windows 공식 패키지 관리자(WinGet)로 진행됩니다. PowerShell이나 관리자 권한은 필요 없습니다.</p>
+  </div>
+  <div class="row"><span class="sp"></span><button id="btnSkip">나중에</button></div>
+</div></dialog>
 
 <script type="module">
 const $ = (s) => document.querySelector(s);
@@ -139,8 +143,10 @@ function setAiOpen(open) {
   $('#aiRailToggle').title = open ? 'AI 패널 접기' : 'AI 패널 펼치기';
 }
 setAiOpen(false); localStorage.removeItem('editorkim.ai');
-$('#aiToggle').onclick = () => setAiOpen(document.body.classList.contains('ai-collapsed'));
-$('#aiRailToggle').onclick = () => setAiOpen(document.body.classList.contains('ai-collapsed'));
+// 패널을 여는 것은 AI를 쓰려는 뜻 → 로그인된 공급자가 없으면 Claude/ChatGPT 선택·로그인 대화상자를 함께 연다(닫을 때는 열지 않음)
+const toggleAi = () => { const open = document.body.classList.contains('ai-collapsed'); setAiOpen(open); if (open) ensureAi(); };
+$('#aiToggle').onclick = toggleAi;
+$('#aiRailToggle').onclick = toggleAi;
 $('#aiClose').onclick = () => setAiOpen(false);
 document.addEventListener('keydown', (e) => { if (e.ctrlKey && e.key.toLowerCase() === 'j') { e.preventDefault(); $('#aiToggle').click(); } });
 let cur = null, docText = '', savedText = '', pending = null;
@@ -149,7 +155,7 @@ const clampZoom = (s) => Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, Math.round((+s ||
 let pdfPages = [], pdfObjects = [], pdfScale = clampZoom(localStorage.getItem('editorkim.zoom')), pdfDirty = false, selectedObj = null, selectedMask = null, pdfRenderGeneration = 0;
 let rectMode = false, rectDrag = null;
 // 미저장 여부·실행취소 스택은 서버(/api/pdf/info)가 정본이다. 새로고침이나 목록에서 닫았다가 다시 열어도 화면이 서버 상태와 어긋나지 않는다
-let aiHealth = null, activeAi = null, setupTarget = 'codex', setupExplicit = false, setupBusy = false, loginPoll = 0;
+let aiHealth = null, activeAi = null, setupTarget = null, setupBusy = false, loginPoll = 0; // setupTarget=null이면 대화상자는 서비스 선택 화면
 const dirty = () => cur && (cur.endsWith('.pdf') ? pdfDirty : docText !== savedText);
 window.isDirty = dirty;
 const showDirty = () => { $('#dirty').hidden = !dirty(); };
@@ -164,8 +170,8 @@ function readChoice(value) {
 function activeProvider() { return activeAi && aiHealth?.providers?.[activeAi.provider]; }
 function syncAiState() {
   const state = activeProvider(), ready = !!state?.loggedIn;
-  $('#send').disabled = !cur || !ready;
-  if (!activeAi) { $('#aiTitle').textContent = 'AI'; setStatus('Select Model에서 AI를 선택하세요'); return; }
+  $('#send').disabled = !cur; // 로그인 전에도 누를 수 있다 — 누르면 선택·로그인 대화상자가 열린다
+  if (!activeAi) { $('#aiTitle').textContent = 'AI'; setStatus('AI 미설정 · 💬 채팅에서 Claude 또는 ChatGPT를 선택하면 로그인을 안내합니다'); return; }
   const model = state?.models?.find((item) => item.id === activeAi.model);
   $('#aiTitle').textContent = `${providerName(activeAi.provider)} · ${model?.name || activeAi.model || '기본 모델'}`;
   $('#aiHint').textContent = activeAi.provider === 'claude'
@@ -204,14 +210,30 @@ function renderModelPicker(preferredProvider) {
   if (value) localStorage.setItem('editorkim.aiChoice', value);
   syncAiState();
 }
+const setupOpen = () => $('#setup').open;
+function closeSetup() { loginPoll++; setupTarget = null; if (setupOpen()) $('#setup').close(); }
+function renderChoice() {
+  for (const button of document.querySelectorAll('#setupChoice .choice')) {
+    const provider = button.dataset.provider, state = aiHealth?.providers?.[provider];
+    const hint = !state ? '상태 확인 중…' : !state.installed ? '설치 및 로그인 필요' : !state.loggedIn ? '로그인 필요' : `✔ 로그인됨 (${state.authMethod || '구독'})`;
+    button.innerHTML = `${provider === 'codex' ? 'ChatGPT' : 'Claude'}<small>${provider === 'codex' ? 'Codex · ChatGPT 구독' : 'Claude Code · Claude 구독'}<br>${escapeHtml(hint)}</small>`;
+    button.disabled = setupBusy;
+  }
+}
 function renderSetup() {
+  const choosing = !setupTarget;
+  $('#setupChoice').hidden = !choosing; $('#setupSteps').hidden = choosing;
+  $('#setupTitle').textContent = choosing ? 'AI 기능 사용 준비' : `${providerName(setupTarget)} 준비`;
+  $('#setupIntro').textContent = choosing
+    ? 'AI 기능은 API 키 대신 이 PC에 로그인한 구독 계정을 사용합니다. 사용할 서비스를 고르세요. PDF·Markdown 편집은 로그인 없이도 됩니다.'
+    : 'API 키 대신 이 PC에 로그인한 구독 계정을 사용합니다.';
+  if (choosing) return renderChoice();
   const state = aiHealth?.providers?.[setupTarget] || {};
   $('#setupStatus').classList.remove('bad');
-  $('#setupProvider').value = setupTarget; $('#setupTitle').textContent = `${providerName(setupTarget)} 준비`;
   $('#btnInstall').textContent = `1. ${setupTarget === 'codex' ? 'Codex' : 'Claude Code'} 설치`;
   $('#btnLogin').textContent = `2. ${setupTarget === 'codex' ? 'ChatGPT' : 'Claude'} 로그인`;
   $('#btnInstall').hidden = !!state.installed; $('#btnLogin').hidden = !state.installed || !!state.loggedIn;
-  $('#btnInstall').disabled = $('#btnLogin').disabled = $('#btnRecheck').disabled = setupBusy;
+  $('#btnInstall').disabled = $('#btnLogin').disabled = $('#btnRecheck').disabled = $('#btnBack').disabled = setupBusy;
   $('#setupStatus').innerHTML = state.installed
     ? `<span class="ok">✔ 설치됨</span> ${escapeHtml(state.version || '')}<br>${state.loggedIn ? `<span class="ok">✔ 로그인됨</span> (${escapeHtml(state.authMethod || '구독')})` : '<span class="bad">✘ 로그인 안 됨</span>'}`
       + (state.error ? `<br><span class="bad">모델 목록을 가져오지 못했습니다: ${escapeHtml(state.error)}</span>` : '')
@@ -221,46 +243,52 @@ function renderSetup() {
       ? '[로그인]을 누른 뒤 브라우저에서 ChatGPT 구독 계정으로 로그인하세요.'
       : '[로그인]을 누른 뒤 브라우저에서 Claude 구독 계정으로 로그인하세요.') : '사용할 준비가 됐습니다.';
 }
-function showSetup(provider, explicit = true) { setupTarget = provider; setupExplicit = explicit; renderSetup(); $('#setup').hidden = false; }
+// AI 기능(채팅 열기·보내기·폰트 추천)을 쓰려는 순간에만 연다 — 시작할 때는 열지 않는다. provider 없이 열면 Claude/ChatGPT 선택 화면부터
+function showSetup(provider = null) { loginPoll++; setupTarget = provider; renderSetup(); if (!setupOpen()) $('#setup').showModal(); }
+// 쓸 수 있는 AI가 선택돼 있으면 true. 아니면 선택·로그인 대화상자를 열고 false
+function ensureAi() { if (activeProvider()?.loggedIn) return true; showSetup(); return false; }
 // only='claude'|'codex'면 그 공급자만 다시 검사하고 나머지는 이전 결과를 유지한다(로그인 대기 중 2초마다 부르므로 CLI 4개를 매번 띄우지 않게)
 async function checkHealth(only) {
-  $('#setupStatus').textContent = '확인 중…';
+  if (setupTarget) $('#setupStatus').textContent = '확인 중…';
   let fresh;
   try { fresh = await (await fetch('/api/health' + (only ? '?provider=' + only : ''))).json(); }
-  catch (error) { setStatus('AI 상태를 확인하지 못했습니다 — ' + error.message); $('#setupStatus').textContent = '서버에 연결할 수 없습니다'; return; }
+  catch (error) { setStatus('AI 상태를 확인하지 못했습니다 — ' + error.message); if (setupTarget) $('#setupStatus').textContent = '서버에 연결할 수 없습니다'; return; }
   const checked = Object.fromEntries(Object.entries(fresh.providers || {}).filter(([, state]) => state));
   aiHealth = { ...fresh, providers: { ...(aiHealth?.providers || {}), ...checked } };
   if (aiHealth.appVersion) { $('#ver').textContent = 'v' + aiHealth.appVersion; document.title = `EDITOR_KIM v${aiHealth.appVersion}`; }
-  const justReady = setupExplicit && aiHealth.providers?.[setupTarget]?.loggedIn;
-  renderModelPicker(justReady ? setupTarget : null);
-  const anyReady = Object.values(aiHealth.providers || {}).some((state) => state.loggedIn);
-  if (justReady) { setupExplicit = false; $('#setup').hidden = true; setAiOpen(true); }
-  else if (setupExplicit) renderSetup();
-  else if (anyReady) $('#setup').hidden = true;
-  else showSetup('codex', false);
+  const target = setupOpen() ? setupTarget : null;
+  const justReady = !!(target && aiHealth.providers?.[target]?.loggedIn);
+  renderModelPicker(justReady ? target : null);
+  if (justReady) { closeSetup(); setAiOpen(true); flash(`${providerName(target)} 준비 완료`, 2500); }
+  else if (setupOpen()) renderSetup();
 }
 $('#modelPicker').onchange = async () => {
   const value = $('#modelPicker').value;
-  if (value.startsWith('setup:')) { showSetup(value.slice(6)); renderModelPicker(); return; }
+  if (value.startsWith('setup:')) { const provider = value.slice(6); renderModelPicker(); showSetup(provider); checkHealth(provider); return; }
   const next = readChoice(value); if (!next) return;
   const changed = !activeAi || activeAi.provider !== next.provider || activeAi.model !== next.model;
   activeAi = next; localStorage.setItem('editorkim.aiChoice', value); syncAiState(); setAiOpen(true);
   if (changed) { $('#log').innerHTML = ''; add('bot', `${$('#aiTitle').textContent}로 새 대화를 시작합니다.`); }
 };
-$('#setupProvider').onchange = () => { loginPoll++; setupTarget = $('#setupProvider').value; renderSetup(); };
+$('#setupChoice').onclick = (e) => {
+  const provider = e.target.closest('.choice')?.dataset.provider; if (!provider || setupBusy) return;
+  if (aiHealth?.providers?.[provider]?.loggedIn) { renderModelPicker(provider); closeSetup(); setAiOpen(true); return; } // 이미 로그인됨 → 바로 사용
+  loginPoll++; setupTarget = provider; renderSetup(); checkHealth(provider);
+};
+$('#btnBack').onclick = () => { if (setupBusy) return; loginPoll++; setupTarget = null; renderSetup(); };
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function waitForLogin(provider) {
   const token = ++loginPoll;
-  for (let i = 0; i < 150 && token === loginPoll && !$('#setup').hidden && setupTarget === provider; i++) {
+  for (let i = 0; i < 150 && token === loginPoll && setupOpen() && setupTarget === provider; i++) {
     await delay(2000);
     await checkHealth(provider);
     if (aiHealth?.providers?.[provider]?.loggedIn) return;
     $('#setupStatus').innerHTML = '<span class="ok">브라우저 로그인을 기다리는 중…</span>';
   }
-  if (token === loginPoll && !$('#setup').hidden) $('#setupHelp').textContent = '로그인이 끝났다면 [다시 확인]을 누르세요.';
+  if (token === loginPoll && setupOpen()) $('#setupHelp').textContent = '로그인이 끝났다면 [다시 확인]을 누르세요.';
 }
 async function setupAction(action) {
-  if (setupBusy) return;
+  if (setupBusy || !setupTarget) return;
   const provider = setupTarget;
   setupBusy = true; renderSetup();
   $('#setupStatus').innerHTML = `<span class="ok">${action === 'install' ? '공식 패키지를 설치하는 중…' : '브라우저 로그인을 여는 중…'}</span>`;
@@ -268,7 +296,7 @@ async function setupAction(action) {
     const response = await fetch('/api/setup', { method: 'POST', body: JSON.stringify({ provider, action }) });
     const result = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
-    if (action === 'install') await checkHealth();
+    if (action === 'install') await checkHealth(provider);
     else await waitForLogin(provider);
   } catch (error) {
     $('#setupStatus').textContent = `실패: ${String(error.message || error)}`;
@@ -276,15 +304,17 @@ async function setupAction(action) {
     $('#setupHelp').textContent = '보안 예외를 허용하지 말고, 네트워크 또는 회사 PC의 설치 정책을 확인해 주세요.';
   } finally {
     setupBusy = false;
-    if (!$('#setup').hidden) {
-      $('#btnInstall').disabled = $('#btnLogin').disabled = $('#btnRecheck').disabled = false;
-    }
+    if (setupOpen()) $('#btnInstall').disabled = $('#btnLogin').disabled = $('#btnRecheck').disabled = $('#btnBack').disabled = false;
   }
 }
 $('#btnInstall').onclick = () => setupAction('install');
 $('#btnLogin').onclick = () => setupAction('login');
-$('#btnRecheck').onclick = () => checkHealth();
-$('#btnSkip').onclick = () => { loginPoll++; setupExplicit = false; $('#setup').hidden = true; };
+$('#btnRecheck').onclick = () => checkHealth(setupTarget || undefined);
+$('#btnSkip').onclick = closeSetup;
+// Esc = 나중에. Chromium은 사용자 활성화가 없으면 cancel 이벤트를 건너뛰기도 하므로 keydown에서도 닫고, 어떤 경로로 닫히든 선택 상태를 비운다
+$('#setup').addEventListener('cancel', (e) => { e.preventDefault(); closeSetup(); });
+$('#setup').addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); closeSetup(); } });
+$('#setup').addEventListener('close', () => { loginPoll++; setupTarget = null; });
 
 // ---- 열어 둔 파일 목록 (절대경로, localStorage에 저장) ----
 let files = [];
@@ -748,7 +778,7 @@ function openInlineEditor(initialText) {
   const openFonts = (autoRecommend = false) => {
     const selection = selectedObj, name = cur;
     return window.openPdfFontEditor({ name, i: selection.i, idx: selection.objs[0].idx, text: ta.value,
-      provider: activeAi?.provider, model: activeAi?.model, autoRecommend,
+      ai: () => activeAi, ensureAi, autoRecommend,
       onApply: async (result) => {
         if (cur !== name) return;
         pdfDirty = true; showDirty(); setUndoRedoState(result.undoLeft, result.redoLeft);
@@ -1064,7 +1094,8 @@ let chatAbort = null; // 응답 생성 중이면 AbortController — [중지] �
 $('#stop').onclick = () => chatAbort?.abort();
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && chatAbort && document.activeElement === $('#q')) chatAbort.abort(); });
 $('#send').onclick = async () => {
-  const q = $('#q').value.trim(); if (!q || !cur || !activeAi || chatAbort) return;
+  const q = $('#q').value.trim(); if (!q || !cur || chatAbort) return;
+  if (!ensureAi()) return; // 로그인된 AI가 없으면 Claude/ChatGPT 선택·로그인 대화상자를 열고 입력은 그대로 둔다
   let mode = document.querySelector('[name=mode]:checked').value;
   const isPdf = cur.endsWith('.pdf');
   if (mode === 'edit' && isPdf) mode = 'editText'; // PDF에서는 선택 객체 텍스트만 고침

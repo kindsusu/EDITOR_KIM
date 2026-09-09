@@ -4,10 +4,17 @@ All notable changes to EDITOR_KIM are recorded here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-09
+
 ### Changed
+- **AI sign-in is on demand.** The app no longer opens the setup dialog at launch. Opening the chat panel, pressing Send, or asking for an AI font recommendation while no provider is signed in opens a chooser between **Claude** (Claude Code) and **ChatGPT** (Codex); picking one leads to the install/sign-in steps for that provider only, and a provider that is already signed in is selected immediately. PDF and Markdown editing never require an account. The chooser is a modal `<dialog>`, so it also appears above the font dialog. The Send button is enabled whenever a document is open; the typed prompt is kept while signing in.
+- The packaged app keeps its default workspace in **Documents\EDITOR_KIM** (created on first run with the sample files) instead of the read-only `app.asar/workspace`, where saving the samples failed with "저장 실패". Development runs (`npm start`, `node app/server.js`) still use the repository's `workspace/`.
 - Pressing Enter in the line editor opens the font dialog only for hidden (image-backed) text or a line that already has a chosen font. Replacement characters missing from the original font go straight to the Malgun Gothic fallback as before; the dialog stays available through the **폰트 맞추기** button. AI font recommendations now run only when the dialog's button is pressed, never automatically, so sending the region image and waiting on the model is always an explicit choice.
 
 ### Fixed
+- Launching the app twice no longer opens a second window attached to the first instance's server: a single-instance lock focuses the existing window instead.
+- If port 4747 is taken by another program, the local server moves to the next free port (up to ten tries) and the window connects to the port that was actually opened. A listen failure shows an error box instead of a blank window.
+- Font dialog: the AI recommendation button no longer depends on the provider chosen when the dialog was opened; it reads the current selection, and when nothing is signed in it opens the chooser instead of staying disabled.
 - The installed-font catalog kept a parsed fontkit face for every TTF (about 600 MB of resident memory after the first scan of ~480 fonts). It now stores only each font's code-point set; glyph checks are unchanged and retained heap drops to ~60 MB.
 - The font dialog now preselects the installed font whose name matches the PDF font (e.g. MalgunGothicBold → Malgun Gothic Bold) instead of the first alphabetical entry.
 
