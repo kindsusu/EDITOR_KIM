@@ -218,6 +218,20 @@ async function open(buffer) {
     return /bold|black|heavy/i.test(name) || w >= 600;
   };
 
+  // 원본 글자의 그리기 방식을 새 객체에 옮긴다: 렌더 모드(2 = 채움+외곽선 — Word가 '굵게'를 흉내낼 때 씀)·선 색·선 굵기.
+  // 이걸 빼먹으면 대체 폰트로 다시 만든 제목이 보통 굵기로 얇아져 "폰트가 바뀐" 것처럼 보인다
+  // (계약서 '개인정보수집, 이용에 대한 동의' 제목: MalgunGothic 400 + 렌더 모드 2 + 선 0.4pt, 잉크 밀도 0.27 → 대체 후 0.19. 2026-09-09 사용자 보고)
+  // 투명 모드(3·7)는 옮기지 않는다 — 투명 글자를 드러내는 경로가 따로 0으로 맞춘다
+  const copyTextStyle = (src, dst) => {
+    const buf = mal(16);
+    try {
+      const rm = P.FPDFTextObj_GetTextRenderMode(src);
+      if (rm >= 0 && rm !== 3 && rm !== 7) P.FPDFTextObj_SetTextRenderMode(dst, rm);
+      if (P.FPDFPageObj_GetStrokeColor(src, buf, buf + 4, buf + 8, buf + 12)) P.FPDFPageObj_SetStrokeColor(dst, i32(buf), i32(buf + 4), i32(buf + 8), i32(buf + 12));
+      if (P.FPDFPageObj_GetStrokeWidth(src, buf)) P.FPDFPageObj_SetStrokeWidth(dst, f32(buf));
+    } finally { free(buf); }
+  };
+
   const withBitmap = (i, scale, fn) => {
     const { w, h } = api.pageSize(i);
     const pw = Math.max(1, Math.round(w * scale)), ph = Math.max(1, Math.round(h * scale));
@@ -379,7 +393,12 @@ async function open(buffer) {
           };
           item.mask = !!findMark(o, MARK_MASK);
           // 보이지 않는 글자: 채움 알파 0 또는 렌더 모드 3(invisible)/7(clip). PowerPoint가 글자 효과를 그림으로 내보내며 검색용으로 깔아 둔 투명 글자
-          if (t === OBJ_TEXT) { const rm = P.FPDFTextObj_GetTextRenderMode(o); item.hidden = rm === 3 || rm === 7; }
+          if (t === OBJ_TEXT) {
+            const rm = P.FPDFTextObj_GetTextRenderMode(o); item.hidden = rm === 3 || rm === 7;
+            item.renderMode = rm; // 2 = 채움+외곽선: Word가 굵게를 흉내낼 때 쓴다(가짜 굵게)
+            item.strokeWidth = P.FPDFPageObj_GetStrokeWidth(o, scratch) ? f32(scratch) : null;
+            item.weight = P.FPDFFont_GetWeight ? P.FPDFFont_GetWeight(P.FPDFTextObj_GetFont(o)) : null;
+          }
           item.group = groupOf(o); // 줄바꿈 줄들·사용자 그룹 (없으면 null)
           const fm = findMark(o, 'EditorKimFont');
           if (fm) { item.fontId = markParam(fm, 'id'); item.fontLabel = markParam(fm, 'label'); }
@@ -452,6 +471,7 @@ async function open(buffer) {
           if (!ok) { if (neo) P.FPDFPageObj_Destroy(neo); continue; }
           M.setValue(m + 16, e - k * lh * cc, 'float'); M.setValue(m + 20, f - k * lh * d, 'float'); P.FPDFPageObj_SetMatrix(neo, m);
           if (color) P.FPDFPageObj_SetFillColor(neo, color[0], color[1], color[2], color[3]);
+          copyTextStyle(o, neo);
           // 맨 뒤(가장 위 z-순서)에 넣는다. 원래 글자 바로 뒤에 끼우면 표 셀 배경 같은 뒤쪽 채움 도형이 새 줄을 덮어 글자가 사라진다
           tagGroup(neo, gid);
           if (entry) tagFont(neo, entry);
@@ -585,6 +605,7 @@ async function open(buffer) {
         if (P.FPDFPageObj_GetFillColor(o, scratch, scratch + 4, scratch + 8, scratch + 12)) {
           P.FPDFPageObj_SetFillColor(neo, i32(scratch), i32(scratch + 4), i32(scratch + 8), i32(scratch + 12));
         }
+        copyTextStyle(o, neo);
         if (entry) tagFont(neo, entry);
         const gid = groupOf(o); if (gid) tagGroup(neo, gid);
         // 같은 자리에 넣어 idx가 밀리지 않게 한다

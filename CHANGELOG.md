@@ -4,6 +4,13 @@ All notable changes to EDITOR_KIM are recorded here. The format follows [Keep a 
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-09-09
+
+### Fixed
+- **Replacement text lost Word's fake bold.** Headings that Word exports as regular Malgun Gothic drawn in text render mode 2 (fill + 0.4 pt stroke) came back thin after any edit that had to rebuild the text object (a character missing from the embedded subset, a chosen font, or a wrapped line), so the heading looked like a different font. New text objects now copy the original render mode, stroke colour and stroke width; the fake bold survives save and reopen, and added lines inherit it. `objects()` also reports `renderMode`, `strokeWidth` and font `weight`.
+- **Clipped toolbar buttons in a non-maximised window.** Buttons no longer shrink and wrap their labels vertically; the toolbar folds into extra rows instead, and only the file name and the header status line are ellipsised. Below 1180 px the sidebar and AI panel narrow to leave room for the editor.
+- **App icon.** The previous icon rendered the Korean glyph "대" with a system font that the offscreen renderer did not have, so the installer and taskbar showed a "D"-like shape. The icon is now a font-independent vector scene, "a redacted line": a cream page with five text lines on the dark panel colour, one line fully covered by the orange redaction bar (chosen from four directions), captured at exactly 512 px regardless of display scaling. `build/icon.svg` keeps the source.
+
 ## [0.7.0] - 2026-09-09
 
 ### Changed
