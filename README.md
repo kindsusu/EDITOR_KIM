@@ -2,19 +2,19 @@
 
 ![EDITOR_KIM](assets/hero.png)
 
-A local Windows editor that changes PDF text objects directly and removes sensitive text for real. It also includes Markdown editing and a document assistant powered by Claude Code or ChatGPT through Codex. The app does not require an AI API key.
+A local Windows editor that changes PDF text objects directly and removes sensitive text for real. It also includes Markdown editing and an optional AI assistant powered by Claude Code or ChatGPT through Codex, with no API key required.
 
 [한국어](README.ko.md) · [Plan](PLAN.md)
 
 ## Features
 
-- Direct PDF text-object editing and saving with PDFium
-- Original embedded-font reuse with subset Malgun Gothic fallback
-- Redaction that removes selected characters and verifies extraction
-- Undo/redo, multi-line editing, alignment, movement, and fit-to-width
+- Direct PDF text-object editing with the original embedded font, falling back to a subset Malgun Gothic for missing glyphs
+- Redaction that removes the selected characters from the PDF and verifies the removal by re-extracting text
+- Page tools: extract/delete pages, merge PDFs, export pages as PNG/JPEG, insert an image, and reduce file size by downsampling
+- Open PDFs straight from a browser or mail client via the Windows "Open with" association (temp-file downloads show a banner and save with "Save As")
+- Undo/redo, multi-line editing, fit-to-width, and move
 - Markdown editing with a sanitized live preview
-- Claude Code or ChatGPT (Codex) model selection
-- Per-document AI conversations and assisted text edits
+- AI assistant (Claude Code or ChatGPT via Codex) with per-document conversations and font recommendations — sign-in is only requested the first time an AI feature is used
 
 | Before | After |
 |---|---|
@@ -22,11 +22,7 @@ A local Windows editor that changes PDF text objects directly and removes sensit
 
 ## Quick start
 
-Download a portable or setup build from Releases. To run the source without using a terminal, download the repository and double-click `run-editor-kim.bat`. Node.js 22 or newer is required once; dependencies are installed automatically.
-
-The setup build registers EDITOR_KIM as a PDF program. Pick EDITOR_KIM in Windows' "Open with" list (or set it as the default) to open PDFs by clicking them — a file opened this way from a temporary download location shows a banner and saves with "Save As".
-
-For development:
+Download a portable or setup build from Releases. The setup build registers EDITOR_KIM in Windows' "Open with" list for PDFs (it is not set as the default viewer). Unsigned builds may trigger SmartScreen — choose "More info" then "Run anyway" after checking the source; never disable Windows Defender to get past a block. For development:
 
 ```bash
 git clone https://github.com/kindsusu/EDITOR_KIM.git
@@ -35,58 +31,31 @@ npm install
 npm start
 ```
 
-Use `npm run serve` for the browser-only mode at <http://localhost:4747>. Native file dialogs are available only in Electron.
+Double-clicking `run-editor-kim.bat` runs the same source without opening a terminal. Use `npm run serve` for the browser-only mode at <http://localhost:4747>; native file dialogs and PNG insertion are Electron-only there.
 
-Unsigned development builds may trigger Windows SmartScreen. Run them only after checking the source and file hash. Do not bypass Windows Defender or relax execution policy when an install is blocked.
+## AI sign-in
 
-## AI installation and sign-in
+Nothing is requested at launch — PDF and Markdown editing work without any account. The first time you use the chat panel, press **Send**, or ask for a font recommendation, EDITOR_KIM opens a chooser for **Claude** (Claude Code) or **ChatGPT** (Codex) and walks you through installing and signing in for that provider only. Installation uses WinGet's official packages (`Anthropic.ClaudeCode` or `OpenAI.Codex`); sign-in happens through the provider's own browser flow with your existing subscription. EDITOR_KIM never stores API keys or tokens itself. Once you use an AI feature, the current document text (or the selected region's image, for font recommendations) is sent to the provider you chose.
 
-Nothing is asked at launch; PDF and Markdown editing work without any account. The first time you open the chat panel (💬 or Ctrl+J), press **Send**, or request an AI font recommendation, the app asks you to choose **Claude** (Claude Code) or **ChatGPT** (Codex) and walks you through installation and sign-in for that provider only. A provider that is already signed in on the PC is used immediately. **Select Model** switches between signed-in providers and models later. See OpenAI's [official authentication guide](https://learn.chatgpt.com/docs/auth) for the Codex sign-in behavior.
-
-1. WinGet installs the official `Anthropic.ClaudeCode` or `OpenAI.Codex` package for the current user.
-2. The app launches the provider's browser authentication.
-3. Sign in with the appropriate Claude or ChatGPT subscription account.
-4. EDITOR_KIM detects completion and lists the models available to that account.
-
-An existing ChatGPT browser session can make authentication quicker, but first-time Codex use still requires completing the `codex login` browser flow once. Codex then caches the session and EDITOR_KIM reuses it. The app never reads or copies credential files.
-
-Developer diagnostics only:
-
-```bash
-codex login
-codex login status
-claude auth login
-claude auth status
-```
-
-On a headless machine, Codex also supports `codex login --device-auth`. Never commit credential files such as `auth.json`.
-
-Sending an AI request sends the current document text to the selected provider. Claude usage follows the Claude Code subscription; Codex usage follows the ChatGPT/Codex plan. EDITOR_KIM itself neither requests nor stores API keys.
-
-## AI panel
-
-- Toggle it at any time with **💬 Chat**, the arrow tab on the panel edge, or `Ctrl+J`.
-- Selecting a model opens the panel, but model choice and panel visibility are independent.
-- Collapse it with `×` or the same edge tab.
-- Changing provider or model starts a new conversation.
-
-## PDF editing and redaction
+## PDF editing
 
 ![Architecture](assets/architecture.svg)
 
-Click text, edit it, and press Enter. Text that PDFium can handle keeps the normal editing path. Stale renders are discarded during rapid zoom or document switches, preventing pages from different documents from mixing.
-
-**폰트 맞추기 (Match font)** handles a single ungrouped text box, one line of up to 2,000 characters. Hidden image-backed text (or a line that already has a chosen font) opens the font dialog on Enter; characters missing from the source font are handled by the Malgun Gothic fallback as before, and the dialog is always available through the **폰트 맞추기** button. A connected AI recommends candidates only when you press the recommend button in the dialog, and only for these exceptional cases. Select an installed font or import a static TTF in the Electron app, adjust size and width fitting, preview the saved-and-reopened result, then apply and save. Undo and redo are supported. Later supported edits with the selected font do not call AI.
-
-Font recommendations send only the selected region image, its text, and the supported font catalog to the selected provider. AI suggests similar installed fonts; it does not identify the original with certainty or generate font files. Supply the original TTF for the same typeface. OTF/CFF and variable fonts are not supported. Imported external TTF files must be added again after restarting for further editing; saved PDFs still display their embedded subsets. Manual selection works without AI.
+Click a text box, edit it, and press Enter to confirm. Text keeps its original embedded font where possible; characters missing from that font fall back to Malgun Gothic. The **폰트 맞추기** (font match) dialog opens for image-backed hidden text or a text box where you've already chosen a font — pick an installed font or import a TTF, preview the result, and apply with undo support. An AI font recommendation runs only when you press the recommend button in the dialog; only plain TTF fonts are supported, not OTF or variable fonts.
 
 ![Redaction pipeline](assets/redaction.svg)
 
-Text redaction removes the selected characters from the PDF object, adds a rectangle, and re-extracts page text to verify removal. A scanned image can only be visually covered; this does not remove OCR data embedded elsewhere.
+Text redaction removes the selected characters from the PDF object, adds a covering rectangle, and re-extracts the page text to confirm the removal. Text inside a scanned image can only be visually covered, not removed.
 
-### PDF tools
+## PDF tools
 
-The toolbar's **페이지** menu gathers five document-level tools, each undoable except image export: **페이지 추출** removes selected pages (checkbox thumbnails or a `1,3-5` range) or keeps only the ones you check; **병합** appends several PDFs in a chosen order, optionally with the current document first; **이미지로 내보내기** renders pages to PNG/JPEG at 96–300 dpi into a folder; **이미지 삽입** places a JPEG/PNG on the page with drag-to-move and a resize handle; and **용량 줄이기** re-encodes oversized embedded images to a target dpi/quality or file size while skipping images that have transparency. (See above for opening PDFs directly from a browser or mail client via the Windows file association.)
+The toolbar's **페이지** menu holds these document-level tools (all undoable except image export):
+
+- **페이지 추출** — extract/delete pages via checkbox thumbnails or a `1,3-5` range
+- **병합** — merge several PDFs in a chosen order
+- **이미지로 내보내기** — export pages as PNG/JPEG at 96–300 dpi into a folder
+- **이미지 삽입** — insert a JPEG/PNG; drag to move, handle to resize
+- **용량 줄이기** — downsample images above a dpi threshold, re-encode as JPEG, optional target size (transparent images skipped)
 
 ## Shortcuts
 
@@ -102,14 +71,13 @@ The toolbar's **페이지** menu gathers five document-level tools, each undoabl
 | `Esc` (in the prompt) | Stop the streaming AI reply |
 | `F12` | Developer tools |
 
-## Development and verification
+## Development
 
 ```bash
 npm test
 npm audit
+npm run dist   # release builds
 ```
-
-The tests cover PDF rendering, editing, font fallback, redaction, save/reopen behavior, provider parsing, and UI safety checks. Create Windows packages with `npm run dist` only when preparing a release.
 
 ```text
 app/                    UI, local server, AI adapters, PDF engine, tests
