@@ -26,6 +26,7 @@
   aside details{margin:2px 6px}aside summary{cursor:pointer;color:var(--mut);font-size:11px;padding:4px 2px;list-style-position:outside}
   main{display:flex;flex-direction:column;min-width:0;min-height:0}
   .bar{display:flex;flex-wrap:wrap;gap:6px 8px;align-items:center;padding:6px 12px;border-bottom:1px solid var(--line);color:var(--mut)}.bar .sp{flex:1}
+  #tempBanner{padding:6px 12px;background:#4a3418;color:#e8c98a;border-bottom:1px solid #6b4c22;font-size:12px}
   .bar>*,.bar span>*{flex-shrink:0}.bar #fname{flex-shrink:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#pdfZoom,#diffbar{display:inline-flex;gap:6px;align-items:center}
   button{background:#2e2e37;color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:5px 10px;cursor:pointer;font:inherit;white-space:nowrap}select{white-space:nowrap}button:hover{background:#3a3a45}button.pri{background:var(--acc);border-color:var(--acc);color:#fff}button:disabled{opacity:.5;cursor:default}
   select{background:#2e2e37;color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:4px;font:inherit}
@@ -69,6 +70,23 @@
   #fontEditor .fontSelect{max-width:360px}#fontEditor .fontSize{width:80px}#fontEditor .fontDisclosure{color:var(--mut);font-size:12px}
   #fontEditor .fontCompare{display:grid;gap:12px;margin:16px 0}#fontEditor figure{margin:0}#fontEditor figcaption{color:var(--mut);margin-bottom:5px}
   #fontEditor img{max-width:100%;max-height:180px;object-fit:contain;background:white}#fontEditor .fontCandidates{display:flex;gap:8px;flex-wrap:wrap}
+  /* P4 WP-B2: 페이지 메뉴 팝업, 4개 대화상자(추출·병합·내보내기·압축), 이미지 객체 크기 손잡이 */
+  .popupMenu{position:absolute;top:100%;left:0;margin-top:4px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:4px;display:flex;flex-direction:column;gap:2px;z-index:9;box-shadow:0 6px 24px #0008;min-width:170px}
+  .popupMenu button{text-align:left;background:transparent;border:0;padding:6px 8px;white-space:nowrap}
+  .popupMenu button:hover{background:#3a3a45}
+  dialog.panel{border:0;padding:0;background:transparent;max-width:none;max-height:none}
+  dialog.panel::backdrop{background:#000c}
+  dialog.panel .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px 26px;line-height:1.6;max-width:92vw;color:var(--fg)}
+  dialog.panel h2{margin:0 0 10px;color:var(--acc);font-size:17px}
+  dialog.panel .row{display:flex;gap:8px;align-items:center;margin:8px 0;flex-wrap:wrap}
+  dialog.panel .hint2{color:var(--mut);font-size:11px}
+  dialog.panel .bad{color:#e07a7a}
+  .thumb{display:inline-flex;flex-direction:column;align-items:center;gap:2px;font-size:11px;color:var(--mut);width:92px;cursor:pointer}
+  .thumb img{width:100%;border:1px solid var(--line);background:#fff}
+  #downsampleTable{width:100%;border-collapse:collapse;font-size:12px;color:var(--fg)}
+  #downsampleTable th,#downsampleTable td{border-bottom:1px solid var(--line);padding:3px 6px;text-align:left}
+  .pdfImage{cursor:move}
+  .pdfImageHandle{position:absolute;right:-5px;bottom:-5px;width:11px;height:11px;background:var(--acc);border:1px solid #fff;border-radius:2px;cursor:nwse-resize;z-index:5}
 </style>
 </head>
 <body class="ai-collapsed">
@@ -81,10 +99,21 @@
   <div id="files"></div>
 </aside>
 <main>
+  <div id="tempBanner" hidden>⚠ 임시 파일입니다. 편집을 남기려면 다른 이름으로 저장하세요 (Ctrl+S)</div>
   <div class="bar"><span id="fname">파일을 선택하세요</span><span id="dirty" hidden>●</span><span class="sp"></span>
     <span id="pdfZoom" hidden><button id="zoomOut" title="축소 (Ctrl+− 또는 Ctrl+휠)">−</button> <span id="zoomPct" title="클릭하면 100%">150%</span> <button id="zoomIn" title="확대 (Ctrl+= 또는 Ctrl+휠)">+</button> <button id="zoomFit" title="페이지 폭을 화면에 맞춤 (Ctrl+0)">폭 맞춤</button></span>
     <button id="undoBtn" hidden disabled>↶ 실행 취소</button>
     <button id="redoBtn" hidden disabled>↷ 다시 실행</button>
+    <span id="pageMenuWrap" hidden style="position:relative">
+      <button id="pageMenuBtn">페이지 ▾</button>
+      <div class="popupMenu" id="pageMenu" hidden>
+        <button id="menuExtract">페이지 추출…</button>
+        <button id="menuMerge">병합…</button>
+        <button id="menuExportImages">이미지로 내보내기…</button>
+        <button id="menuInsertImage">이미지 삽입</button>
+        <button id="menuDownsample">용량 줄이기…</button>
+      </div>
+    </span>
     <button id="rectTool" hidden>▭ 마스킹 삽입</button>
     <select id="maskColor" hidden title="가림 색: 검정 또는 그 자리의 배경색을 자동 추출"><option value="black">가림: 검정</option><option value="auto">가림: 배경색</option></select>
     <button id="save" hidden>저장 (Ctrl+S)</button>
@@ -117,6 +146,52 @@
     <p style="font-size:11px">설치는 Windows 공식 패키지 관리자(WinGet)로 진행됩니다. PowerShell이나 관리자 권한은 필요 없습니다.</p>
   </div>
   <div class="row"><span class="sp"></span><button id="btnSkip">나중에</button></div>
+</div></dialog>
+
+<dialog id="pageExtractDialog" class="panel"><div class="card" style="width:640px">
+  <h2>페이지 추출</h2>
+  <p class="hint2">축소본을 체크하거나 번호를 입력하세요 (예: 1,3-5). 체크한 페이지 기준으로 아래 버튼을 고릅니다.</p>
+  <div class="row"><span>선택:</span><input id="extractKeepInput" type="text" placeholder="예: 1,3-5" style="flex:1"></div>
+  <div id="extractThumbs" style="display:flex;flex-wrap:wrap;gap:8px;max-height:48vh;overflow:auto;margin:10px 0"></div>
+  <div class="row"><span class="sp"></span><button id="extractDeleteSelected">선택한 페이지 삭제</button><button id="extractKeepOnly" class="pri">체크한 것만 남기고 삭제</button><button id="extractClose">닫기</button></div>
+</div></dialog>
+
+<dialog id="mergeDialog" class="panel"><div class="card" style="width:520px">
+  <h2>PDF 병합</h2>
+  <p class="hint2">순서대로 이어붙입니다. ▲▼로 순서를 바꾸세요. 저장하지 않은 편집은 병합에 포함되지 않습니다.</p>
+  <label class="row"><input type="checkbox" id="mergeIncludeCurrent">현재 열린 문서를 맨 앞에 포함</label>
+  <div id="mergeList" style="display:flex;flex-direction:column;gap:4px;max-height:40vh;overflow:auto;margin:10px 0"></div>
+  <div class="row"><button id="mergeAddFiles">파일 추가…</button></div>
+  <div class="row"><span class="sp"></span><button id="mergeRun" class="pri">병합 실행…</button><button id="mergeClose">닫기</button></div>
+</div></dialog>
+
+<dialog id="exportImagesDialog" class="panel"><div class="card" style="width:520px">
+  <h2>이미지로 내보내기</h2>
+  <div class="row"><span>범위:</span>
+    <label><input type="radio" name="exportRange" value="all" checked>전체</label>
+    <label><input type="radio" name="exportRange" value="current">현재 쪽</label>
+    <label><input type="radio" name="exportRange" value="custom">입력</label>
+    <input id="exportRangeInput" type="text" placeholder="예: 1,3-5" style="width:120px" disabled>
+  </div>
+  <div class="row"><span>형식:</span><select id="exportFormat"><option value="png">PNG</option><option value="jpeg">JPEG</option></select>
+    <span>해상도:</span><select id="exportDpi"><option value="96">96 dpi</option><option value="150" selected>150 dpi</option><option value="200">200 dpi</option><option value="300">300 dpi</option></select></div>
+  <div class="row"><button id="exportChooseDir">저장 폴더 선택…</button><span id="exportDirLabel" class="hint2">(폴더를 선택하세요)</span></div>
+  <div class="row"><span class="sp"></span><button id="exportRun" class="pri">내보내기 실행</button><button id="exportClose">닫기</button></div>
+</div></dialog>
+
+<dialog id="downsampleDialog" class="panel"><div class="card" style="width:640px">
+  <h2>용량 줄이기</h2>
+  <div style="max-height:32vh;overflow:auto;margin:10px 0">
+    <table id="downsampleTable">
+      <thead><tr><th>쪽</th><th>픽셀</th><th>dpi</th><th>크기</th></tr></thead>
+      <tbody id="downsampleBody"></tbody>
+    </table>
+  </div>
+  <div class="row"><span>최대 dpi:</span><input id="downsampleDpi" type="number" value="150" min="30" max="600" style="width:70px">
+    <span>품질:</span><input id="downsampleQuality" type="number" value="75" min="1" max="100" style="width:60px">
+    <span>목표 용량(MB):</span><input id="downsampleTarget" type="number" min="0" step="0.1" style="width:80px" placeholder="선택"></div>
+  <div id="downsampleResult" class="hint2"></div>
+  <div class="row"><span class="sp"></span><button id="downsampleRun" class="pri">실행</button><button id="downsampleClose">닫기</button></div>
 </div></dialog>
 
 <script type="module">
@@ -153,7 +228,7 @@ $('#aiToggle').onclick = toggleAi;
 $('#aiRailToggle').onclick = toggleAi;
 $('#aiClose').onclick = () => setAiOpen(false);
 document.addEventListener('keydown', (e) => { if (e.ctrlKey && e.key.toLowerCase() === 'j') { e.preventDefault(); $('#aiToggle').click(); } });
-let cur = null, docText = '', savedText = '', pending = null;
+let cur = null, docText = '', savedText = '', pending = null, curTemp = false, curReadOnly = false;
 const ZOOM_MIN = 0.5, ZOOM_MAX = 3, ZOOM_DEFAULT = 1.5;
 const clampZoom = (s) => Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, Math.round((+s || ZOOM_DEFAULT) * 100) / 100));
 let pdfPages = [], pdfObjects = [], pdfScale = clampZoom(localStorage.getItem('editorkim.zoom')), pdfDirty = false, selectedObj = null, selectedMask = null, pdfRenderGeneration = 0;
@@ -163,6 +238,8 @@ let aiHealth = null, activeAi = null, setupTarget = null, setupBusy = false, log
 const dirty = () => cur && (cur.endsWith('.pdf') ? pdfDirty : docText !== savedText);
 window.isDirty = dirty;
 const showDirty = () => { $('#dirty').hidden = !dirty(); };
+// 인터넷·메일에서 바로 열린 임시 파일이거나 읽기전용이면 배너를 띄우고, 저장(Ctrl+S/버튼)은 다른 이름으로 저장으로 유도한다(WP-B1)
+const updateTempBanner = () => { $('#tempBanner').hidden = !(curTemp || curReadOnly); };
 
 // ---- AI 공급자·모델 선택과 설치·로그인 검사 ----
 const providerName = (provider) => provider === 'codex' ? 'ChatGPT (Codex)' : 'Claude Code';
@@ -382,11 +459,13 @@ async function removeFile(p) {
   if (cur === p) {
     pdfRenderGeneration++; closeAnyPanel(); clearMulti();
     cur = null; docText = savedText = ''; selectedObj = null; pdfDirty = false; pdfPages = []; pdfObjects = []; $('#pdf').innerHTML = '';
+    curTemp = curReadOnly = false; updateTempBanner();
     $('#fname').textContent = '파일을 선택하세요'; $('#fname').title = '';
     $('#md').hidden = $('#pdf').hidden = $('#diff').hidden = $('#diffbar').hidden = true;
     $('#save').hidden = $('#saveAs').hidden = $('#pdfZoom').hidden = $('#dirty').hidden = true; $('#send').disabled = true;
     $('#rectTool').hidden = true; $('#maskColor').hidden = true; setRectMode(false);
     $('#undoBtn').hidden = $('#redoBtn').hidden = true;
+    $('#pageMenuWrap').hidden = true; $('#pageMenu').hidden = true;
   }
   renderFiles();
   // 서버 캐시의 미저장 편집도 함께 버린다 — 남겨 두면 다음에 같은 파일을 열 때 "깨끗한 문서"인 척 이전 편집이 나타난다
@@ -409,6 +488,20 @@ async function initFiles() {
     renderFiles();
   }
 }
+// ---- 인터넷·메일에서 연결 프로그램으로 바로 열기(WP-B1) ----
+// 연결 프로그램으로 더블클릭·`electron . <파일>`·이미 뜬 창에 두 번째로 파일을 연 경우: main.js가 open-paths로 보낸다
+if (window.editorKim && window.editorKim.onOpenPaths) {
+  window.editorKim.onOpenPaths((paths) => { if (Array.isArray(paths) && paths.length) addFiles(paths); });
+}
+// 창에 파일을 끌어다 놓으면 목록에 추가해 연다. 브라우저 기본 동작(파일을 새 탭으로 여는 것)을 막아야 drop 이벤트를 받는다
+if (window.editorKim && window.editorKim.pathsFromFiles) {
+  document.addEventListener('dragover', (e) => e.preventDefault());
+  document.addEventListener('drop', (e) => {
+    e.preventDefault();
+    const paths = window.editorKim.pathsFromFiles(e.dataTransfer.files).filter((p) => /\.(pdf|md)$/i.test(p));
+    if (paths.length) addFiles(paths);
+  });
+}
 $('#files').onclick = (e) => {
   const x = e.target.closest('[data-x]'); if (x) return removeFile(x.dataset.x);
   const f = e.target.closest('[data-f]'); if (f) open(f.dataset.f);
@@ -420,17 +513,20 @@ async function open(name) {
   pdfRenderGeneration++; // 이전 문서·확대 렌더가 늦게 끝나도 새 화면을 건드리지 못하게 무효화
   closeAnyPanel(); clearMulti();
   cur = name; pending = null; docText = ''; selectedObj = null; selectedMask = null; pdfDirty = false; $('#send').disabled = true;
+  curTemp = curReadOnly = false; updateTempBanner();
   pushRecent(name); renderFiles();
   $('#fname').textContent = basename(name); $('#fname').title = name; $('#diff').hidden = true; $('#diffbar').hidden = true;
   const isPdf = name.endsWith('.pdf');
   setRectMode(false);
   $('#md').hidden = isPdf; $('#pdf').hidden = !isPdf; $('#save').hidden = false; $('#saveAs').hidden = !window.editorKim; $('#pdfZoom').hidden = !isPdf; $('#rectTool').hidden = !isPdf; $('#maskColor').hidden = !isPdf;
   $('#undoBtn').hidden = $('#redoBtn').hidden = !isPdf;
+  $('#pageMenuWrap').hidden = !isPdf; $('#pageMenu').hidden = true;
   setUndoRedoState(0, 0);
   if (isPdf) { document.querySelector('[value=chat]').checked = true; await renderPdfDoc(name); } // 미저장 여부·실행취소 스택은 서버 info로 채워진다
   else {
     const r = await fetch('/api/file?name=' + encodeURIComponent(name));
     if (!r.ok) { flash('⚠ 파일을 읽지 못했습니다', 4000); return removeFile(name); }
+    curTemp = r.headers.get('X-Editor-Kim-Temp') === '1'; curReadOnly = r.headers.get('X-Editor-Kim-Readonly') === '1'; updateTempBanner();
     docText = savedText = await r.text(); $('#src').value = docText; preview();
   }
   if (cur !== name) return; // 읽는 동안 다른 파일로 넘어갔다
@@ -451,10 +547,9 @@ async function save() {
     showDirty(); flash('저장됨');
   } catch (error) { flash('⚠ ' + error.message, 5000); }
 }
-$('#save').onclick = save;
 async function saveAs() {
   if (!cur || !window.editorKim) return;
-  const to = await window.editorKim.saveAs(cur);
+  const to = await window.editorKim.saveAs(cur, { suggestDocFolder: curTemp || curReadOnly });
   if (!to) return;
   try {
     if (cur.endsWith('.pdf')) { await apiPost('/api/pdf/saveas', { name: cur, to }); pdfDirty = false; }
@@ -463,15 +558,20 @@ async function saveAs() {
   if (!files.includes(to)) files.push(to);
   saveFilesLS(); cur = to; pushRecent(to); renderFiles();
   $('#fname').textContent = basename(to); $('#fname').title = to;
+  curTemp = curReadOnly = false; updateTempBanner(); // 새 경로가 현재 문서가 됐으니 임시 배너는 사라진다
   showDirty(); flash('다른 이름으로 저장됨');
 }
+// 임시·읽기전용 파일에서는 [저장]/Ctrl+S도 다른 이름으로 저장으로 보낸다(그 자리에 덮어쓸 수 없거나, 덮어써도 편집이 남지 않으므로)
+function saveOrSaveAs() { return (curTemp || curReadOnly) && window.editorKim ? saveAs() : save(); }
+$('#save').onclick = saveOrSaveAs;
 $('#saveAs').onclick = saveAs;
-// 창 닫기 대화상자(main.js)에서 호출: 저장 성공이면 true
+// 창 닫기 대화상자(main.js)에서 호출: 저장 성공이면 true. "이 문서에 덮어쓰기"는 사용자가 그 자리에 쓰겠다고 명시적으로 고른 선택이라
+// 임시 파일이어도 saveAs로 돌리지 않는다(다른 이름으로 저장은 별도 버튼으로 이미 있음).
 window.editorKimSave = async () => { await save(); return !dirty(); };
 window.editorKimSaveAs = async () => { await saveAs(); return !dirty(); }; // 대화상자에서 취소하면 dirty 그대로 → false
 document.addEventListener('keydown', (e) => {
   if (!e.ctrlKey || e.key.toLowerCase() !== 's') return;
-  e.preventDefault(); e.shiftKey ? saveAs() : save();
+  e.preventDefault(); e.shiftKey ? saveAs() : saveOrSaveAs();
 });
 window.onbeforeunload = (e) => { if (dirty() && !window.editorKim) { e.preventDefault(); e.returnValue = ''; } };
 
@@ -495,7 +595,7 @@ async function undo() {
   const r = await apiPost('/api/pdf/undo', { name: cur });
   if (!r.ok) return;
   pdfDirty = true; showDirty(); setUndoRedoState(r.undoLeft, r.redoLeft);
-  await refreshPage(r.page);
+  if (r.reloadAll) await renderPdfDoc(cur); else await refreshPage(r.page); // page:null 스냅샷(페이지 삭제·병합·압축)은 문서 전체를 다시 연다
   flash('실행 취소됨');
 }
 async function redo() {
@@ -504,7 +604,7 @@ async function redo() {
   const r = await apiPost('/api/pdf/redo', { name: cur });
   if (!r.ok) return;
   pdfDirty = true; showDirty(); setUndoRedoState(r.undoLeft, r.redoLeft);
-  await refreshPage(r.page);
+  if (r.reloadAll) await renderPdfDoc(cur); else await refreshPage(r.page);
   flash('다시 실행됨');
 }
 $('#undoBtn').onclick = undo;
@@ -542,6 +642,7 @@ async function renderPdfDoc(name) {
   if (!info.pages) { flash('⚠ PDF를 열지 못했습니다: ' + (info.error || '알 수 없는 오류'), 6000); return; }
   pdfPages = info.pages; pdfObjects = [];
   pdfDirty = !!info.dirty; showDirty(); setUndoRedoState(info.undoLeft, info.redoLeft); // 서버가 기억하는 미저장 편집·실행취소 스택을 그대로 이어받는다
+  curTemp = !!info.temp; curReadOnly = !!info.readOnly; updateTempBanner();
   buildPages(name, scale);
   for (let i = 0; i < pdfPages.length; i++) {
     let objs;
@@ -602,7 +703,82 @@ function drawOverlay(wrap, i, objs, h) {
     wrap.appendChild(box);
     return { idx: o.idx, box };
   });
-  return Object.assign(lines, { masks });
+  // P4 WP-B2 5번: 삽입한 이미지 객체(마스킹 아님) — 드래그로 이동, 우하단 손잡이로 크기 조절(종횡비 유지, Shift로 해제), 클릭으로 삭제 패널
+  const images = objs.filter((o) => o.type === 'image' && !o.mask && o.bounds).map((o) => {
+    const b = o.bounds, box = document.createElement('div');
+    box.className = 'pdfBox pdfImage';
+    box.style.left = (b.x0 * pdfScale) + 'px'; box.style.top = ((h - b.y1) * pdfScale) + 'px';
+    box.style.width = ((b.x1 - b.x0) * pdfScale) + 'px'; box.style.height = ((b.y1 - b.y0) * pdfScale) + 'px';
+    attachDrag(box, async (dx, dy) => {
+      await pdfMutate('/api/pdf/move', { name: cur, i, idxs: [o.idx], dx, dy });
+      await refreshPage(i);
+    }, () => selectImage(i, o, wrap, box));
+    const handle = document.createElement('div'); handle.className = 'pdfImageHandle';
+    attachResize(handle, i, o);
+    box.appendChild(handle);
+    wrap.appendChild(box);
+    return { idx: o.idx, box, obj: o };
+  });
+  return Object.assign(lines, { masks, images });
+}
+// 이미지 객체 우하단 손잡이 드래그로 크기 조절. 좌상단(x0,y1)을 고정점으로 오른쪽·아래로 늘린다. 기본은 종횡비 유지, Shift를 누르면 세로도 자유롭게.
+function attachResize(handle, i, o) {
+  handle.onmousedown = (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault(); e.stopPropagation();
+    const b = o.bounds, w0 = b.x1 - b.x0, h0 = b.y1 - b.y0, aspect = w0 / (h0 || 1);
+    const startX = e.clientX, startY = e.clientY, box = handle.parentElement;
+    const compute = (e2) => {
+      const dxPt = (e2.clientX - startX) / pdfScale, dyPt = -(e2.clientY - startY) / pdfScale;
+      const neww = Math.max(4, w0 + dxPt);
+      const newh = e2.shiftKey ? Math.max(4, h0 - dyPt) : neww / aspect;
+      return { neww, newh };
+    };
+    const onMove = (e2) => { // 좌상단(x0,y1)은 화면 top/left 그대로 — 너비·높이만 늘어난다
+      const { neww, newh } = compute(e2);
+      box.style.width = (neww * pdfScale) + 'px'; box.style.height = (newh * pdfScale) + 'px';
+    };
+    const onUp = async (e2) => {
+      document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp);
+      const { neww, newh } = compute(e2);
+      const box2 = { x: b.x0, y: b.y1 - newh, w: neww, h: newh };
+      await pdfMutate('/api/pdf/object/resize', { name: cur, i, idx: o.idx, box: box2 });
+      await refreshPage(i);
+    };
+    document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp);
+  };
+}
+// 이미지 선택 패널: 삭제만 제공(이동·크기는 드래그·손잡이로 바로 처리)
+function selectImage(i, o, wrap, box) {
+  closeAnyPanel();
+  box.classList.add('editing');
+  const panel = document.createElement('div');
+  panel.className = 'pdfEditor';
+  panel.innerHTML = '<h5>이미지</h5><div class="hint2">드래그로 이동 · 우하단 손잡이로 크기 조절(Shift: 종횡비 해제)</div>';
+  const row = document.createElement('div'); row.className = 'row';
+  const delBtn = document.createElement('button'); delBtn.textContent = '삭제';
+  const closeBtn = document.createElement('button'); closeBtn.textContent = '닫기 (Esc)';
+  row.append(delBtn, closeBtn); panel.appendChild(row);
+  panel.style.visibility = 'hidden';
+  wrap.appendChild(panel);
+  requestAnimationFrame(() => {
+    const pw = panel.offsetWidth, ph = panel.offsetHeight, pageW = wrap.offsetWidth, pageH = wrap.offsetHeight;
+    let left = Math.max(4, Math.min(box.offsetLeft, pageW - pw - 4));
+    let top = box.offsetTop + box.offsetHeight + 6;
+    if (top + ph > pageH - 4) top = box.offsetTop - ph - 6;
+    top = Math.max(4, top);
+    panel.style.left = left + 'px'; panel.style.top = top + 'px'; panel.style.visibility = 'visible';
+    closeBtn.focus();
+  });
+  const close = () => closeAnyPanel();
+  closeBtn.onclick = close;
+  panel.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+  delBtn.onclick = async () => {
+    close();
+    await pdfMutate('/api/pdf/remove', { name: cur, i, idx: o.idx });
+    await refreshPage(i);
+    flash('이미지 삭제됨');
+  };
 }
 // ---- 여러 상자 선택(Shift 클릭) → 그룹 설정 / 선택 해제. 그룹은 PDF 안 마크(EditorKimGroup)로 저장돼 다시 열어도 상자 하나로 다뤄진다 ----
 const multi = new Map(); // box → { i, line }
@@ -1033,6 +1209,209 @@ function updateEditRadio() {
   $('#editRadioLabel').textContent = isPdf ? '편집(선택 객체)' : '편집(MD)';
   if (isPdf && !selectedObj && document.querySelector('[name=mode]:checked').value === 'edit') document.querySelector('[value=chat]').checked = true;
 }
+
+// ---- P4 WP-B2: 페이지 메뉴(추출·병합·이미지 내보내기·삽입·용량 줄이기) ----
+function currentPageIndex() { // 스크롤 뷰포트 가운데에 가장 가까운 페이지(이미지 삽입·현재 쪽 내보내기 기준)
+  const el = $('#pdf'), wraps = [...el.children];
+  if (!wraps.length) return 0;
+  const mid = el.scrollTop + el.clientHeight / 2;
+  let best = 0, bestDist = Infinity;
+  wraps.forEach((w, i) => { const c = w.offsetTop + w.offsetHeight / 2, d = Math.abs(c - mid); if (d < bestDist) { bestDist = d; best = i; } });
+  return best;
+}
+// "1,3-5" 같은 1-기준 페이지 범위 문법 ↔ 0-기준 인덱스 배열. 두 대화상자(추출·내보내기)가 같이 쓴다.
+function parsePageRanges(text, maxN) {
+  const set = new Set();
+  for (const part of String(text || '').split(',').map((s) => s.trim()).filter(Boolean)) {
+    const m = part.match(/^(\d+)(?:-(\d+))?$/);
+    if (!m) continue;
+    let a = +m[1], b = m[2] ? +m[2] : a;
+    if (a > b) [a, b] = [b, a];
+    for (let n = a; n <= b; n++) if (n >= 1 && n <= maxN) set.add(n - 1);
+  }
+  return [...set].sort((x, y) => x - y);
+}
+function formatPageRanges(idxs) {
+  const nums = [...new Set(idxs)].sort((a, b) => a - b).map((i) => i + 1);
+  const out = []; let i = 0;
+  while (i < nums.length) {
+    let j = i;
+    while (j + 1 < nums.length && nums[j + 1] === nums[j] + 1) j++;
+    out.push(i === j ? String(nums[i]) : `${nums[i]}-${nums[j]}`);
+    i = j + 1;
+  }
+  return out.join(',');
+}
+$('#pageMenuBtn').onclick = (e) => { e.stopPropagation(); $('#pageMenu').hidden = !$('#pageMenu').hidden; };
+document.addEventListener('click', (e) => { if (!$('#pageMenu').hidden && !e.target.closest('#pageMenuWrap')) $('#pageMenu').hidden = true; });
+$('#menuExtract').onclick = () => { $('#pageMenu').hidden = true; openExtractDialog(); };
+$('#menuMerge').onclick = () => { $('#pageMenu').hidden = true; openMergeDialog(); };
+$('#menuExportImages').onclick = () => { $('#pageMenu').hidden = true; openExportImagesDialog(); };
+$('#menuInsertImage').onclick = () => { $('#pageMenu').hidden = true; insertImage(); };
+$('#menuDownsample').onclick = () => { $('#pageMenu').hidden = true; openDownsampleDialog(); };
+
+// ---- 페이지 추출(필요 페이지만 남기고 삭제 / 선택 삭제) ----
+function openExtractDialog() {
+  if (!cur || !cur.endsWith('.pdf')) return;
+  const thumbs = $('#extractThumbs'); thumbs.innerHTML = '';
+  pdfPages.forEach((p, i) => {
+    const label = document.createElement('label'); label.className = 'thumb';
+    const cb = document.createElement('input'); cb.type = 'checkbox'; cb.dataset.i = i;
+    cb.onchange = () => { $('#extractKeepInput').value = formatPageRanges([...thumbs.querySelectorAll('input:checked')].map((c) => +c.dataset.i)); };
+    const img = document.createElement('img'); img.loading = 'lazy'; img.src = pageUrl(cur, i, 0.3);
+    const cap = document.createElement('div'); cap.textContent = `쪽 ${i + 1}`;
+    label.append(cb, img, cap); thumbs.appendChild(label);
+  });
+  $('#extractKeepInput').value = '';
+  $('#pageExtractDialog').showModal();
+}
+$('#extractKeepInput').oninput = () => {
+  const idxs = parsePageRanges($('#extractKeepInput').value, pdfPages.length);
+  $('#extractThumbs').querySelectorAll('input').forEach((cb) => { cb.checked = idxs.includes(+cb.dataset.i); });
+};
+async function runDeletePages(indices, label) {
+  if (!indices.length) return flash('페이지를 선택하세요');
+  try {
+    const r = await pdfMutate('/api/pdf/pages/delete', { name: cur, indices });
+    $('#pageExtractDialog').close();
+    await renderPdfDoc(cur); // 페이지 수가 바뀌므로 문서 전체를 다시 연다
+    flash(`${label} — ${r.removed}장 삭제, 총 ${r.pageCount}쪽 (Ctrl+Z로 실행 취소)`, 4000);
+  } catch {}
+}
+$('#extractKeepOnly').onclick = () => {
+  const checked = [...$('#extractThumbs').querySelectorAll('input:checked')].map((c) => +c.dataset.i);
+  if (!checked.length) return flash('남길 페이지를 선택하세요');
+  runDeletePages(pdfPages.map((_, i) => i).filter((i) => !checked.includes(i)), '페이지 추출');
+};
+$('#extractDeleteSelected').onclick = () => {
+  runDeletePages([...$('#extractThumbs').querySelectorAll('input:checked')].map((c) => +c.dataset.i), '페이지 삭제');
+};
+$('#extractClose').onclick = () => $('#pageExtractDialog').close();
+
+// ---- 병합 ----
+let mergeFiles = [];
+function renderMergeList() {
+  const list = $('#mergeList'); list.innerHTML = '';
+  mergeFiles.forEach((p, idx) => {
+    const row = document.createElement('div'); row.className = 'row';
+    const name = document.createElement('span'); name.style.cssText = 'flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap'; name.textContent = basename(p); name.title = p;
+    const up = document.createElement('button'); up.type = 'button'; up.textContent = '▲'; up.disabled = idx === 0;
+    up.onclick = () => { [mergeFiles[idx - 1], mergeFiles[idx]] = [mergeFiles[idx], mergeFiles[idx - 1]]; renderMergeList(); };
+    const down = document.createElement('button'); down.type = 'button'; down.textContent = '▼'; down.disabled = idx === mergeFiles.length - 1;
+    down.onclick = () => { [mergeFiles[idx + 1], mergeFiles[idx]] = [mergeFiles[idx], mergeFiles[idx + 1]]; renderMergeList(); };
+    const rm = document.createElement('button'); rm.type = 'button'; rm.textContent = '×'; rm.onclick = () => { mergeFiles.splice(idx, 1); renderMergeList(); };
+    row.append(name, up, down, rm); list.appendChild(row);
+  });
+  if (!mergeFiles.length) { const empty = document.createElement('div'); empty.className = 'hint2'; empty.textContent = '파일을 추가하세요'; list.appendChild(empty); }
+}
+function openMergeDialog() {
+  mergeFiles = [];
+  const hasPdf = !!(cur && cur.endsWith('.pdf'));
+  $('#mergeIncludeCurrent').checked = hasPdf; $('#mergeIncludeCurrent').disabled = !hasPdf;
+  renderMergeList();
+  $('#mergeDialog').showModal();
+}
+$('#mergeAddFiles').onclick = async () => {
+  if (!window.editorKim) return;
+  const paths = await window.editorKim.openFiles();
+  for (const p of paths || []) if (/\.pdf$/i.test(p) && !mergeFiles.includes(p)) mergeFiles.push(p);
+  renderMergeList();
+};
+$('#mergeRun').onclick = async () => {
+  const list = [...(($('#mergeIncludeCurrent').checked && cur && cur.endsWith('.pdf')) ? [cur] : []), ...mergeFiles];
+  if (list.length < 1) return flash('병합할 파일이 없습니다');
+  if (!window.editorKim) return flash('이 화면에서는 저장 대화상자를 열 수 없습니다');
+  const out = await window.editorKim.saveAs('병합.pdf', {});
+  if (!out) return;
+  try {
+    const r = await apiPost('/api/pdf/merge', { paths: list, out });
+    $('#mergeDialog').close();
+    addFiles([out]);
+    flash(`병합 완료 — ${r.pageCount}쪽 (${basename(out)})`, 4000);
+  } catch {}
+};
+$('#mergeClose').onclick = () => $('#mergeDialog').close();
+
+// ---- 이미지로 내보내기(PNG/JPEG) ----
+let exportDir = null;
+function openExportImagesDialog() {
+  if (!cur || !cur.endsWith('.pdf')) return;
+  exportDir = null; $('#exportDirLabel').textContent = '(폴더를 선택하세요)';
+  document.querySelector('[name=exportRange][value=all]').checked = true;
+  $('#exportRangeInput').disabled = true; $('#exportRangeInput').value = '';
+  $('#exportImagesDialog').showModal();
+}
+document.querySelectorAll('[name=exportRange]').forEach((r) => { r.onchange = () => { $('#exportRangeInput').disabled = document.querySelector('[name=exportRange]:checked').value !== 'custom'; }; });
+$('#exportChooseDir').onclick = async () => {
+  if (!window.editorKim) return;
+  const p = await window.editorKim.openFolder();
+  if (!p) return;
+  exportDir = p; $('#exportDirLabel').textContent = p;
+};
+$('#exportRun').onclick = async () => {
+  if (!exportDir) return flash('저장 폴더를 선택하세요');
+  const range = document.querySelector('[name=exportRange]:checked').value;
+  let pages = null;
+  if (range === 'current') pages = [currentPageIndex()];
+  else if (range === 'custom') {
+    pages = parsePageRanges($('#exportRangeInput').value, pdfPages.length);
+    if (!pages.length) return flash('내보낼 쪽을 입력하세요');
+  }
+  const format = $('#exportFormat').value, dpi = +$('#exportDpi').value;
+  try {
+    const r = await apiPost('/api/pdf/export-images', { name: cur, pages, format, dpi, dir: exportDir });
+    $('#exportImagesDialog').close();
+    flash(`${r.files.length}개 파일을 ${exportDir}에 저장했습니다`, 4000);
+  } catch {}
+};
+$('#exportClose').onclick = () => $('#exportImagesDialog').close();
+
+// ---- 이미지 삽입 ----
+async function insertImage() {
+  if (!cur || !cur.endsWith('.pdf') || !window.editorKim) return;
+  const p = await window.editorKim.openImage();
+  if (!p) return;
+  const i = currentPageIndex();
+  try {
+    await pdfMutate('/api/pdf/image', { name: cur, i, path: p });
+    await refreshPage(i);
+    flash('이미지를 삽입했습니다 (Ctrl+S로 저장)');
+  } catch {}
+}
+
+// ---- 용량 줄이기(이미지 다운샘플링) ----
+async function openDownsampleDialog() {
+  if (!cur || !cur.endsWith('.pdf')) return;
+  $('#downsampleResult').textContent = '이미지 정보를 불러오는 중…';
+  $('#downsampleBody').innerHTML = '';
+  $('#downsampleDialog').showModal();
+  try {
+    const info = await apiPost('/api/pdf/images', { name: cur });
+    const bodyEl = $('#downsampleBody');
+    for (const im of info.images) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${im.page + 1}</td><td>${im.width}×${im.height}</td><td>${im.dpi}</td><td>${(im.bytes / 1024).toFixed(0)} KB</td>`;
+      bodyEl.appendChild(tr);
+    }
+    $('#downsampleResult').textContent = `이미지 ${info.images.length}개 · 파일 크기 ${(info.fileBytes / 1024 / 1024).toFixed(2)}MB`;
+  } catch { $('#downsampleResult').textContent = '이미지 정보를 불러오지 못했습니다'; }
+}
+$('#downsampleRun').onclick = async () => {
+  const maxDpi = +$('#downsampleDpi').value || 150, quality = +$('#downsampleQuality').value || 75;
+  const targetMb = +$('#downsampleTarget').value;
+  const targetBytes = targetMb > 0 ? Math.round(targetMb * 1024 * 1024) : undefined;
+  $('#downsampleResult').textContent = '처리 중…';
+  try {
+    const r = await pdfMutate('/api/pdf/downsample', { name: cur, maxDpi, quality, targetBytes });
+    const beforeMb = (r.before / 1024 / 1024).toFixed(2), afterMb = (r.after / 1024 / 1024).toFixed(2);
+    const msg = `${beforeMb}MB → ${afterMb}MB · 이미지 ${r.changed}개 축소, ${r.skipped.length}개 건너뜀 (최대 ${r.used.maxDpi}dpi/품질 ${r.used.quality})`;
+    $('#downsampleResult').innerHTML = r.reached === false
+      ? `<span class="bad">목표 용량에 도달하지 못했습니다 — ${msg}${r.hint ? ' · ' + r.hint : ''}</span>` : msg;
+    await renderPdfDoc(cur); // 이미지가 바뀌므로 문서 전체를 다시 연다
+    flash('용량을 줄였습니다 (Ctrl+Z로 실행 취소)', 4000);
+  } catch { $('#downsampleResult').textContent = '실패했습니다'; }
+};
+$('#downsampleClose').onclick = () => $('#downsampleDialog').close();
 
 // ---- 마스킹 삽입(스캔본용): 드래그로 뽑은 영역에 검은 사각형을 얹는다 ----
 function setRectMode(on) {

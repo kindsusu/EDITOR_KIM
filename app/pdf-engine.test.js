@@ -2,10 +2,28 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
-const { open } = require('./pdf-engine');
+const jpeg = require('jpeg-js');
+const { open, merge } = require('./pdf-engine');
 
 const WS = path.join(__dirname, '..', 'workspace');
 const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+// 시험용 픽셀 만들기 (P4 이미지 검사)
+const solidRGBA = (w, h, [r, g, b]) => {
+  const d = Buffer.alloc(w * h * 4);
+  for (let i = 0; i < w * h; i++) { d[i * 4] = r; d[i * 4 + 1] = g; d[i * 4 + 2] = b; d[i * 4 + 3] = 255; }
+  return d;
+};
+// 압축이 잘 안 되는 노이즈 이미지 — 실제로 용량이 큰 사진 역할 (다운샘플링 검사용)
+const noiseRGBA = (w, h) => {
+  const d = Buffer.alloc(w * h * 4);
+  let s = 7; const rnd = () => (s = (s * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const p = (y * w + x) * 4;
+    d[p] = x * 255 / w; d[p + 1] = y * 255 / h; d[p + 2] = rnd() * 255; d[p + 3] = 255;
+  }
+  return d;
+};
 
 (async () => {
   // --- sample.pdf (Helvetica, 한글 글리프 없음) ---
@@ -432,6 +450,150 @@ const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     assert.strictEqual(rr.ok, true, `뒤 공백 조각 부분 마스킹: ${JSON.stringify(rr)}`);
     console.log('[회의록] 뒤 공백 조각 부분 마스킹 OK');
     d3.close();
+  }
+
+  // --- P4/A1: 페이지를 JPEG로 내보내기 ---
+  {
+    const d = await open(src);
+    const j = d.renderJpeg(0, 1, 85);
+    assert.ok(j.subarray(0, 2).equals(Buffer.from([0xff, 0xd8])), 'JPEG SOI');
+    assert.ok(j.subarray(-2).equals(Buffer.from([0xff, 0xd9])), 'JPEG EOI');
+    const px = jpeg.decode(j);
+    const { w, h } = d.pageSize(0);
+    assert.strictEqual(px.width, Math.round(w), 'scale 1 → 페이지 폭(pt)과 같은 픽셀 폭');
+    assert.strictEqual(px.height, Math.round(h));
+    // withBitmap이 흰색으로 채우므로 여백은 흰 배경이어야 한다 (검은 배경으로 나오면 알파 처리 회귀)
+    assert.ok(px.data[0] > 240 && px.data[1] > 240 && px.data[2] > 240, `왼쪽 위 모서리가 흰 배경 (${[...px.data.subarray(0, 3)]})`);
+    const low = d.renderJpeg(0, 1, 40);
+    assert.ok(low.length < j.length, `품질 40(${low.length}) < 85(${j.length})`);
+    assert.strictEqual(jpeg.decode(d.renderJpeg(0, 2, 85)).width, Math.round(w * 2), 'scale 2');
+    console.log('A1 renderJpeg OK', px.width + 'x' + px.height, `q40 ${low.length}B / q85 ${j.length}B / PNG ${(await d.render(0, 1)).length}B`);
+    d.close();
+  }
+
+  // --- P4/A3: 병합 ---
+  const koBuf2 = fs.existsSync(ko) ? fs.readFileSync(ko) : src;
+  {
+    const merged = await merge([src, koBuf2]);
+    const d = await open(merged);
+    assert.strictEqual(d.pageCount, 2, '병합 결과 2쪽');
+    const a = await open(src), b = await open(koBuf2);
+    assert.strictEqual(d.pageText(0), a.pageText(0), '1쪽 텍스트가 원본과 같음');
+    assert.strictEqual(d.pageText(1), b.pageText(0), '2쪽 텍스트가 원본과 같음');
+    a.close(); b.close(); d.close();
+    console.log('A3 merge OK', merged.length, 'bytes');
+    await assert.rejects(() => merge([src, Buffer.from('not a pdf at all')]), /2번째 파일을 열 수 없습니다/, '깨진 입력은 몇 번째인지 알려야 함');
+    await assert.rejects(() => merge([]), /병합할 파일이 없습니다/);
+  }
+
+  // --- P4/A2: 페이지 삭제 (병합으로 3쪽을 만들어 시험) ---
+  {
+    const three = await merge([src, koBuf2, src]);
+    const d = await open(three);
+    assert.strictEqual(d.pageCount, 3);
+    const t0 = d.pageText(0), t2 = d.pageText(2);
+    assert.throws(() => d.deletePages([0, 1, 2]), /최소 한 장은 남겨야/, '전부 삭제는 거절');
+    assert.deepStrictEqual(d.deletePages([7, -1]), { ok: false, removed: 0, pageCount: 3 }, '범위 밖은 무시');
+    const r = d.deletePages([1, 1]); // 중복도 한 번만
+    assert.deepStrictEqual(r, { ok: true, removed: 1, pageCount: 2 }, `deletePages: ${JSON.stringify(r)}`);
+    const saved = d.save(); d.close();
+    const d2 = await open(saved);
+    assert.strictEqual(d2.pageCount, 2, '저장·재열기 후에도 2쪽');
+    assert.strictEqual(d2.pageText(0), t0, '남은 1쪽 순서 유지');
+    assert.strictEqual(d2.pageText(1), t2, '남은 2쪽 순서 유지');
+    d2.close();
+    console.log('A2 deletePages OK 3쪽 → 2쪽');
+  }
+
+  // --- P4/A4: 이미지 삽입 · 이동 · 크기 조절 ---
+  {
+    const d = await open(src);
+    const before = d.objects(0).length;
+    const box = { x: 50, y: 400, w: 100, h: 60 };
+    const r = d.insertImage(0, { kind: 'rgba', data: solidRGBA(100, 60, [255, 0, 0]), width: 100, height: 60 }, box);
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(d.objects(0).length, before + 1, '객체 수 +1');
+    assert.strictEqual(d.objects(0)[r.idx].type, 'image', 'objects()에 image로 나타남');
+    for (const [k, v] of [['x0', box.x], ['y0', box.y], ['x1', box.x + box.w], ['y1', box.y + box.h]]) {
+      assert.ok(Math.abs(r.bounds[k] - v) <= 0.5, `bounds.${k} ${r.bounds[k]} ≈ ${v}`);
+    }
+    const color = d.sampleColor(0, { x0: box.x + 10, y0: box.y + 10, x1: box.x + 90, y1: box.y + 50 });
+    assert.ok(color[0] > 230 && color[1] < 25 && color[2] < 25, `그 자리 색이 빨강: ${color}`);
+
+    // move가 이미지에도 동작해야 한다 (드래그 이동)
+    assert.deepStrictEqual(d.move(0, r.idx, 30, -20), { ok: true, moved: 1 });
+    const moved = d.objects(0)[r.idx].bounds;
+    assert.ok(Math.abs(moved.x0 - (box.x + 30)) <= 0.5 && Math.abs(moved.y0 - (box.y - 20)) <= 0.5, `move 후 bounds ${JSON.stringify(moved)}`);
+
+    // 크기 조절 (행렬 재설정)
+    const rz = d.resizeObject(0, r.idx, { x: 200, y: 200, w: 60, h: 36 });
+    assert.ok(Math.abs(rz.bounds.x0 - 200) <= 0.5 && Math.abs(rz.bounds.x1 - 260) <= 0.5 && Math.abs(rz.bounds.y1 - 236) <= 0.5, `resize 후 ${JSON.stringify(rz.bounds)}`);
+
+    const saved = d.save(); d.close();
+    const d2 = await open(saved);
+    const imgs = d2.objects(0).filter((o) => o.type === 'image');
+    assert.strictEqual(imgs.length, 1, '저장·재열기 후에도 이미지 1개');
+    assert.ok(Math.abs(imgs[0].bounds.x0 - 200) <= 0.5 && Math.abs(imgs[0].bounds.y0 - 200) <= 0.5, '재열기 bounds 유지');
+    const c2 = d2.sampleColor(0, { x0: 205, y0: 205, x1: 255, y1: 231 });
+    assert.ok(c2[0] > 230 && c2[1] < 25 && c2[2] < 25, `재열기 색이 빨강: ${c2}`);
+
+    // --- P4/A5: imageStats ---
+    const st = d2.imageStats(0);
+    assert.strictEqual(st.length, 1);
+    assert.strictEqual(st[0].idx, imgs[0].idx);
+    assert.strictEqual(st[0].width, 100);
+    assert.strictEqual(st[0].height, 60);
+    assert.ok(st[0].bytes > 0, 'bytes > 0');
+    assert.strictEqual(st[0].hasAlpha, false, '불투명 JPEG는 hasAlpha false');
+    assert.strictEqual(st[0].filter, 'DCTDecode', 'JPEG 경로로 들어가야 함(용량 실측 근거)');
+    assert.strictEqual(st[0].dpi, 120, '100px / (60pt/72) = 120dpi');
+    console.log('A4/A5 insertImage·move·resize·imageStats OK', JSON.stringify(st[0].bounds), st[0].bytes, 'bytes');
+    d2.close();
+
+    // 잘못된 입력은 거절
+    const d3 = await open(src);
+    assert.throws(() => d3.insertImage(0, { kind: 'png', data: Buffer.from([1]) }, box), /지원하지 않는 이미지 형식/);
+    assert.throws(() => d3.insertImage(0, { kind: 'jpeg', data: Buffer.from([1, 2, 3]) }, box), /JPEG 파일이 아닙니다/);
+    assert.throws(() => d3.insertImage(0, { kind: 'rgba', data: solidRGBA(4, 4, [0, 0, 0]), width: 4, height: 4 }, { x: 0, y: 0, w: 0, h: 10 }), /0보다 커야/);
+    d3.close();
+  }
+
+  // --- P4/A6: 다운샘플링 ---
+  {
+    // 큰 이미지가 든 시험 문서 (2000×1500 노이즈 = 360dpi)
+    const d0 = await open(src);
+    d0.insertImage(0, { kind: 'rgba', data: noiseRGBA(2000, 1500), width: 2000, height: 1500, quality: 90 }, { x: 36, y: 300, w: 400, h: 300 });
+    const big = d0.save(); d0.close();
+
+    const d = await open(big);
+    const textBefore = d.objects(0).filter((o) => o.type === 'text').length, pageBefore = d.pageText(0);
+    assert.strictEqual(d.imageStats(0)[0].dpi, 360, '시험 문서 이미지가 360dpi');
+    const r = d.downsample({ maxDpi: 100 });
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(r.changed, 1, `이미지 1개 축소: ${JSON.stringify(r)}`);
+    assert.ok(r.after < r.before, `after ${r.after} < before ${r.before}`);
+    const st = d.imageStats(0);
+    assert.ok(st[0].dpi <= 101, `축소 후 dpi ${st[0].dpi} ≤ 100(+오차)`);
+    assert.strictEqual(d.objects(0).filter((o) => o.type === 'text').length, textBefore, '텍스트 객체 수 불변');
+    assert.strictEqual(d.pageText(0), pageBefore, 'pageText 불변');
+    const saved = d.save(); d.close();
+    const d2 = await open(saved);
+    assert.strictEqual(d2.pageText(0), pageBefore, '저장·재열기 후에도 pageText 불변');
+    assert.ok(d2.imageStats(0)[0].dpi <= 101, '저장·재열기 후에도 dpi 유지');
+    d2.close();
+    console.log(`A6 downsample OK ${r.before} → ${r.after} bytes, 360dpi → ${st[0].dpi}dpi, 건너뜀 ${r.skipped.length}`);
+
+    // 이미지가 없는 문서는 아무것도 바꾸지 않는다
+    const d3 = await open(src);
+    const r3 = d3.downsample();
+    assert.deepStrictEqual([r3.ok, r3.changed, r3.skipped.length], [true, 0, 0], '이미지 없는 문서');
+    d3.close();
+
+    // 이미 낮은 해상도는 대상이 아니다 (건너뜀 목록에도 안 들어간다)
+    const d4 = await open(big);
+    const r4 = d4.downsample({ maxDpi: 400 });
+    assert.deepStrictEqual([r4.changed, r4.skipped.length], [0, 0], `maxDpi 400에서는 손대지 않음: ${JSON.stringify(r4)}`);
+    d4.close();
   }
 
   console.log('\nOK — 모든 검사 통과');

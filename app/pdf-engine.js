@@ -1,7 +1,8 @@
-// PDFium(WASM) 얇은 래퍼 — 열기 / 렌더(PNG) / 객체 목록 / 텍스트 교체 / 저장
-// 계약: PLAN.md P2 "엔진 계약" 참고.
+// PDFium(WASM) 얇은 래퍼 — 열기 / 렌더(PNG·JPEG) / 객체 목록 / 텍스트 교체 / 페이지 삭제 · 병합 / 이미지 삽입 · 다운샘플링 / 저장
+// 계약: PLAN.md P2 "엔진 계약", PLAN-P4.md "WP-A 엔진 계약" 참고.
 const fs = require('fs');
 const fontkit = require('fontkit');
+const jpeg = require('jpeg-js'); // 페이지 JPEG 내보내기 · 이미지 삽입 · 다운샘플링의 인코더 (동기, 순수 JS)
 const fontRegistry = require('./pdf-fonts');
 
 const MARK_MASK = 'EditorKimMask', MARK_GROUP = 'EditorKimGroup';
@@ -11,6 +12,10 @@ const OBJ_TEXT = 1, OBJ_PATH = 2, OBJ_IMAGE = 3; // FPDF_PAGEOBJ_*
 const RENDER_FLAGS = 0x01 | 0x10;                // FPDF_ANNOT | FPDF_REVERSE_BYTE_ORDER(=RGBA로 뽑기)
 const FPDF_FONT_TRUETYPE = 2;
 const LINE_HEIGHT = 1.2; // 줄바꿈 편집 시 행간(글자 크기 배수). PDF는 행간 정보를 주지 않는다
+
+// FPDFBitmap_* 포맷 (FPDFBitmap_GetFormat). 픽셀당 바이트 수가 다르다
+const BMP_GRAY = 1, BMP_BGR = 2, BMP_BGRx = 3, BMP_BGRA = 4;
+const BMP_BYTES = { [BMP_GRAY]: 1, [BMP_BGR]: 3, [BMP_BGRx]: 4, [BMP_BGRA]: 4 };
 
 // 폴백 한글 폰트 후보 (윈도우 기준). 없으면 폴백 불가 → setText가 ok:false.
 const FALLBACK_FONTS = [
@@ -102,6 +107,90 @@ async function pdfium() {
     _P.PDFiumExt_Init();
   }
   return _P;
+}
+
+// 저장 루틴 — api.save()와 모듈 함수 merge()가 함께 쓴다 (FPDF_SaveAsCopy + 파일 라이터 콜백)
+function saveDoc(P, doc) {
+  const M = P.pdfium;
+  const w = P.PDFiumExt_OpenFileWriter();
+  try {
+    if (!P.PDFiumExt_SaveAsCopy(doc, w)) throw new Error('저장 실패');
+    const size = P.PDFiumExt_GetFileWriterSize(w);
+    const out = M._malloc(size);
+    try {
+      P.PDFiumExt_GetFileWriterData(w, out, size);
+      return Buffer.from(M.HEAPU8.subarray(out, out + size));
+    } finally { M._free(out); }
+  } finally { P.PDFiumExt_CloseFileWriter(w); }
+}
+
+// 여러 PDF를 순서대로 이어 붙인다. buffers는 파일 바이트 배열.
+// FPDF_ImportPages(dest, src, pagerange, index) — pagerange가 null(0)이면 문서 전체를 가져온다(실측 2026-09-09).
+// 원본 버퍼는 저장이 끝날 때까지 힙에 남겨 둔다(FPDF_LoadMemDocument는 복사하지 않는다).
+async function merge(buffers) {
+  const list = [].concat(buffers || []);
+  if (!list.length) throw new Error('병합할 파일이 없습니다.');
+  const P = await pdfium();
+  const M = P.pdfium;
+  const dest = P.FPDF_CreateNewDocument();
+  if (!dest) throw new Error('새 PDF를 만들지 못했습니다.');
+  const ptrs = [], docs = [];
+  try {
+    for (let n = 0; n < list.length; n++) {
+      const b = Buffer.isBuffer(list[n]) ? list[n] : Buffer.from(list[n] || []);
+      if (!b.length) throw new Error(`${n + 1}번째 파일을 열 수 없습니다: 내용이 비어 있습니다`);
+      const ptr = M._malloc(b.length);
+      M.HEAPU8.set(b, ptr);
+      ptrs.push(ptr);
+      const src = P.FPDF_LoadMemDocument(ptr, b.length, 0);
+      if (!src) throw new Error(`${n + 1}번째 파일을 열 수 없습니다: 손상 또는 암호화`);
+      docs.push(src);
+      if (!P.FPDF_ImportPages(dest, src, null, P.FPDF_GetPageCount(dest))) {
+        throw new Error(`${n + 1}번째 파일의 페이지를 가져올 수 없습니다`);
+      }
+    }
+    if (!P.FPDF_GetPageCount(dest)) throw new Error('가져올 페이지가 없습니다.');
+    return saveDoc(P, dest);
+  } finally {
+    for (const d of docs) P.FPDF_CloseDocument(d);
+    P.FPDF_CloseDocument(dest);
+    for (const p of ptrs) M._free(p);
+  }
+}
+
+// 정수 배율 박스 필터(순수 JS). src는 촘촘한 RGBA, 결과도 촘촘한 RGBA(알파 255 고정 — JPEG로 갈 픽셀이라 알파는 쓰지 않는다)
+function boxDown(src, w, h, factor) {
+  const nw = Math.max(1, Math.floor(w / factor)), nh = Math.max(1, Math.floor(h / factor));
+  const out = Buffer.alloc(nw * nh * 4);
+  const n = factor * factor;
+  for (let y = 0; y < nh; y++) {
+    for (let x = 0; x < nw; x++) {
+      let r = 0, g = 0, b = 0;
+      for (let dy = 0; dy < factor; dy++) {
+        let p = ((y * factor + dy) * w + x * factor) * 4;
+        for (let dx = 0; dx < factor; dx++, p += 4) { r += src[p]; g += src[p + 1]; b += src[p + 2]; }
+      }
+      const q = (y * nw + x) * 4;
+      out[q] = r / n; out[q + 1] = g / n; out[q + 2] = b / n; out[q + 3] = 255;
+    }
+  }
+  return { data: out, width: nw, height: nh };
+}
+
+// RGBA 픽셀 → JPEG 바이트. JPEG는 투명을 지원하지 않으므로 알파는 흰 배경에 합성해 없앤다.
+function encodeJpeg(data, width, height, quality) {
+  const q = Math.max(1, Math.min(100, Math.round(quality)));
+  let px = data;
+  for (let i = 3; i < data.length; i += 4) {
+    if (data[i] === 255) continue;
+    if (px === data) px = Buffer.from(data);           // 원본을 건드리지 않는다
+    const a = px[i] / 255;
+    px[i - 3] = px[i - 3] * a + 255 * (1 - a);
+    px[i - 2] = px[i - 2] * a + 255 * (1 - a);
+    px[i - 1] = px[i - 1] * a + 255 * (1 - a);
+    px[i] = 255;
+  }
+  return Buffer.from(jpeg.encode({ data: px, width, height }, q).data);
 }
 
 async function open(buffer) {
@@ -244,6 +333,94 @@ async function open(buffer) {
     } finally { P.FPDFBitmap_Destroy(bmp); }
   };
 
+  // ── 이미지 객체 다루기 (삽입 · 다운샘플링) ────────────────────────────────
+  // 실측 2026-09-09 (2000×1500 노이즈 이미지를 sample.pdf에 넣고 저장한 바이트):
+  //   ① FPDFImageObj_LoadJpegFileInline (DCTDecode 그대로) → 1,880,992 B
+  //   ② FPDFBitmap_CreateEx(BGRA) + FPDFImageObj_SetBitmap (FlateDecode) → 6,998,728 B, 저장에 281ms
+  //   → ①이 3.7배 작고 저장도 빠르다. ①로 통일하고 RGBA 입력은 jpeg-js로 인코딩해 같은 길로 보낸다.
+  //   (①은 emscripten addFunction으로 FPDF_FILEACCESS 콜백을 만들 수 있어야 하는데, 이 빌드는 addFunction/removeFunction을 노출한다)
+  //   ①의 대가: JPEG는 투명(알파)을 못 담는다 → encodeJpeg가 흰 배경에 합성하고, 다운샘플링은 알파 있는 이미지를 건너뛴다.
+  //
+  // pageHandles: 이미 페이지에 올라간 객체를 교체할 때 그 페이지 핸들들(리소스 갱신용). 새 객체면 빈 배열.
+  // FPDF_FILEACCESS { unsigned long m_FileLen; int (*m_GetBlock)(param,pos,buf,size); void* m_Param; } — wasm32에서 12바이트.
+  // Inline은 호출 중에 데이터를 문서로 복사한다(실측: 호출 직후 힙을 0xAB로 덮고 해제해도 저장·재열기 색이 그대로 빨강)
+  const putJpeg = (io, data, pageHandles = []) => {
+    const src = mal(data.length);
+    heap().set(data, src);
+    const fa = mal(12);
+    const arr = mal(Math.max(4, pageHandles.length * 4));
+    const cb = M.addFunction((param, pos, buf, size) => {
+      if (pos < 0 || size < 0 || pos + size > data.length) return 0;
+      heap().copyWithin(buf, src + pos, src + pos + size);
+      return 1;
+    }, 'iiiii');
+    try {
+      M.setValue(fa, data.length, 'i32');
+      M.setValue(fa + 4, cb, 'i32');
+      M.setValue(fa + 8, 0, 'i32');
+      pageHandles.forEach((h, k) => M.setValue(arr + k * 4, h, 'i32'));
+      if (!P.FPDFImageObj_LoadJpegFileInline(pageHandles.length ? arr : 0, pageHandles.length, io, fa)) {
+        throw new Error('이미지를 PDF에 넣지 못했습니다 (JPEG를 읽을 수 없음).');
+      }
+    } finally { M.removeFunction(cb); free(arr); free(fa); free(src); }
+  };
+
+  // { kind:'jpeg', data } 또는 { kind:'rgba', data, width, height, quality? } → JPEG 바이트
+  const toJpeg = (image) => {
+    if (!image || !image.data || !image.data.length) throw new Error('이미지 데이터가 없습니다.');
+    const data = Buffer.isBuffer(image.data) ? image.data : Buffer.from(image.data);
+    if (image.kind === 'jpeg') {
+      if (!(data[0] === 0xff && data[1] === 0xd8)) throw new Error('JPEG 파일이 아닙니다.');
+      return data;
+    }
+    if (image.kind !== 'rgba') throw new Error(`지원하지 않는 이미지 형식입니다: ${image.kind}`);
+    const { width, height } = image;
+    if (!(width > 0 && height > 0)) throw new Error('이미지 크기가 잘못됐습니다.');
+    if (data.length < width * height * 4) throw new Error('RGBA 데이터가 이미지 크기보다 짧습니다.');
+    return encodeJpeg(data.subarray(0, width * height * 4), width, height, image.quality || 90);
+  };
+
+  // 이미지 객체의 원본 픽셀(변환 미적용)을 촘촘한 RGBA로. 포맷(Gray/BGR/BGRx/BGRA)은 FPDFBitmap_GetFormat으로 확인
+  const imagePixels = (o) => {
+    const bmp = P.FPDFImageObj_GetBitmap(o);
+    if (!bmp) return null;
+    try {
+      const w = P.FPDFBitmap_GetWidth(bmp), h = P.FPDFBitmap_GetHeight(bmp);
+      const fmt = P.FPDFBitmap_GetFormat(bmp), bpp = BMP_BYTES[fmt];
+      if (!w || !h || !bpp) return null;
+      const stride = P.FPDFBitmap_GetStride(bmp), buf = P.FPDFBitmap_GetBuffer(bmp), H = heap();
+      const out = Buffer.alloc(w * h * 4);
+      for (let y = 0; y < h; y++) {
+        let p = buf + y * stride, q = y * w * 4;
+        for (let x = 0; x < w; x++, p += bpp, q += 4) {
+          if (fmt === BMP_GRAY) { out[q] = out[q + 1] = out[q + 2] = H[p]; }
+          else { out[q] = H[p + 2]; out[q + 1] = H[p + 1]; out[q + 2] = H[p]; } // BGR(x/A) → RGB
+          out[q + 3] = 255;
+        }
+      }
+      return { data: out, width: w, height: h };
+    } finally { P.FPDFBitmap_Destroy(bmp); }
+  };
+
+  // 투명(SMask/마스크) 여부. 실측 2026-09-09:
+  //   FPDFImageObj_GetBitmap은 마스크를 뺀 원본이라 SMask가 있어도 포맷이 BGR(2)로 나온다 → 포맷만으로는 알 수 없다.
+  //   FPDFImageObj_GetRenderedBitmap은 마스크를 적용하고 항상 BGRA(4)를 준다 → 알파 값을 실제로 훑어야 한다.
+  //   표시 크기로 렌더하므로 비용이 낮다(계약서 12개 125ms, 슬라이드 583개 336ms). 계약서는 0개, 슬라이드는 583개 중 569개가 투명으로 잡혔다.
+  const hasAlpha = (pageHandle, o) => {
+    const bmp = P.FPDFImageObj_GetRenderedBitmap(doc, pageHandle, o);
+    if (!bmp) return null;
+    try {
+      const w = P.FPDFBitmap_GetWidth(bmp), h = P.FPDFBitmap_GetHeight(bmp);
+      if (P.FPDFBitmap_GetFormat(bmp) !== BMP_BGRA) return false;
+      const stride = P.FPDFBitmap_GetStride(bmp), buf = P.FPDFBitmap_GetBuffer(bmp), H = heap();
+      for (let y = 0; y < h; y++) {
+        const row = buf + y * stride;
+        for (let x = 3; x < w * 4; x += 4) if (H[row + x] !== 255) return true;
+      }
+      return false;
+    } finally { P.FPDFBitmap_Destroy(bmp); }
+  };
+
   // ── 그룹 마크: 줄바꿈 편집으로 만든 줄들, 사용자가 Shift 클릭으로 묶은 상자들을 콘텐츠 마크 EditorKimGroup(id)로 표시. 저장 후에도 유지 ──
   const findMark = (o, name) => { for (let k = 0, mc = P.FPDFPageObj_CountMarks(o); k < mc; k++) { const mk = P.FPDFPageObj_GetMark(o, k); const n = mk && markName(mk); if (n === name || n === LEGACY[name]) return mk; } return 0; };
   const markParam = (mk, key) => {
@@ -299,6 +476,19 @@ async function open(buffer) {
           free(png);
           return out;
         } finally { free(outPP); }
+      });
+    },
+
+    // 페이지를 JPEG로. render()와 같은 비트맵(흰 배경 위 RGBA)을 jpeg-js로 인코딩한다.
+    // 동기(Promise 아님) — render()처럼 await해도, 안 해도 Buffer를 받는다.
+    renderJpeg(i, scale = 1, quality = 85) {
+      const q = Math.max(1, Math.min(100, Math.round(Number(quality) || 85)));
+      return withBitmap(i, scale, (bmp, pw, ph) => {
+        // jpeg-js는 stride 없는 촘촘한 RGBA를 받는다 → 줄 단위로 옮긴다
+        const buf = P.FPDFBitmap_GetBuffer(bmp), stride = P.FPDFBitmap_GetStride(bmp), H = heap();
+        const data = Buffer.alloc(pw * ph * 4);
+        for (let y = 0; y < ph; y++) data.set(H.subarray(buf + y * stride, buf + y * stride + pw * 4), y * pw * 4);
+        return encodeJpeg(data, pw, ph, q);
       });
     },
 
@@ -831,6 +1021,147 @@ async function open(buffer) {
       } finally { free(scratch); }
     },
 
+    // ── 페이지 삭제 ───────────────────────────────────────────────────────
+    // indices는 0 기준. 중복·범위 밖은 무시. 전부 지우려 하면 거절한다.
+    deletePages(indices) {
+      const count = P.FPDF_GetPageCount(doc);
+      const targets = [...new Set([].concat(indices ?? []).map(Number))]
+        .filter((n) => Number.isInteger(n) && n >= 0 && n < count);
+      if (!targets.length) return { ok: false, removed: 0, pageCount: count };
+      if (targets.length >= count) throw new Error('페이지를 최소 한 장은 남겨야 합니다');
+      // 삭제하면 뒤쪽 인덱스가 밀린다 → 캐시된 페이지 핸들을 모두 닫고 캐시 전체를 버린다
+      for (const h of pages.values()) P.FPDF_ClosePage(h);
+      pages.clear();
+      targets.sort((a, b) => b - a); // 내림차순이어야 앞 페이지 인덱스가 안 밀린다
+      for (const n of targets) P.FPDFPage_Delete(doc, n);
+      return { ok: true, removed: targets.length, pageCount: P.FPDF_GetPageCount(doc) };
+    },
+
+    // ── 이미지 삽입 / 크기 조절 ───────────────────────────────────────────
+    // image: { kind:'jpeg', data } | { kind:'rgba', data, width, height, quality? }
+    // box: { x, y, w, h } PDF 좌표(pt, 원점 좌하단). 종횡비는 호출자가 맞춘다.
+    insertImage(i, image, box) {
+      const p = page(i);
+      for (const k of ['x', 'y', 'w', 'h']) if (!Number.isFinite(box?.[k])) throw new Error('이미지 위치·크기가 잘못됐습니다.');
+      if (!(box.w > 0 && box.h > 0)) throw new Error('이미지 크기는 0보다 커야 합니다.');
+      const data = toJpeg(image);
+      const io = P.FPDFPageObj_NewImageObj(doc);
+      if (!io) throw new Error('이미지 객체를 만들지 못했습니다.');
+      try {
+        putJpeg(io, data);
+        // 이미지는 단위 정사각형(0..1)에 그려진다 → 행렬 [w 0 0 h x y]가 곧 화면 상자
+        const m = mal(24);
+        try {
+          [box.w, 0, 0, box.h, box.x, box.y].forEach((v, k) => M.setValue(m + k * 4, v, 'float'));
+          P.FPDFPageObj_SetMatrix(io, m);
+        } finally { free(m); }
+      } catch (e) { P.FPDFPageObj_Destroy(io); throw e; }
+      P.FPDFPage_InsertObject(p, io); // 맨 뒤 = 가장 위 z-순서
+      P.FPDFPage_GenerateContent(p);
+      const idx = P.FPDFPage_CountObjects(p) - 1;
+      return { ok: true, idx, bounds: api.objects(i)[idx].bounds };
+    },
+
+    // 객체를 box에 맞춘다. 이미지는 행렬을 다시 쓰고, 그 밖의 객체는 현재 bounds 대비 배율·이동을 건다.
+    resizeObject(i, idx, box) {
+      const p = page(i), o = P.FPDFPage_GetObject(p, idx);
+      if (!o) throw new Error('객체를 찾을 수 없습니다.');
+      for (const k of ['x', 'y', 'w', 'h']) if (!Number.isFinite(box?.[k])) throw new Error('위치·크기가 잘못됐습니다.');
+      if (!(box.w > 0 && box.h > 0)) throw new Error('크기는 0보다 커야 합니다.');
+      if (P.FPDFPageObj_GetType(o) === OBJ_IMAGE) {
+        const m = mal(24);
+        try {
+          [box.w, 0, 0, box.h, box.x, box.y].forEach((v, k) => M.setValue(m + k * 4, v, 'float'));
+          if (!P.FPDFPageObj_SetMatrix(o, m)) throw new Error('이미지 크기를 바꾸지 못했습니다.');
+        } finally { free(m); }
+      } else {
+        const b = api.objects(i)[idx].bounds, bw = b.x1 - b.x0, bh = b.y1 - b.y0;
+        if (!(bw > 0 && bh > 0)) throw new Error('크기를 잴 수 없는 객체입니다.');
+        const sx = box.w / bw, sy = box.h / bh;
+        P.FPDFPageObj_Transform(o, sx, 0, 0, sy, box.x - b.x0 * sx, box.y - b.y0 * sy);
+      }
+      P.FPDFPage_GenerateContent(p);
+      return { ok: true, idx, bounds: api.objects(i)[idx].bounds };
+    },
+
+    // ── 이미지 통계 (용량 줄이기 대화상자용) ───────────────────────────────
+    // FPDF_IMAGEOBJ_METADATA: width(0) height(4) horizontal_dpi(8) vertical_dpi(12) bits_per_pixel(16) colorspace(20) marked_content_id(24) — 28바이트
+    // bytes는 압축된 스트림 길이(GetImageDataRaw). dpi는 픽셀 수 ÷ 표시 크기(가로·세로 중 큰 값).
+    imageStats(i) {
+      const p = page(i), n = P.FPDFPage_CountObjects(p);
+      const md = mal(28), bb = mal(16);
+      try {
+        const out = [];
+        for (let idx = 0; idx < n; idx++) {
+          const o = P.FPDFPage_GetObject(p, idx);
+          if (P.FPDFPageObj_GetType(o) !== OBJ_IMAGE) continue;
+          const okMeta = P.FPDFImageObj_GetImageMetadata(o, p, md);
+          const width = okMeta ? i32(md) >>> 0 : 0, height = okMeta ? i32(md + 4) >>> 0 : 0;
+          const bpp = okMeta ? i32(md + 16) >>> 0 : 0, colorspace = okMeta ? i32(md + 20) : 0;
+          P.FPDFPageObj_GetBounds(o, bb, bb + 4, bb + 8, bb + 12);
+          const bounds = { x0: f32(bb), y0: f32(bb + 4), x1: f32(bb + 8), y1: f32(bb + 12) };
+          const wpt = bounds.x1 - bounds.x0, hpt = bounds.y1 - bounds.y0;
+          const dpi = Math.max(wpt > 0 ? width / (wpt / 72) : 0, hpt > 0 ? height / (hpt / 72) : 0);
+          const filters = [];
+          for (let k = 0, fc = P.FPDFImageObj_GetImageFilterCount(o); k < fc; k++) {
+            const need = P.FPDFImageObj_GetImageFilter(o, k, 0, 0);
+            if (!need) continue;
+            const buf = mal(need);
+            try { if (P.FPDFImageObj_GetImageFilter(o, k, buf, need)) filters.push(M.UTF8ToString(buf)); } finally { free(buf); }
+          }
+          out.push({
+            idx, width, height, bounds,
+            dpi: Math.round(dpi),
+            bytes: P.FPDFImageObj_GetImageDataRaw(o, 0, 0),
+            hasAlpha: hasAlpha(p, o),
+            filter: filters.join('+') || null,
+            filters, bpp, colorspace,
+          });
+        }
+        return out;
+      } finally { free(md); free(bb); }
+    },
+
+    // ── 용량 줄이기: 문서 전체의 큰 이미지를 maxDpi에 맞춰 줄이고 JPEG로 다시 넣는다 ──
+    // 정수 배율 박스 필터라 배율은 ceil(dpi/maxDpi) — dpi가 maxDpi를 넘으면 항상 2배 이상 줄어든다
+    // (예: 276dpi를 150dpi로 맞추면 배율 2 → 138dpi. maxDpi 바로 위(160dpi)면 80dpi까지 떨어진다)
+    // 알파(SMask)가 있으면 건너뛴다 — JPEG는 투명을 못 담아 배경이 흰색으로 채워져 버린다.
+    downsample(opts = {}) {
+      const maxDpi = Number(opts.maxDpi) > 0 ? Number(opts.maxDpi) : 150;
+      const quality = Math.max(1, Math.min(100, Math.round(Number(opts.quality) || 75)));
+      const minPixels = Number.isFinite(opts.minPixels) ? opts.minPixels : 200 * 200;
+      const before = saveDoc(P, doc).length;
+      let changed = 0;
+      const skipped = [];
+      for (let i = 0, n = P.FPDF_GetPageCount(doc); i < n; i++) {
+        const p = page(i);
+        let dirty = false;
+        for (const st of api.imageStats(i)) {
+          const skip = (reason) => skipped.push({ page: i, idx: st.idx, dpi: st.dpi, bytes: st.bytes, reason });
+          // 애초에 대상이 아닌 이미지(해상도가 이미 낮거나 아주 작은 것)는 skipped에 넣지 않는다 —
+          // UI가 "N개 건너뜀"으로 보여 주므로 손댈 수 있었는데 안 한 것만 남긴다
+          if (!(st.dpi > maxDpi)) continue;
+          if (st.width * st.height < minPixels) continue;
+          if (st.bpp <= 1) { skip('1비트 흑백 스캔'); continue; }           // 이미 작다
+          // hasAlpha가 null(렌더 실패로 알 수 없음)이면 건드리지 않는다 — 투명이 깨지는 쪽이 되돌리기 어렵다
+          if (st.hasAlpha !== false) { skip(st.hasAlpha === null ? '투명 여부를 알 수 없음' : '투명(SMask)'); continue; }
+          const factor = Math.ceil(st.dpi / maxDpi);
+          const o = P.FPDFPage_GetObject(p, st.idx);
+          const px = o && imagePixels(o);
+          if (!px) { skip('픽셀을 읽을 수 없음'); continue; }
+          if (Math.floor(px.width / factor) < 1 || Math.floor(px.height / factor) < 1) { skip('너무 작아 줄일 수 없음'); continue; }
+          const small = boxDown(px.data, px.width, px.height, factor);
+          const data = encodeJpeg(small.data, small.width, small.height, quality);
+          if (data.length >= st.bytes) { skip('줄여도 커짐'); continue; }   // 이미 잘 압축된 이미지
+          try { putJpeg(o, data, [p]); } catch (e) { skip(e.message); continue; }
+          changed++; dirty = true;
+        }
+        if (dirty) P.FPDFPage_GenerateContent(p);
+      }
+      const after = saveDoc(P, doc).length;
+      return { ok: true, changed, skipped, before, after };
+    },
+
     pageText(i) {
       const tp = P.FPDFText_LoadPage(page(i));
       try {
@@ -844,18 +1175,7 @@ async function open(buffer) {
       } finally { P.FPDFText_ClosePage(tp); }
     },
 
-    save() {
-      const w = P.PDFiumExt_OpenFileWriter();
-      try {
-        if (!P.PDFiumExt_SaveAsCopy(doc, w)) throw new Error('저장 실패');
-        const size = P.PDFiumExt_GetFileWriterSize(w);
-        const out = mal(size);
-        try {
-          P.PDFiumExt_GetFileWriterData(w, out, size);
-          return Buffer.from(heap().subarray(out, out + size));
-        } finally { free(out); }
-      } finally { P.PDFiumExt_CloseFileWriter(w); }
-    },
+    save() { return saveDoc(P, doc); },
 
     close() {
       for (const h of pages.values()) P.FPDF_ClosePage(h);
@@ -869,4 +1189,4 @@ async function open(buffer) {
   return api;
 }
 
-module.exports = { open };
+module.exports = { open, merge };

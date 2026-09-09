@@ -1,7 +1,7 @@
 {
   "name": "editor-kim",
   "productName": "EDITOR_KIM",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "description": "Local PDF & Markdown editor with true text editing and redaction — Claude Code or ChatGPT/Codex, no API key",
   "main": "app/main.js",
   "scripts": {
@@ -30,6 +30,9 @@
       "LICENSE"
     ],
     "asar": true,
+    "fileAssociations": [
+      { "ext": "pdf", "name": "PDF Document", "description": "PDF 문서", "role": "Editor" }
+    ],
     "win": {
       "target": [
         {
@@ -89,6 +92,7 @@
     "@embedpdf/pdfium": "^2.15.0",
     "dompurify": "^3.4.13",
     "fontkit": "^2.0.4",
+    "jpeg-js": "^0.4.4",
     "marked": "^15.0.7"
   }
 }

@@ -39,5 +39,21 @@ assert.match(providerSource, /WindowsApps/, 'Claude Desktop app alias is exclude
 assert.doesNotMatch(providerSource + serverSource, /install\.ps1|ExecutionPolicy\s+Bypass|irm\s+https:/i,
   'setup never pipes a remote PowerShell script into execution');
 assert.match(serverSource, /headers\.host/, 'server checks the Host header (DNS rebinding)');
+assert.match(html, /id="tempBanner"/, 'temp/read-only file banner exists (WP-B1)');
+assert.match(html, /window\.editorKim\.onOpenPaths/, 'renderer wires up onOpenPaths for files opened via file association/argv (WP-B1)');
+
+// P4 WP-B2: page menu (page extraction, merge, image export/insert, size reduction)
+assert.match(html, /id="pageMenuBtn"/, 'toolbar has a 페이지 menu button (WP-B2)');
+assert.match(html, /id="pageExtractDialog"/, 'page extraction dialog exists (WP-B2)');
+assert.match(html, /id="mergeDialog"/, 'merge dialog exists (WP-B2)');
+assert.match(html, /id="exportImagesDialog"/, 'image export dialog exists (WP-B2)');
+assert.match(html, /id="downsampleDialog"/, 'downsample (size reduction) dialog exists (WP-B2)');
+assert.match(html, /window\.editorKim\.openImage/, 'renderer wires up openImage for image insertion (WP-B2)');
+assert.match(serverSource, /\/api\/pdf\/export-images/, 'server exposes export-images route (WP-B2)');
+assert.match(serverSource, /\/api\/pdf\/pages\/delete/, 'server exposes page delete route (WP-B2)');
+assert.match(serverSource, /\/api\/pdf\/merge/, 'server exposes merge route (WP-B2)');
+assert.match(serverSource, /\/api\/pdf\/image/, 'server exposes image insert route (WP-B2)');
+assert.match(serverSource, /\/api\/pdf\/downsample/, 'server exposes downsample route (WP-B2)');
+assert.match(serverSource, /reloadAll/, 'undo/redo responses signal reloadAll for whole-document snapshots (WP-B2)');
 
 console.log('OK — AI provider and UI checks passed');

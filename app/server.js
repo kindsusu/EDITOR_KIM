@@ -86,6 +86,39 @@ function writeAtomic(p, data) {
     throw new Error(busy ? '저장 실패: 파일이 다른 프로그램에서 열려 있거나 쓰기 권한이 없습니다' : `저장 실패: ${e.message}`);
   }
 }
+// 인터넷에서 받아 연결 프로그램으로 바로 연 파일인지 판정한다(WP-B1: 임시 위치면 저장을 "다른 이름으로"로 유도).
+// 브라우저·메일 클라이언트의 임시 다운로드 폴더 이름을 폭넓게 잡되, Downloads(사용자가 내려받아 보관하는 곳)는 임시로 치지 않는다.
+const TEMP_DIR_ROOTS = [os.tmpdir(), path.join(process.env.LOCALAPPDATA || '', 'Temp')]
+  .filter(Boolean).map((p) => path.resolve(p).toLowerCase());
+const TEMP_NAME_MARKERS = ['inetcache', 'temporary internet files', 'content.outlook']; // 대소문자 무시, 경로 어디든 있으면 임시로 본다
+function isTempPath(p) {
+  const norm = path.resolve(p).toLowerCase();
+  if (/[\\/]downloads[\\/]/.test(norm)) return false; // 사용자가 내려받아 보관하는 위치는 임시가 아님
+  if (TEMP_DIR_ROOTS.some((root) => norm === root || norm.startsWith(root + path.sep))) return true;
+  return TEMP_NAME_MARKERS.some((marker) => norm.includes(marker));
+}
+function isReadOnlyPath(p) {
+  try { fs.accessSync(p, fs.constants.W_OK); return false; } catch { return true; }
+}
+// JPEG의 SOF0/SOF2(비-차등, 허프만) 마커에서 픽셀 크기를 읽는다(이미지 삽입 시 종횡비 유지용). 못 찾으면 null.
+// 마커 포맷: 0xFF 0xC0~0xCF(단, C4/C8/CC 제외) 뒤에 length(2B) + precision(1B) + height(2B) + width(2B)
+function jpegSize(buf) {
+  if (!(buf[0] === 0xff && buf[1] === 0xd8)) return null;
+  let off = 2;
+  while (off + 9 < buf.length) {
+    if (buf[off] !== 0xff) { off++; continue; }
+    const marker = buf[off + 1];
+    if (marker === 0xff) { off++; continue; } // 채움 바이트
+    if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) { off += 2; continue; }
+    if (marker === 0xd9) break; // EOI
+    const len = buf.readUInt16BE(off + 2);
+    if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+      return { height: buf.readUInt16BE(off + 5), width: buf.readUInt16BE(off + 7) };
+    }
+    off += 2 + len;
+  }
+  return null;
+}
 const json = (res, code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(obj)); };
 const body = (req) => new Promise((r) => { let b = ''; req.on('data', (c) => (b += c)); req.on('end', () => r(b)); });
 // 로컬 요청만 받는다. Host 검사는 DNS 리바인딩(외부 도메인을 127.0.0.1로 돌려 같은 출처처럼 요청) 방지, Origin 검사는 다른 사이트의 교차 출처 요청 방지
@@ -132,7 +165,12 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/file' && req.method === 'GET') {
       const p = safe(url.searchParams.get('name'));
       if (!fs.existsSync(p)) return json(res, 404, { error: '파일 없음' }); // 헤더 전송 후 스트림 오류가 나면 프로세스가 죽는다 → 먼저 확인
-      res.writeHead(200, { 'Content-Type': p.endsWith('.pdf') ? 'application/pdf' : 'text/plain; charset=utf-8' });
+      // Markdown은 원문 스트림이라 JSON 필드를 못 넣는다 → temp/readOnly는 헤더로 실어 보낸다(렌더러가 fetch 응답 헤더에서 읽음)
+      res.writeHead(200, {
+        'Content-Type': p.endsWith('.pdf') ? 'application/pdf' : 'text/plain; charset=utf-8',
+        'X-Editor-Kim-Temp': isTempPath(p) ? '1' : '0',
+        'X-Editor-Kim-Readonly': isReadOnlyPath(p) ? '1' : '0',
+      });
       return fs.createReadStream(p).on('error', () => res.destroy()).pipe(res);
     }
     if (url.pathname === '/api/file' && req.method === 'PUT') { writeAtomic(safe(url.searchParams.get('name')), await body(req)); return json(res, 200, { ok: true }); }
@@ -143,8 +181,13 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true });
     }
     if (url.pathname === '/api/pdf/info' && req.method === 'GET') { // 서버가 문서 상태의 정본: 미저장 여부와 실행취소 스택도 함께 준다(새로고침·재열기 뒤 화면과 어긋나지 않게)
-      const entry = await getPdfDoc(url.searchParams.get('name'));
-      return json(res, 200, { pages: Array.from({ length: entry.doc.pageCount }, (_, i) => entry.doc.pageSize(i)), dirty: entry.dirty, ...stacks(entry) });
+      const name = url.searchParams.get('name');
+      const entry = await getPdfDoc(name);
+      const p = safe(name);
+      return json(res, 200, {
+        pages: Array.from({ length: entry.doc.pageCount }, (_, i) => entry.doc.pageSize(i)), dirty: entry.dirty,
+        temp: isTempPath(p), readOnly: isReadOnlyPath(p), ...stacks(entry),
+      });
     }
     if (url.pathname === '/api/pdf/page' && req.method === 'GET') {
       const { doc } = await getPdfDoc(url.searchParams.get('name'));
@@ -155,6 +198,143 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/pdf/objects' && req.method === 'GET') {
       const { doc } = await getPdfDoc(url.searchParams.get('name'));
       return json(res, 200, doc.objects(+url.searchParams.get('i')));
+    }
+    // ── P4 WP-B2: 이미지 변환·페이지 추출·병합·이미지 삽입·용량 압축 ────────────
+    if (url.pathname === '/api/pdf/export-images' && req.method === 'POST') { // 문서 상태는 바꾸지 않으므로 snapshot 없음
+      const { name, pages, format, dpi, dir } = JSON.parse(await body(req));
+      const { doc } = await getPdfDoc(name);
+      if (!dir || !fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return json(res, 400, { error: '저장할 폴더를 찾을 수 없습니다' });
+      const scale = Math.max(36, Math.min(600, Number(dpi) || 150)) / 72;
+      const base = path.basename(name).replace(/\.pdf$/i, '');
+      const list = Array.isArray(pages) && pages.length ? pages.map(Number) : Array.from({ length: doc.pageCount }, (_, i) => i);
+      const files = [];
+      for (const i of list) {
+        const num = String(i + 1).padStart(2, '0');
+        if (format === 'jpeg') {
+          const file = path.join(dir, `${base}-p${num}.jpg`);
+          fs.writeFileSync(file, doc.renderJpeg(i, scale, 85));
+          files.push(file);
+        } else {
+          const file = path.join(dir, `${base}-p${num}.png`);
+          fs.writeFileSync(file, await doc.render(i, scale));
+          files.push(file);
+        }
+      }
+      return json(res, 200, { files });
+    }
+    if (url.pathname === '/api/pdf/pages/delete' && req.method === 'POST') { // page:null 스냅샷 → undo/redo가 reloadAll을 준다
+      const { name, indices } = JSON.parse(await body(req));
+      const entry = await getPdfDoc(name);
+      snapshot(entry, null);
+      const r = entry.doc.deletePages(indices);
+      entry.dirty = true;
+      return json(res, 200, { ...r, ...stacks(entry) });
+    }
+    if (url.pathname === '/api/pdf/merge' && req.method === 'POST') { // 새 파일을 만드는 동작이라 실행취소 스택에는 넣지 않는다(대상이 열려 있던 문서면 캐시만 닫는다)
+      const { paths, out } = JSON.parse(await body(req));
+      const list = [].concat(paths || []);
+      if (!list.length) return json(res, 400, { error: '병합할 파일이 없습니다' });
+      const buffers = list.map((p) => fs.readFileSync(safe(p)));
+      const merged = await pdfEngine.merge(buffers);
+      writeAtomic(safe(out), merged);
+      if (pdfDocs[out]) { pdfDocs[out].doc.close(); delete pdfDocs[out]; }
+      const check = await pdfEngine.open(merged);
+      const pageCount = check.pageCount;
+      check.close();
+      return json(res, 200, { path: out, pageCount });
+    }
+    if (url.pathname === '/api/pdf/image' && req.method === 'POST') {
+      const { name, i, path: imgPath, box } = JSON.parse(await body(req));
+      const entry = await getPdfDoc(name);
+      const imgFile = safe(imgPath || ''); // 다른 파일 경로와 같은 규칙(절대경로 그대로, 상대경로는 작업 폴더 안)
+      const ext = path.extname(imgFile).toLowerCase();
+      let image, imgW, imgH;
+      if (ext === '.jpg' || ext === '.jpeg') {
+        const data = fs.readFileSync(imgFile);
+        const size = jpegSize(data);
+        if (!size) return json(res, 400, { error: 'JPEG 크기를 읽을 수 없습니다' });
+        image = { kind: 'jpeg', data }; imgW = size.width; imgH = size.height;
+      } else if (ext === '.png') {
+        if (!process.versions.electron) return json(res, 400, { error: 'PNG 삽입은 Electron 앱에서만 지원합니다. JPEG를 사용하세요.' });
+        const { nativeImage } = require('electron');
+        const img = nativeImage.createFromPath(imgFile);
+        const { width, height } = img.getSize();
+        if (!width || !height) return json(res, 400, { error: '이미지를 읽을 수 없습니다' });
+        const bgra = img.toBitmap(); // BGRA → RGBA
+        const rgba = Buffer.alloc(bgra.length);
+        for (let k = 0; k < bgra.length; k += 4) { rgba[k] = bgra[k + 2]; rgba[k + 1] = bgra[k + 1]; rgba[k + 2] = bgra[k]; rgba[k + 3] = bgra[k + 3]; }
+        image = { kind: 'rgba', data: rgba, width, height }; imgW = width; imgH = height;
+      } else return json(res, 400, { error: '지원하지 않는 이미지 형식입니다 (PNG/JPEG만 가능)' });
+      let finalBox = box;
+      if (!finalBox) {
+        const { w: pw, h: ph } = entry.doc.pageSize(i);
+        const boxW = pw * 0.4, boxH = boxW * (imgH / imgW);
+        finalBox = { x: (pw - boxW) / 2, y: (ph - boxH) / 2, w: boxW, h: boxH };
+      }
+      snapshot(entry, i);
+      const r = entry.doc.insertImage(i, image, finalBox);
+      entry.dirty = true;
+      return json(res, 200, { ...r, ...stacks(entry) });
+    }
+    if (url.pathname === '/api/pdf/object/resize' && req.method === 'POST') {
+      const { name, i, idx, box } = JSON.parse(await body(req));
+      const entry = await getPdfDoc(name);
+      snapshot(entry, i);
+      const r = entry.doc.resizeObject(i, idx, box);
+      entry.dirty = true;
+      return json(res, 200, { ...r, ...stacks(entry) });
+    }
+    if (url.pathname === '/api/pdf/images' && req.method === 'POST') {
+      const { name } = JSON.parse(await body(req));
+      const entry = await getPdfDoc(name);
+      const images = []; let totalBytes = 0;
+      for (let i = 0; i < entry.doc.pageCount; i++) {
+        for (const st of entry.doc.imageStats(i)) { images.push({ page: i, ...st }); totalBytes += st.bytes; }
+      }
+      const fileBytes = fs.statSync(safe(name)).size;
+      return json(res, 200, { images, totalBytes, fileBytes });
+    }
+    if (url.pathname === '/api/pdf/downsample' && req.method === 'POST') {
+      const q = JSON.parse(await body(req));
+      const { name, targetBytes } = q;
+      const maxDpi = Number(q.maxDpi) > 0 ? Number(q.maxDpi) : 150;
+      const quality = Number(q.quality) > 0 ? Number(q.quality) : 75;
+      const entry = await getPdfDoc(name);
+      snapshot(entry, null); // 문서 전체 스냅샷 — undo/redo가 reloadAll을 준다
+      const originalBytes = entry.undo[entry.undo.length - 1].bytes;
+      if (!targetBytes) { // 목표 용량 없이 한 번만 실행
+        const r = entry.doc.downsample({ maxDpi, quality });
+        entry.dirty = true;
+        return json(res, 200, {
+          before: r.before, after: r.after, changed: r.changed, skipped: r.skipped,
+          reached: true, used: { maxDpi, quality }, attempts: [{ maxDpi, quality, before: r.before, after: r.after, changed: r.changed }],
+          ...stacks(entry),
+        });
+      }
+      // 목표 용량이 있으면: maxDpi를 [입력,120,96,72] 순, quality를 [입력,60,45] 순으로 낮추며 반복. 매 시도는 원본에서 다시 시작한다.
+      const dpis = [...new Set([maxDpi, 120, 96, 72])];
+      const quals = [...new Set([quality, 60, 45])];
+      const attempts = [];
+      let best = null, reached = false, finalResult = null;
+      outer:
+      for (const d of dpis) {
+        for (const qv of quals) {
+          await swapDoc(entry, originalBytes);
+          const r = entry.doc.downsample({ maxDpi: d, quality: qv });
+          attempts.push({ maxDpi: d, quality: qv, before: r.before, after: r.after, changed: r.changed, skipped: r.skipped.length });
+          if (!best || r.after < best.after) best = { maxDpi: d, quality: qv, bytes: entry.doc.save(), result: r };
+          if (r.after <= targetBytes) { reached = true; finalResult = { maxDpi: d, quality: qv, result: r }; break outer; }
+        }
+      }
+      if (!reached) { await swapDoc(entry, best.bytes); finalResult = { maxDpi: best.maxDpi, quality: best.quality, result: best.result }; }
+      entry.dirty = true;
+      const skipped = finalResult.result.skipped;
+      const alphaCount = skipped.filter((s) => s.reason === '투명(SMask)').length;
+      const hint = skipped.length && alphaCount / skipped.length > 0.5 ? { hint: '투명 이미지가 많아 더 줄일 수 없습니다' } : {};
+      return json(res, 200, {
+        before: originalBytes.length, after: finalResult.result.after, changed: finalResult.result.changed, skipped,
+        reached, used: { maxDpi: finalResult.maxDpi, quality: finalResult.quality }, attempts, ...hint, ...stacks(entry),
+      });
     }
     if (url.pathname === '/api/fonts' && req.method === 'GET') return json(res, 200, pdfFonts.list(url.searchParams.get('text') || ''));
     if (url.pathname === '/api/fonts/add' && req.method === 'POST') {
@@ -294,7 +474,7 @@ const server = http.createServer(async (req, res) => {
       entry.redo.push({ bytes: entry.doc.save(), page });
       await swapDoc(entry, bytes);
       entry.dirty = true;
-      return json(res, 200, { ok: true, page, ...stacks(entry) });
+      return json(res, 200, { ok: true, page, reloadAll: page === null, ...stacks(entry) });
     }
     if (url.pathname === '/api/pdf/redo' && req.method === 'POST') {
       const { name } = JSON.parse(await body(req));
@@ -304,7 +484,7 @@ const server = http.createServer(async (req, res) => {
       entry.undo.push({ bytes: entry.doc.save(), page });
       await swapDoc(entry, bytes);
       entry.dirty = true;
-      return json(res, 200, { ok: true, page, ...stacks(entry) });
+      return json(res, 200, { ok: true, page, reloadAll: page === null, ...stacks(entry) });
     }
     if (url.pathname === '/api/pdf/text' && req.method === 'GET') {
       const { doc } = await getPdfDoc(url.searchParams.get('name'));

@@ -24,6 +24,8 @@ A local Windows editor that changes PDF text objects directly and removes sensit
 
 Download a portable or setup build from Releases. To run the source without using a terminal, download the repository and double-click `run-editor-kim.bat`. Node.js 22 or newer is required once; dependencies are installed automatically.
 
+The setup build registers EDITOR_KIM as a PDF program. Pick EDITOR_KIM in Windows' "Open with" list (or set it as the default) to open PDFs by clicking them — a file opened this way from a temporary download location shows a banner and saves with "Save As".
+
 For development:
 
 ```bash
@@ -81,6 +83,10 @@ Font recommendations send only the selected region image, its text, and the supp
 ![Redaction pipeline](assets/redaction.svg)
 
 Text redaction removes the selected characters from the PDF object, adds a rectangle, and re-extracts page text to verify removal. A scanned image can only be visually covered; this does not remove OCR data embedded elsewhere.
+
+### PDF tools
+
+The toolbar's **페이지** menu gathers five document-level tools, each undoable except image export: **페이지 추출** removes selected pages (checkbox thumbnails or a `1,3-5` range) or keeps only the ones you check; **병합** appends several PDFs in a chosen order, optionally with the current document first; **이미지로 내보내기** renders pages to PNG/JPEG at 96–300 dpi into a folder; **이미지 삽입** places a JPEG/PNG on the page with drag-to-move and a resize handle; and **용량 줄이기** re-encodes oversized embedded images to a target dpi/quality or file size while skipping images that have transparency. (See above for opening PDFs directly from a browser or mail client via the Windows file association.)
 
 ## Shortcuts
 
