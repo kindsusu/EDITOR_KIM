@@ -2,6 +2,7 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
 contextBridge.exposeInMainWorld('editorKim', {
   openFolder: () => ipcRenderer.invoke('openFolder'),
   openFiles: () => ipcRenderer.invoke('openFiles'),
+  openPdfFiles: () => ipcRenderer.invoke('openPdfFiles'), // P5 WP-B2: 여러 파일 용량 줄이기용 PDF 여러 개 선택
   openFont: () => ipcRenderer.invoke('openFont'),
   openImage: () => ipcRenderer.invoke('openImage'), // P4 WP-B2: 페이지에 삽입할 PNG/JPEG 한 장
   saveAs: (defaultPath, opts) => ipcRenderer.invoke('saveAs', defaultPath, opts),

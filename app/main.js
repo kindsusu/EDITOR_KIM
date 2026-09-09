@@ -76,6 +76,12 @@ function main() {
       return r.canceled ? [] : r.filePaths;
     });
 
+    // P5 WP-B2: 빈 상태 "여러 파일 용량 줄이기…" — PDF만, 여러 개 선택(문서를 열지 않고 바로 처리)
+    ipcMain.handle('openPdfFiles', async () => {
+      const r = await dialog.showOpenDialog(win, { properties: ['openFile', 'multiSelections'], filters: [{ name: 'PDF', extensions: ['pdf'] }], title: 'PDF 파일 선택' });
+      return r.canceled ? [] : r.filePaths;
+    });
+
     ipcMain.handle('openFont', async () => {
       const r = await dialog.showOpenDialog(win, { properties: ['openFile'], filters: [{ name: 'TrueType 폰트', extensions: ['ttf'] }], title: '사용할 TTF 폰트 선택' });
       return r.canceled ? null : r.filePaths[0];

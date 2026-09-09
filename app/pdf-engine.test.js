@@ -505,6 +505,123 @@ const noiseRGBA = (w, h) => {
     console.log('A2 deletePages OK 3쪽 → 2쪽');
   }
 
+  // --- P5/A1: 페이지 회전 ---
+  {
+    const d = await open(src);
+    const { w: w0, h: h0, rotation: r0 } = d.pageSize(0);
+    assert.strictEqual(r0, 0, '원본은 회전 0');
+    const png0 = await d.render(0, 1);
+    const dims = (b) => [b.readUInt32BE(16), b.readUInt32BE(20)]; // PNG IHDR: 폭·높이
+    assert.deepStrictEqual(d.rotatePages([0], 90), { ok: true, changed: 1, rotations: [{ i: 0, rotation: 1 }] });
+    const s1 = d.pageSize(0);
+    assert.deepStrictEqual([s1.w, s1.h, s1.rotation], [h0, w0, 1], '회전 후 pageSize의 폭·높이가 뒤바뀐다');
+    assert.deepStrictEqual(dims(await d.render(0, 1)), dims(png0).reverse(), '렌더 PNG의 폭·높이도 뒤바뀐다');
+    assert.strictEqual(d.rotatePages([0], -90).rotations[0].rotation, 0, '−90으로 되돌아온다');
+    assert.strictEqual(d.rotatePages([0], 360).changed, 0, '360의 배수는 아무것도 바꾸지 않는다');
+    assert.throws(() => d.rotatePages([0], 45), /90의 배수/, '90의 배수가 아니면 거절');
+    assert.deepStrictEqual(d.rotatePages([9], 90), { ok: false, changed: 0, rotations: [] }, '범위 밖은 무시');
+    assert.strictEqual(d.rotatePages([0], 270).rotations[0].rotation, 3, '270 = 3단계');
+    const saved = d.save(); d.close();
+    const d2 = await open(saved);
+    assert.strictEqual(d2.pageSize(0).rotation, 3, '저장·재열기 후에도 회전 유지');
+    assert.deepStrictEqual([d2.pageSize(0).w, d2.pageSize(0).h], [h0, w0], '재열기 크기도 회전 반영');
+    assert.ok(d2.pageText(0).startsWith('GenOffice-lite'), '회전해도 텍스트는 그대로');
+    d2.close();
+    console.log(`A1 rotatePages OK ${w0}x${h0} → ${s1.w}x${s1.h}, 저장·재열기 rotation 3 유지`);
+  }
+
+  // 시험용 다중 페이지: 각 쪽의 첫 줄을 바꿔 pageText로 순서를 구분할 수 있게 만든다
+  const marked = async (text) => {
+    const d = await open(src);
+    assert.strictEqual(d.setText(0, 0, text).ok, true);
+    const b = d.save(); d.close();
+    return b;
+  };
+
+  // --- P5/A2: 페이지 순서 변경 ---
+  {
+    const three = await merge([src, koBuf2, await marked('PAGE MARKER THREE')]);
+    const d = await open(three);
+    assert.strictEqual(d.pageCount, 3);
+    const t = [0, 1, 2].map((i) => d.pageText(i));
+    assert.strictEqual(new Set(t).size, 3, '세 쪽의 텍스트가 서로 다름(순서 판정용)');
+    assert.deepStrictEqual(d.reorderPages([2, 0, 1]), { ok: true, pageCount: 3 });
+    assert.deepStrictEqual([d.pageText(0), d.pageText(1), d.pageText(2)], [t[2], t[0], t[1]], '[2,0,1] 순서');
+    const saved = d.save(); d.close();
+    const d2 = await open(saved);
+    assert.deepStrictEqual([d2.pageText(0), d2.pageText(1), d2.pageText(2)], [t[2], t[0], t[1]], '저장·재열기 후에도 순서 유지');
+    assert.deepStrictEqual(d2.reorderPages([0, 1, 2]), { ok: true, pageCount: 3 }, '항등 순열은 그대로');
+    assert.throws(() => d2.reorderPages([0, 1]), /3개를 모두 지정/, '길이가 다르면 거절');
+    assert.throws(() => d2.reorderPages([0, 1, 3]), /범위를 벗어났습니다/, '범위 밖은 거절');
+    assert.throws(() => d2.reorderPages([0, 0, 1]), /중복/, '중복은 거절');
+    d2.close();
+    console.log('A2 reorderPages OK 3쪽 [2,0,1]');
+  }
+
+  // --- P5/A3: 페이지 추출 (새 문서, 원본 불변) ---
+  {
+    const four = await merge([src, koBuf2, await marked('PAGE MARKER THREE'), await marked('PAGE MARKER FOUR')]);
+    const d = await open(four);
+    assert.strictEqual(d.pageCount, 4);
+    const bytes = d.extractPages([0, 3]);
+    assert.ok(bytes.subarray(0, 5).equals(Buffer.from('%PDF-')), 'PDF 바이트');
+    const e = await open(bytes);
+    assert.strictEqual(e.pageCount, 2, '추출 결과 2쪽');
+    assert.strictEqual(e.pageText(0), d.pageText(0), '추출 1쪽 = 원본 1쪽');
+    assert.strictEqual(e.pageText(1), d.pageText(3), '추출 2쪽 = 원본 4쪽');
+    e.close();
+    assert.strictEqual(d.pageCount, 4, '원본 pageCount 그대로');
+    const kOrig = await open(koBuf2);
+    assert.strictEqual(d.pageText(1), kOrig.pageText(0), '원본 내용 그대로');
+    kOrig.close();
+    assert.throws(() => d.extractPages([]), /추출할 페이지/, '빈 목록 거절');
+    assert.throws(() => d.extractPages([9, -1]), /추출할 페이지/, '범위 밖만 있으면 거절');
+    const dup = await open(d.extractPages([2, 2]));
+    assert.strictEqual(dup.pageCount, 2, '같은 쪽을 두 번 담을 수 있다');
+    dup.close();
+    d.close();
+    console.log('A3 extractPages OK 4쪽 → [0,3] 2쪽', bytes.length, 'bytes');
+  }
+
+  // --- P5/A4: 텍스트 검색 ---
+  {
+    const d = await open(src);
+    assert.deepStrictEqual(d.find(0, ''), [], '빈 질의는 빈 배열 (FindNext가 돌아오지 않으므로 호출 전에 거른다)');
+    assert.deepStrictEqual(d.find(0, '없는말없는말'), [], '없는 말은 빈 배열');
+    assert.strictEqual(d.find(0, 'Claude').length, 3, '"Claude" 3건');
+    assert.strictEqual(d.find(0, 'claude').length, 3, '기본은 대소문자 무시');
+    assert.strictEqual(d.find(0, 'claude', { matchCase: true }).length, 0, 'matchCase');
+    assert.strictEqual(d.find(0, 'sam', { wholeWord: true }).length, 0, 'wholeWord');
+    assert.strictEqual(d.find(0, 'PDF', { wholeWord: true }).length, 3, 'wholeWord로도 낱말은 찾는다');
+    assert.strictEqual(d.find(0, 'Claude', { limit: 2 }).length, 2, 'limit');
+
+    // 좌표계 확인: find의 rect는 charBoxes와 같은 PDF 좌표계여야 한다 (0번 객체 = 첫 줄)
+    const hit = d.find(0, 'sample')[0];
+    assert.deepStrictEqual([hit.start, hit.length], [27, 6]);
+    assert.strictEqual(hit.rects.length, 1);
+    const boxes = d.charBoxes(0, 0).slice(hit.start, hit.start + hit.length);
+    assert.strictEqual(boxes.map((b) => b.ch).join(''), 'sample');
+    const u = boxes.reduce((a, b) => ({ x0: Math.min(a.x0, b.x0), y0: Math.min(a.y0, b.y0), x1: Math.max(a.x1, b.x1), y1: Math.max(a.y1, b.y1) }),
+      { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity });
+    for (const k of ['x0', 'y0', 'x1', 'y1']) {
+      assert.ok(Math.abs(u[k] - hit.rects[0][k]) < 0.01, `rect.${k} ${hit.rects[0][k]} ≈ charBoxes ${u[k]}`);
+    }
+    d.close();
+
+    // 한글 (UTF-16LE로 넘어가는지)
+    const k = await open(koBuf2);
+    assert.strictEqual(k.find(0, '회의').length, 2, '"회의" 2건 (경영관리회의 · 회의록)');
+    assert.strictEqual(k.find(0, '회의록').length, 1, '"회의록" 1건');
+    const kh = k.find(0, '회의록')[0];
+    assert.ok(kh.rects.length >= 1 && kh.rects.every((r) => r.x1 > r.x0 && r.y1 > r.y0), `rect 유효: ${JSON.stringify(kh.rects)}`);
+    // 회전해도 검색 좌표는 회전 전 페이지 좌표계 그대로다 (엔진 rotatePages 주석의 근거)
+    const before = JSON.stringify(k.find(0, '회의록'));
+    k.rotatePages([0], 90);
+    assert.strictEqual(JSON.stringify(k.find(0, '회의록')), before, '회전은 find rect를 바꾸지 않는다');
+    k.close();
+    console.log('A4 find OK 영문 3건 · 한글 "회의" 2건 / "회의록" 1건, rect가 charBoxes와 일치');
+  }
+
   // --- P4/A4: 이미지 삽입 · 이동 · 크기 조절 ---
   {
     const d = await open(src);

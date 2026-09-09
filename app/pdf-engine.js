@@ -1,5 +1,6 @@
-// PDFium(WASM) 얇은 래퍼 — 열기 / 렌더(PNG·JPEG) / 객체 목록 / 텍스트 교체 / 페이지 삭제 · 병합 / 이미지 삽입 · 다운샘플링 / 저장
-// 계약: PLAN.md P2 "엔진 계약", PLAN-P4.md "WP-A 엔진 계약" 참고.
+// PDFium(WASM) 얇은 래퍼 — 열기 / 렌더(PNG·JPEG) / 객체 목록 / 텍스트 교체
+//   / 페이지 삭제 · 병합 · 회전 · 순서 변경 · 추출 / 텍스트 검색 / 이미지 삽입 · 다운샘플링 / 저장
+// 계약: PLAN.md P2 "엔진 계약", PLAN-P4.md·PLAN-P5.md "WP-A 엔진 계약" 참고.
 const fs = require('fs');
 const fontkit = require('fontkit');
 const jpeg = require('jpeg-js'); // 페이지 JPEG 내보내기 · 이미지 삽입 · 다운샘플링의 인코더 (동기, 순수 JS)
@@ -11,6 +12,9 @@ const LEGACY = { EditorKimMask: 'DaepilMask', EditorKimGroup: 'DaepilGroup' }; /
 const OBJ_TEXT = 1, OBJ_PATH = 2, OBJ_IMAGE = 3; // FPDF_PAGEOBJ_*
 const RENDER_FLAGS = 0x01 | 0x10;                // FPDF_ANNOT | FPDF_REVERSE_BYTE_ORDER(=RGBA로 뽑기)
 const FPDF_FONT_TRUETYPE = 2;
+// FPDFText_FindStart 플래그 (실측 2026-09-09, sample.pdf: "SAMPLE" flags 0 → 1건 / flags 1 → 0건, "sam" flags 2 → 0건)
+const FIND_MATCHCASE = 1, FIND_MATCHWHOLEWORD = 2;
+const FIND_LIMIT = 500; // 한 페이지에서 가져올 최대 결과 수(폭주 방지). 서버가 문서 전체를 합칠 때도 같은 상한을 쓴다
 const LINE_HEIGHT = 1.2; // 줄바꿈 편집 시 행간(글자 크기 배수). PDF는 행간 정보를 주지 않는다
 
 // FPDFBitmap_* 포맷 (FPDFBitmap_GetFormat). 픽셀당 바이트 수가 다르다
@@ -458,9 +462,13 @@ async function open(buffer) {
       return { ok: n > 0, id: gid, count: n };
     },
 
+    // 실측 2026-09-09: FPDF_GetPageWidthF/HeightF는 /Rotate를 반영한다(같은 핸들에 SetRotation(1) → 595×842 이 842×595 로 바뀜).
+    // 렌더 비트맵도 842×595 로 나오므로 pageSize·render는 서로 맞는다.
+    // rotation(0..3, ×90°)을 함께 돌려준다 — objects()·charBoxes()·find()의 좌표는 회전 전 페이지 좌표계라
+    // 화면 겹침 상자를 그리려면 호출자가 이 값으로 변환해야 한다(아래 rotatePages 주석 참고).
     pageSize(i) {
       const p = page(i);
-      return { w: P.FPDF_GetPageWidthF(p), h: P.FPDF_GetPageHeightF(p) };
+      return { w: P.FPDF_GetPageWidthF(p), h: P.FPDF_GetPageHeightF(p), rotation: P.FPDFPage_GetRotation(p) };
     },
 
     async render(i, scale = 1) {
@@ -1037,6 +1045,85 @@ async function open(buffer) {
       return { ok: true, removed: targets.length, pageCount: P.FPDF_GetPageCount(doc) };
     },
 
+    // ── 페이지 회전 ───────────────────────────────────────────────────────
+    // delta는 90의 배수(±90, 180, 360…). FPDFPage_GetRotation(0..3) + delta/90 을 4로 나눈 나머지 → SetRotation.
+    // 회전은 같은 페이지 핸들에 걸리므로 페이지 캐시를 비우지 않는다(인덱스가 안 바뀐다).
+    //
+    // 실측 2026-09-09 (workspace/sample.pdf):
+    //   · SetRotation(1) 뒤 같은 핸들의 FPDF_GetPageWidthF/HeightF = 842×595 (595×842 에서 뒤바뀜), 렌더 비트맵도 842×595.
+    //   · 저장·재열기 후에도 GetRotation()=1, 크기 842×595 로 유지된다.
+    //   · 그러나 FPDFPageObj_GetBounds 는 회전 전후가 같다(60.6,737.4,263.1,748.8 그대로). 즉
+    //     **objects()/charBoxes()/find()의 좌표는 회전 전 페이지 좌표계**이고 pageSize()·render()는 회전 후다.
+    //     화면 좌표는 (x0·s, (h−y1)·s) 공식이 회전 페이지에서 어긋난다 → 호출자가 pageSize().rotation 으로 변환해야 한다
+    //     (rot 1: 화면x = y0, 화면y = x0 … FPDF_PageToDevice 와 같은 매핑). UI 대응은 WP-B2 몫.
+    rotatePages(indices, delta) {
+      const d = Number(delta);
+      if (!Number.isFinite(d) || d % 90 !== 0) throw new Error('회전 각도는 90의 배수로 지정하세요.');
+      const count = P.FPDF_GetPageCount(doc);
+      const targets = [...new Set([].concat(indices ?? []).map(Number))]
+        .filter((n) => Number.isInteger(n) && n >= 0 && n < count)
+        .sort((a, b) => a - b);
+      const step = (((d / 90) % 4) + 4) % 4; // 360의 배수면 0 → 아무것도 바꾸지 않는다
+      const rotations = [];
+      for (const i of targets) {
+        const p = page(i);
+        const cur = P.FPDFPage_GetRotation(p); // 알 수 없으면 −1
+        const next = (((cur >= 0 ? cur : 0) + step) % 4 + 4) % 4;
+        if (step) P.FPDFPage_SetRotation(p, next);
+        rotations.push({ i, rotation: next });
+      }
+      return { ok: targets.length > 0, changed: step ? targets.length : 0, rotations };
+    },
+
+    // ── 페이지 순서 변경 ──────────────────────────────────────────────────
+    // order는 현재 인덱스의 순열(길이 = pageCount, 중복·누락·범위 밖은 throw). order[k] = "새 k번째 자리에 올 현재 페이지".
+    //
+    // 구현 선택(실측 2026-09-09, 계약서 0·3·5쪽을 뽑아 만든 3쪽 문서):
+    //   ① FPDF_MovePages(doc, order, count, 0) — [2,0,1]·[1,2,0]·[2,1,0]·[0,2,1] 네 순열 모두 기대한 순서가 나왔고
+    //      저장·재열기 뒤에도 유지, 저장 바이트 230,940 로 원본과 같다(마크·폰트 리소스 그대로, swapDoc 불필요).
+    //   ② CreateNewDocument + ImportPagesByIndex — 되지만 문서를 새로 만들어 호출자가 swapDoc 해야 한다.
+    //   → ①을 쓴다. 전체를 한 번에 옮기므로 dest_index는 0.
+    // 인덱스가 통째로 바뀌므로 deletePages와 같은 이유로 페이지 핸들 캐시를 버린다.
+    reorderPages(order) {
+      const count = P.FPDF_GetPageCount(doc);
+      const list = [].concat(order ?? []).map(Number);
+      if (list.length !== count) throw new Error(`페이지 순서는 ${count}개를 모두 지정해야 합니다 (받은 값 ${list.length}개).`);
+      const seen = new Set();
+      for (const n of list) {
+        if (!Number.isInteger(n) || n < 0 || n >= count) throw new Error(`페이지 번호가 범위를 벗어났습니다: ${n}`);
+        if (seen.has(n)) throw new Error(`페이지 번호가 중복됐습니다: ${n + 1}쪽`);
+        seen.add(n);
+      }
+      if (list.every((n, k) => n === k)) return { ok: true, pageCount: count }; // 이미 그 순서
+      for (const h of pages.values()) P.FPDF_ClosePage(h);
+      pages.clear();
+      const arr = mal(count * 4);
+      try {
+        list.forEach((n, k) => M.setValue(arr + k * 4, n, 'i32'));
+        if (!P.FPDF_MovePages(doc, arr, count, 0)) throw new Error('페이지 순서를 바꾸지 못했습니다.');
+      } finally { free(arr); }
+      return { ok: true, pageCount: P.FPDF_GetPageCount(doc) };
+    },
+
+    // ── 페이지 추출 (새 문서 바이트) ───────────────────────────────────────
+    // indices 순서대로 새 문서를 만들어 저장 바이트를 돌려준다. 원본 doc는 바뀌지 않는다(실측: 계약서 10쪽 그대로).
+    // 중복 인덱스는 그대로 두 번 담는다(같은 쪽을 두 번 넣고 싶을 수 있다). 분할은 서버가 이 함수를 반복 호출한다.
+    // 실측 2026-09-09: 계약서(632,063 B·10쪽)에서 [0,3] 추출 → 210,682 B·2쪽, 텍스트가 원본 0·3쪽과 문자열 일치.
+    extractPages(indices) {
+      const count = P.FPDF_GetPageCount(doc);
+      const list = [].concat(indices ?? []).map(Number)
+        .filter((n) => Number.isInteger(n) && n >= 0 && n < count);
+      if (!list.length) throw new Error('추출할 페이지를 고르세요.');
+      const dest = P.FPDF_CreateNewDocument();
+      if (!dest) throw new Error('새 PDF를 만들지 못했습니다.');
+      const arr = mal(list.length * 4);
+      try {
+        list.forEach((n, k) => M.setValue(arr + k * 4, n, 'i32'));
+        if (!P.FPDF_ImportPagesByIndex(dest, doc, arr, list.length, 0)) throw new Error('페이지를 가져오지 못했습니다.');
+        return saveDoc(P, dest);
+      } finally { free(arr); P.FPDF_CloseDocument(dest); }
+    },
+
     // ── 이미지 삽입 / 크기 조절 ───────────────────────────────────────────
     // image: { kind:'jpeg', data } | { kind:'rgba', data, width, height, quality? }
     // box: { x, y, w, h } PDF 좌표(pt, 원점 좌하단). 종횡비는 호출자가 맞춘다.
@@ -1160,6 +1247,45 @@ async function open(buffer) {
       }
       const after = saveDoc(P, doc).length;
       return { ok: true, changed, skipped, before, after };
+    },
+
+    // ── 텍스트 검색 ───────────────────────────────────────────────────────
+    // 한 페이지에서 query를 찾아 [{ start, length, rects: [{x0,y0,x1,y1}] }] 를 돌려준다.
+    // rects는 charBoxes()와 같은 PDF 페이지 좌표계(원점 좌하단, y 위쪽 +).
+    //   FPDFText_GetRect(tp, k, left, top, right, bottom) — 인자 순서가 CharBox(left,right,bottom,top)와 다르다.
+    //
+    // 실측 2026-09-09:
+    //   · 한글: 계약서(10쪽)에서 "개인정보" 31건 / rect 31개 / 39ms (p3 16건, p4 10건, p5 5건).
+    //     FPDFText_FindStart는 UTF-16LE를 받으므로 한글이 그대로 된다. 결과 하나가 rect 하나(줄이 안 나뉨).
+    //     rect0 = L28.77 T642.50 R57.78 B635.35 로 그 4글자의 CharBox 합집합과 일치 → 좌표계가 charBoxes와 같다.
+    //   · 슬라이드 문서(11쪽): "데이터" 13건 33ms, "대시보드" 16건 15ms → 문서 전체 검색이 수십 ms.
+    //   · 플래그: MATCHCASE=1("SAMPLE" 1건→0건), MATCHWHOLEWORD=2("sam" 1건→0건, "PDF" 3건).
+    //   · **빈 질의('')를 넘기면 FPDFText_FindNext가 돌아오지 않는다**(100초 무응답으로 강제 종료).
+    //     → FindStart를 부르기 전에 걸러낸다. FIND_LIMIT은 그 밖의 폭주에 대한 안전판.
+    find(i, query, opts = {}) {
+      const q = String(query ?? '');
+      if (!q) return [];
+      const limit = Number(opts.limit) > 0 ? Number(opts.limit) : FIND_LIMIT;
+      const flags = (opts.matchCase ? FIND_MATCHCASE : 0) | (opts.wholeWord ? FIND_MATCHWHOLEWORD : 0);
+      const tp = P.FPDFText_LoadPage(page(i));
+      const u = utf16(q), s = mal(32); // double 4개: left, top, right, bottom
+      let h = 0;
+      try {
+        h = P.FPDFText_FindStart(tp, u, flags, 0);
+        if (!h) return [];
+        const out = [];
+        while (P.FPDFText_FindNext(h)) {
+          const start = P.FPDFText_GetSchResultIndex(h), length = P.FPDFText_GetSchCount(h);
+          const rects = [];
+          for (let k = 0, n = P.FPDFText_CountRects(tp, start, length); k < n; k++) {
+            if (!P.FPDFText_GetRect(tp, k, s, s + 8, s + 16, s + 24)) continue;
+            rects.push({ x0: f64(s), y0: f64(s + 24), x1: f64(s + 16), y1: f64(s + 8) });
+          }
+          out.push({ start, length, rects });
+          if (out.length >= limit) break;
+        }
+        return out;
+      } finally { if (h) P.FPDFText_FindClose(h); free(s); free(u); P.FPDFText_ClosePage(tp); }
     },
 
     pageText(i) {

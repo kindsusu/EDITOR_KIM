@@ -9,8 +9,11 @@ A local Windows editor that changes PDF text objects directly and removes sensit
 ## Features
 
 - Direct PDF text-object editing with the original embedded font, falling back to a subset Malgun Gothic for missing glyphs
-- Redaction that removes the selected characters from the PDF and verifies the removal by re-extracting text
-- Page tools: extract/delete pages, merge PDFs, export pages as PNG/JPEG, insert an image, and reduce file size by downsampling
+- Redaction that removes the selected characters from the PDF and verifies the removal by re-extracting text; a search hit can also be masked with "mask the whole line"
+- Full-text search (Ctrl+F) across every page with prev/next navigation, a match counter, match-case, and highlighted results
+- Page tools: extract/delete pages, rotate a page or a thumbnail 90° at a time, drag-reorder thumbnails, split into N-page files, merge PDFs, export pages as PNG/JPEG, insert an image, and reduce file size by downsampling (single document or several files at once, without opening them)
+- A status bar with the current page / total pages, a page-number jump box, and a zoom slider; a sidebar with 파일/페이지 tabs (open files and page thumbnails)
+- An empty state with quick tools (merge, reduce several files' size, export images) and a full-window drag-and-drop overlay when no document is open
 - Open PDFs straight from a browser or mail client via the Windows "Open with" association (temp-file downloads show a banner and save with "Save As")
 - Undo/redo, multi-line editing, fit-to-width, and move
 - Markdown editing with a sanitized live preview
@@ -49,13 +52,18 @@ Text redaction removes the selected characters from the PDF object, adds a cover
 
 ## PDF tools
 
-The toolbar's **페이지** menu holds these document-level tools (all undoable except image export):
+The toolbar's **페이지** and **문서** groups hold these document-level tools (all undoable except image export and split, which write new files and leave the open document untouched):
 
-- **페이지 추출** — extract/delete pages via checkbox thumbnails or a `1,3-5` range
-- **병합** — merge several PDFs in a chosen order
-- **이미지로 내보내기** — export pages as PNG/JPEG at 96–300 dpi into a folder
+- **페이지 정리…** — extract/delete pages via checkbox thumbnails or a `1,3-5` range
+- **↺ / ↻** — rotate the current page 90°; a page thumbnail's right-click menu offers the same for that one page, plus "새 파일로 저장…" (save that single page as a new PDF)
+- Drag a thumbnail in the sidebar's **페이지** tab to reorder pages
+- **분할…** — split the document into N-page files in a chosen folder
+- **병합…** — merge several PDFs in a chosen order
+- **이미지로 내보내기…** — export pages as PNG/JPEG at 96–300 dpi into a folder
 - **이미지 삽입** — insert a JPEG/PNG; drag to move, handle to resize
-- **용량 줄이기** — downsample images above a dpi threshold, re-encode as JPEG, optional target size (transparent images skipped)
+- **용량 줄이기…** — downsample images above a dpi threshold, re-encode as JPEG, optional target size (transparent images skipped); the empty-state **여러 파일 용량 줄이기…** quick tool runs the same on several PDF files at once, without opening them, and writes `<name>-축소.pdf` next to each
+
+Rotated pages keep their text, redaction, search, and drag-to-move overlays aligned — the UI converts between the PDF's unrotated coordinate space and the rotated on-screen layout for every box and highlight.
 
 ## Shortcuts
 
@@ -65,6 +73,10 @@ The toolbar's **페이지** menu holds these document-level tools (all undoable 
 | `Ctrl+Shift+S` | Save as |
 | `Ctrl+Z` / `Ctrl+Y` | Undo / redo |
 | `Ctrl+J` | Toggle AI panel |
+| `Ctrl+F` | Open the search bar |
+| `Enter` / `Shift+Enter` (in the search box) | Next / previous match |
+| `Esc` (in the search box) | Close the search bar |
+| `PageUp` / `PageDown` / `Home` / `End` | Jump a page / to the first / last page |
 | `Ctrl` + mouse wheel | Zoom the PDF around the cursor |
 | `Ctrl+=` / `Ctrl+-` / `Ctrl+0` | Zoom in / out / fit page width |
 | `Enter` / `Shift+Enter` | Send AI request / new line in the prompt |

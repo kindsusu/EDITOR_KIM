@@ -69,6 +69,43 @@ const stacks = (entry) => ({ undoLeft: entry.undo.length, redoLeft: entry.redo.l
 // 바이트를 다른 문서 객체로 바꿔 끼운다. 새 문서를 먼저 열고 나서 옛 것을 닫아, 열기에 실패해도 닫힌 핸들이 남지 않게 한다
 async function swapDoc(entry, bytes) { const doc = await pdfEngine.open(bytes); entry.doc.close(); entry.doc = doc; }
 
+// P5 WP-B2: 용량 줄이기의 "목표 용량까지 반복" 로직을 공유 함수로 뽑는다 — /api/pdf/downsample(열린 문서)와
+// /api/pdf/downsample-files(파일 여러 개, 열지 않고 처리)가 함께 쓴다. entry는 { doc } 모양이면 충분(undo/redo는 호출자 몫).
+async function downsampleToTarget(entry, originalBytes, { maxDpi, quality, targetBytes }) {
+  if (!targetBytes) { // 목표 용량 없이 한 번만 실행
+    const r = entry.doc.downsample({ maxDpi, quality });
+    return {
+      before: r.before, after: r.after, changed: r.changed, skipped: r.skipped,
+      reached: true, used: { maxDpi, quality }, attempts: [{ maxDpi, quality, before: r.before, after: r.after, changed: r.changed }],
+    };
+  }
+  // 목표 용량이 있으면: maxDpi를 [입력,120,96,72] 순, quality를 [입력,60,45] 순으로 낮추며 반복. 매 시도는 원본에서 다시 시작한다.
+  const dpis = [...new Set([maxDpi, 120, 96, 72])];
+  const quals = [...new Set([quality, 60, 45])];
+  const attempts = [];
+  let best = null, reached = false, finalResult = null;
+  outer:
+  for (const d of dpis) {
+    for (const qv of quals) {
+      await swapDoc(entry, originalBytes);
+      const r = entry.doc.downsample({ maxDpi: d, quality: qv });
+      attempts.push({ maxDpi: d, quality: qv, before: r.before, after: r.after, changed: r.changed, skipped: r.skipped.length });
+      if (!best || r.after < best.after) best = { maxDpi: d, quality: qv, bytes: entry.doc.save(), result: r };
+      if (r.after <= targetBytes) { reached = true; finalResult = { maxDpi: d, quality: qv, result: r }; break outer; }
+    }
+  }
+  if (!reached) { await swapDoc(entry, best.bytes); finalResult = { maxDpi: best.maxDpi, quality: best.quality, result: best.result }; }
+  return {
+    before: originalBytes.length, after: finalResult.result.after, changed: finalResult.result.changed, skipped: finalResult.result.skipped,
+    reached, used: { maxDpi: finalResult.maxDpi, quality: finalResult.quality }, attempts,
+  };
+}
+// 건너뛴 이미지 대부분이 투명(SMask)이면 더 줄일 방법이 없다는 힌트를 덧붙인다 (downsample·downsample-files 공용)
+function downsampleHint(skipped) {
+  const alphaCount = skipped.filter((s) => s.reason === '투명(SMask)').length;
+  return skipped.length && alphaCount / skipped.length > 0.5 ? { hint: '투명 이미지가 많아 더 줄일 수 없습니다' } : {};
+}
+
 // 절대경로는 그대로 씀 (로컬 단일 사용자 데스크톱 앱, OS 파일 대화상자에서 온 경로). 상대경로는 WS 밖으로 나갈 수 없다.
 const safe = (p) => {
   if (p && path.isAbsolute(p)) return path.resolve(p);
@@ -230,6 +267,68 @@ const server = http.createServer(async (req, res) => {
       entry.dirty = true;
       return json(res, 200, { ...r, ...stacks(entry) });
     }
+    // ── P5 WP-B2: 회전·순서 변경·추출·분할·검색 ──────────────────────────────
+    if (url.pathname === '/api/pdf/pages/rotate' && req.method === 'POST') { // page:null 스냅샷 → 회전은 쪽 크기(가로/세로)가 뒤바뀌어 문서 전체를 다시 그린다
+      const { name, indices, delta } = JSON.parse(await body(req));
+      const entry = await getPdfDoc(name);
+      snapshot(entry, null);
+      const r = entry.doc.rotatePages(indices, delta);
+      entry.dirty = true;
+      return json(res, 200, { ...r, reloadAll: true, ...stacks(entry) });
+    }
+    if (url.pathname === '/api/pdf/pages/reorder' && req.method === 'POST') { // FPDF_MovePages가 페이지 캐시를 비우므로 문서 전체를 다시 그린다(swapDoc은 불필요)
+      const { name, order } = JSON.parse(await body(req));
+      const entry = await getPdfDoc(name);
+      snapshot(entry, null);
+      const r = entry.doc.reorderPages(order);
+      entry.dirty = true;
+      return json(res, 200, { ...r, reloadAll: true, ...stacks(entry) });
+    }
+    if (url.pathname === '/api/pdf/pages/extract' && req.method === 'POST') { // 새 문서를 만드는 동작이라 실행취소 스택에는 넣지 않는다(병합과 같은 이유)
+      const { name, indices, out } = JSON.parse(await body(req));
+      const { doc } = await getPdfDoc(name);
+      const bytes = doc.extractPages(indices);
+      const outPath = safe(out);
+      writeAtomic(outPath, bytes);
+      if (pdfDocs[out]) { pdfDocs[out].doc.close(); delete pdfDocs[out]; } // 같은 이름으로 이미 열려 있었으면 캐시를 버려 새 내용을 읽게 한다
+      const check = await pdfEngine.open(bytes);
+      const pageCount = check.pageCount;
+      check.close();
+      return json(res, 200, { path: out, pageCount });
+    }
+    if (url.pathname === '/api/pdf/split' && req.method === 'POST') { // N쪽씩 잘라 <이름>-1.pdf, -2.pdf … 로 폴더에 저장 (extractPages 반복 호출, 원본 불변)
+      const { name, every, outDir } = JSON.parse(await body(req));
+      const { doc } = await getPdfDoc(name);
+      const n = Number(every);
+      if (!Number.isInteger(n) || n < 1) return json(res, 400, { error: '쪽 수는 1 이상의 정수로 입력하세요' });
+      const dir = safe(outDir);
+      if (!outDir || !fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return json(res, 400, { error: '저장할 폴더를 찾을 수 없습니다' });
+      const base = path.basename(name).replace(/\.pdf$/i, '');
+      const files = [];
+      for (let start = 0, part = 1; start < doc.pageCount; start += n, part++) {
+        const indices = Array.from({ length: Math.min(n, doc.pageCount - start) }, (_, k) => start + k);
+        const bytes = doc.extractPages(indices);
+        const file = path.join(dir, `${base}-${part}.pdf`);
+        writeAtomic(file, bytes);
+        files.push(file);
+      }
+      return json(res, 200, { files });
+    }
+    // 빈 질의는 PDFium FindNext가 영영 돌아오지 않는다(엔진 주석 참고) → 라우트 입구에서 바로 거절한다. 문서를 열기 전에 검사해 헛되이 열지 않는다.
+    if (url.pathname === '/api/pdf/find' && req.method === 'POST') {
+      const { name, query, matchCase } = JSON.parse(await body(req));
+      if (!query) return json(res, 400, { error: '검색어를 입력하세요' });
+      const { doc } = await getPdfDoc(name);
+      const LIMIT = 500;
+      const hits = [];
+      let truncated = false;
+      for (let i = 0; i < doc.pageCount; i++) {
+        const found = doc.find(i, query, { matchCase: !!matchCase, limit: LIMIT - hits.length });
+        for (const f of found) hits.push({ i, ...f });
+        if (hits.length >= LIMIT) { truncated = true; break; }
+      }
+      return json(res, 200, { hits, total: hits.length, truncated });
+    }
     if (url.pathname === '/api/pdf/merge' && req.method === 'POST') { // 새 파일을 만드는 동작이라 실행취소 스택에는 넣지 않는다(대상이 열려 있던 문서면 캐시만 닫는다)
       const { paths, out } = JSON.parse(await body(req));
       const list = [].concat(paths || []);
@@ -302,39 +401,35 @@ const server = http.createServer(async (req, res) => {
       const entry = await getPdfDoc(name);
       snapshot(entry, null); // 문서 전체 스냅샷 — undo/redo가 reloadAll을 준다
       const originalBytes = entry.undo[entry.undo.length - 1].bytes;
-      if (!targetBytes) { // 목표 용량 없이 한 번만 실행
-        const r = entry.doc.downsample({ maxDpi, quality });
-        entry.dirty = true;
-        return json(res, 200, {
-          before: r.before, after: r.after, changed: r.changed, skipped: r.skipped,
-          reached: true, used: { maxDpi, quality }, attempts: [{ maxDpi, quality, before: r.before, after: r.after, changed: r.changed }],
-          ...stacks(entry),
-        });
-      }
-      // 목표 용량이 있으면: maxDpi를 [입력,120,96,72] 순, quality를 [입력,60,45] 순으로 낮추며 반복. 매 시도는 원본에서 다시 시작한다.
-      const dpis = [...new Set([maxDpi, 120, 96, 72])];
-      const quals = [...new Set([quality, 60, 45])];
-      const attempts = [];
-      let best = null, reached = false, finalResult = null;
-      outer:
-      for (const d of dpis) {
-        for (const qv of quals) {
-          await swapDoc(entry, originalBytes);
-          const r = entry.doc.downsample({ maxDpi: d, quality: qv });
-          attempts.push({ maxDpi: d, quality: qv, before: r.before, after: r.after, changed: r.changed, skipped: r.skipped.length });
-          if (!best || r.after < best.after) best = { maxDpi: d, quality: qv, bytes: entry.doc.save(), result: r };
-          if (r.after <= targetBytes) { reached = true; finalResult = { maxDpi: d, quality: qv, result: r }; break outer; }
-        }
-      }
-      if (!reached) { await swapDoc(entry, best.bytes); finalResult = { maxDpi: best.maxDpi, quality: best.quality, result: best.result }; }
+      const result = await downsampleToTarget(entry, originalBytes, { maxDpi, quality, targetBytes });
       entry.dirty = true;
-      const skipped = finalResult.result.skipped;
-      const alphaCount = skipped.filter((s) => s.reason === '투명(SMask)').length;
-      const hint = skipped.length && alphaCount / skipped.length > 0.5 ? { hint: '투명 이미지가 많아 더 줄일 수 없습니다' } : {};
-      return json(res, 200, {
-        before: originalBytes.length, after: finalResult.result.after, changed: finalResult.result.changed, skipped,
-        reached, used: { maxDpi: finalResult.maxDpi, quality: finalResult.quality }, attempts, ...hint, ...stacks(entry),
-      });
+      return json(res, 200, { ...result, ...downsampleHint(result.skipped), ...stacks(entry) });
+    }
+    // P5 WP-B2: 빈 상태 빠른 도구 "여러 파일 용량 줄이기" — 문서를 열어 두지 않고 파일 경로 여러 개를 바로 처리한다.
+    // 각 파일을 열어 downsampleToTarget을 돌리고 "<이름>-축소.pdf"로 저장한다(원본은 건드리지 않음, 실행취소 스택도 없음).
+    if (url.pathname === '/api/pdf/downsample-files' && req.method === 'POST') {
+      const q = JSON.parse(await body(req));
+      const paths = [].concat(q.paths || []);
+      if (!paths.length) return json(res, 400, { error: '파일을 선택하세요' });
+      const maxDpi = Number(q.maxDpi) > 0 ? Number(q.maxDpi) : 150;
+      const quality = Number(q.quality) > 0 ? Number(q.quality) : 75;
+      const targetBytes = q.targetBytes;
+      const results = [];
+      for (const p of paths) {
+        let entry = null;
+        try {
+          const src = safe(p);
+          const originalBytes = fs.readFileSync(src);
+          entry = { doc: await pdfEngine.open(originalBytes) };
+          const result = await downsampleToTarget(entry, originalBytes, { maxDpi, quality, targetBytes });
+          const dir = q.outDir ? safe(q.outDir) : path.dirname(src);
+          const outPath = path.join(dir, path.basename(src).replace(/\.pdf$/i, '') + '-축소.pdf');
+          writeAtomic(outPath, entry.doc.save());
+          results.push({ path: p, out: outPath, before: result.before, after: result.after, reached: result.reached, used: result.used, ...downsampleHint(result.skipped) });
+        } catch (e) { results.push({ path: p, error: e.message }); }
+        finally { if (entry) entry.doc.close(); }
+      }
+      return json(res, 200, { results });
     }
     if (url.pathname === '/api/fonts' && req.method === 'GET') return json(res, 200, pdfFonts.list(url.searchParams.get('text') || ''));
     if (url.pathname === '/api/fonts/add' && req.method === 'POST') {
