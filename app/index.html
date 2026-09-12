@@ -657,9 +657,19 @@ document.addEventListener('dragenter', (e) => { e.preventDefault(); dragCounter+
 document.addEventListener('dragleave', (e) => { e.preventDefault(); dragCounter = Math.max(0, dragCounter - 1); if (!dragCounter) $('#dropOverlay').hidden = true; });
 document.addEventListener('drop', (e) => {
   e.preventDefault(); dragCounter = 0; $('#dropOverlay').hidden = true;
-  if (!(window.editorKim && window.editorKim.pathsFromFiles)) return;
-  const paths = window.editorKim.pathsFromFiles(e.dataTransfer.files).filter((p) => /\.(pdf|md)$/i.test(p));
-  if (paths.length) addFiles(paths);
+  // FileList를 그대로 window.editorKim으로 넘기면 contextBridge가 복제하지 못해 프리로드에 빈 객체가 간다
+  // (v0.8.0부터 끌어다 놓기가 한 번도 동작하지 않은 이유). 여기서 배열로 바꿔 File 하나씩 넘긴다.
+  const dropped = Array.from(e.dataTransfer?.files || []);
+  const fromItems = dropped.length ? [] : Array.from(e.dataTransfer?.items || [])
+    .filter((it) => it.kind === 'file').map((it) => it.getAsFile()).filter(Boolean);
+  const list = dropped.length ? dropped : fromItems;
+  if (!list.length) return;
+  if (!(window.editorKim && window.editorKim.pathForFile)) return flash('끌어다 놓기는 설치된 앱에서만 됩니다 — 브라우저 화면에서는 [파일 열기]를 쓰세요', 4000);
+  const all = list.map((f) => window.editorKim.pathForFile(f)).filter(Boolean);
+  const paths = all.filter((p) => /\.(pdf|md)$/i.test(p));
+  if (paths.length) return addFiles(paths);
+  // 조용히 실패하지 않는다: 무엇이 문제인지 알려 준다
+  flash(all.length ? 'PDF·Markdown 파일만 열 수 있습니다' : '파일 경로를 읽지 못했습니다 — [파일 열기]로 열어 주세요', 4000);
 });
 $('#files').onclick = (e) => {
   const x = e.target.closest('[data-x]'); if (x) return removeFile(x.dataset.x);

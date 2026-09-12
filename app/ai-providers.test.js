@@ -216,3 +216,17 @@ assert.doesNotMatch(script, /function groupLines\(/, '옛 bounds.y0 기반 group
 assert.match(script, /window\.groupLines/, '모듈 스크립트는 text-grouping.js가 노출한 window.groupLines를 쓴다 (P7)');
 
 console.log('OK — P7 배선 단언 통과');
+
+// P8: 끌어다 놓기 — FileList를 contextBridge로 넘기면 프리로드에 빈 객체가 도착해 아무 파일도 열리지 않는다
+// (v0.8.0~v0.10.0에서 끌어다 놓기가 동작하지 않은 원인. 실측: FileList → 0개, Array.from → 실제 경로)
+const preloadSource = fs.readFileSync(path.join(__dirname, 'preload.js'), 'utf8');
+assert.match(preloadSource, /pathForFile:\s*\(file\)/, '프리로드는 File 하나를 받는 pathForFile을 노출한다 (P8)');
+{
+  const drop = script.slice(script.indexOf("addEventListener('drop'"));
+  const body = drop.slice(0, drop.indexOf('});') + 3);
+  assert.match(body, /Array\.from\(e\.dataTransfer\?\.files/, 'drop 처리는 렌더러에서 FileList를 배열로 바꾼 뒤 넘긴다 (P8)');
+  assert.doesNotMatch(body, /pathsFromFiles\(e\.dataTransfer/, 'FileList를 그대로 프리로드로 넘기지 않는다 (P8)');
+  assert.match(body, /flash\(/, '경로를 못 읽으면 조용히 끝내지 않고 알린다 (P8)');
+}
+
+console.log('OK — P8 끌어다 놓기 단언 통과');

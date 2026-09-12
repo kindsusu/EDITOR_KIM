@@ -8,6 +8,10 @@ contextBridge.exposeInMainWorld('editorKim', {
   saveAs: (defaultPath, opts) => ipcRenderer.invoke('saveAs', defaultPath, opts),
   // 연결 프로그램으로 더블클릭·`electron . <파일>`·두 번째 실행으로 열린 파일을 렌더러에 전달(main.js가 open-paths로 보냄)
   onOpenPaths: (cb) => ipcRenderer.on('open-paths', (_e, paths) => cb(paths)),
-  // 드래그해 놓은 File 객체에서 실제 파일 경로를 얻는다(webUtils.getPathForFile — File.path는 보안상 제거됨)
-  pathsFromFiles: (files) => Array.from(files).map((f) => webUtils.getPathForFile(f)),
+  // 드래그해 놓은 File 객체에서 실제 파일 경로를 얻는다(webUtils.getPathForFile — File.path는 보안상 제거됨).
+  // **FileList를 그대로 넘기면 안 된다**: contextBridge는 FileList를 복제하지 못해 이쪽에는 빈 객체가 도착하고
+  // Array.from(빈 객체)가 []가 되어 아무 파일도 열리지 않는다(실측 2026-09-12: FileList → 0개, 배열 → 2개).
+  // 렌더러가 Array.from으로 바꿔 넘기고, 여기서는 File 하나씩 처리한다.
+  pathForFile: (file) => { try { return webUtils.getPathForFile(file) || file.path || ''; } catch { return ''; } },
+  pathsFromFiles: (files) => Array.from(files || []).map((f) => { try { return webUtils.getPathForFile(f) || f.path || ''; } catch { return ''; } }),
 });
