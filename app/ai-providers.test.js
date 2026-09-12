@@ -115,4 +115,104 @@ assert.match(html, /id="menuExportImages"[^>]*>이미지로 내보내기…</, '
 assert.match(html, /id="menuDownsample"[^>]*>용량 줄이기…</, '줄이기… → 용량 줄이기… (P5)');
 assert.match(html, /id="saveAs"[^>]*>다른 이름으로…</, '다른 이름 → 다른 이름으로… (P5)');
 
+// --- P6 WP-B ---
+const fontEditorSource = fs.readFileSync(path.join(__dirname, 'font-editor.js'), 'utf8');
+
+// P6 WP-B1: 작업 진행 창(진행률 폴링 + 취소) — 계약 C1
+assert.match(html, /id="jobDialog"/, 'job progress dialog exists (P6 WP-B1)');
+assert.match(html, /id="jobProgress"/, 'job progress dialog has a progress bar (P6 WP-B1)');
+assert.match(html, /id="jobCancel"/, 'job progress dialog has a cancel button (P6 WP-B1)');
+assert.match(html, /function runJob\(label, task\)/, 'runJob() helper wraps long-running requests with a generated jobId (P6 WP-B1)');
+assert.match(html, /\/api\/jobs\?id=/, 'UI polls GET /api/jobs?id= for progress (P6 WP-B1, contract C1)');
+assert.match(html, /\/api\/jobs\/cancel/, 'UI posts to /api/jobs/cancel (P6 WP-B1, contract C1)');
+for (const p of ['/api/pdf/export-images', '/api/pdf/split', '/api/pdf/merge', '/api/pdf/downsample', '/api/pdf/pages/delete']) {
+  const re = new RegExp(p.replace(/[/.]/g, '\\$&') + "'[\\s\\S]{0,400}?jobId");
+  assert.match(html, re, `${p} request carries a jobId (P6 WP-B1, contract C1)`);
+}
+assert.match(html, /\/api\/pdf\/downsample-files', \{ paths: downsampleFilesPaths, maxDpi, quality, targetBytes, jobId \}/,
+  'downsample-files request carries a jobId (P6 WP-B1, contract C1)');
+assert.match(html, /취소됨 — 원래 상태로 되돌렸습니다/, 'cancelled document-mutating jobs (downsample/pages-delete) report the restored state (P6 WP-B1, contract C1)');
+assert.match(html, /취소됨 — \$\{n\}개 파일까지 저장됨/, 'cancelled file-producing jobs report how many files were saved before cancel (P6 WP-B1, contract C1)');
+assert.match(html, /function maybeFlashUndoTrimmed/, 'a one-shot undoTrimmed flag from stacks() surfaces a flash message (P6 WP-B1, contract C3)');
+assert.match(html, /실행 취소 기록이 메모리 한도로 일부 지워졌습니다/, 'undo-trim flash message text (P6 WP-B1, contract C3)');
+
+// P6 WP-B2: 실행 취소 토스트 — flash()와 별개, 5초, 액션 포함
+assert.match(html, /id="toast"/, 'undo toast element exists, separate from #status/flash (P6 WP-B2)');
+assert.match(html, /function toast\(text, opts = \{\}\)/, 'toast() helper supports an action button (P6 WP-B2)');
+assert.match(html, /setTimeout\(hideToast, 5000\)/, 'toast auto-hides after 5s (P6 WP-B2)');
+assert.match(html, /toast\(label, \{ action: '실행 취소', onAction: undo \}\)/, 'page delete/rotate completion offers an undo toast (P6 WP-B2)');
+assert.match(html, /toast\('페이지 순서를 바꿨습니다', \{ action: '실행 취소', onAction: undo \}\)/, 'page reorder completion offers an undo toast (P6 WP-B2)');
+assert.match(html, /toast\('용량을 줄였습니다', \{ action: '실행 취소', onAction: undo \}\)/, 'downsample completion offers an undo toast (P6 WP-B2)');
+
+// P6 WP-B3: 로그인 만료 배너 — 계약 C2
+assert.match(html, /id="authBanner"/, 'auth-expired banner exists (P6 WP-B3)');
+assert.match(html, /id="authBannerLogin"/, 'auth banner has a re-login button (P6 WP-B3)');
+assert.match(html, /function showAuthBanner\(provider\)/, 'showAuthBanner() opens the re-login banner for a specific provider (P6 WP-B3)');
+assert.match(html, /ev\.code === 'auth'/, "chat SSE auth errors (code:'auth') trigger the banner (P6 WP-B3, contract C2)");
+assert.match(html, /needsRelogin/, 'status bar reflects re-login-needed state for the active provider (P6 WP-B3)');
+assert.match(html, /window\.editorKimAuthError = showAuthBanner/, 'font-editor.js (which has no dialog access) can reach the banner via a global hook (P6 WP-B3)');
+assert.match(fontEditorSource, /err\.code = result\.code/, 'font-recommend errors propagate the server code field (P6 WP-B3, contract C2)');
+assert.match(fontEditorSource, /error\.code === 'auth' && window\.editorKimAuthError/, 'font editor calls the global auth-banner hook on code:\'auth\' (P6 WP-B3)');
+
+// P6 WP-B4: 회전 페이지 이미지 크기 조절 손잡이 — 실측(브라우저, 회전 0·1·2·3, 계약 C5 표와 대조) 결과를 코드에 반영
+// · box.offsetLeft/Top/Width/Height는 정수로 반올림돼 오차가 생긴다 — box.style.*(pdfToScreen이 써 넣은 소수)를 읽어야 한다
+assert.match(html, /function attachResize[\s\S]{0,2000}?screenToPdf/, '이미지 손잡이 크기 조절이 screenToPdf로 화면→PDF 변환을 한다 (P6 WP-B4)');
+assert.match(html, /parseFloat\(box\.style\.left\)/, '손잡이 드래그 시작점은 box\.style\.*(소수)를 읽는다 — offsetLeft 등 정수 반올림 값이 아니다 (P6 WP-B4)');
+assert.doesNotMatch(html, /const left0 = box\.offsetLeft, top0 = box\.offsetTop, w0 = box\.offsetWidth/, '손잡이 크기 조절은 더 이상 반올림되는 offset\* 값으로 시작점을 잡지 않는다 (P6 WP-B4)');
+assert.match(html, /const MIN_PX = 8/, '손잡이로 만들 수 있는 최소 화면 크기가 있다 — 뒤집히거나 0이 되지 않는다 (P6 WP-B4)');
+
 console.log('OK — AI provider and UI checks passed');
+
+// --- P6 WP-A --- (서버·공급자 함수 단언. 이 절만 Opus가 고친다 — 위쪽 줄은 건드리지 않는다)
+const { isAuthError } = require('./ai-providers');
+// C2: 로그인 만료·미로그인 문구는 auth로 분류한다(두 CLI가 실제로 내보내는 문장들)
+for (const text of [
+  'Not logged in. Run `claude auth login` to continue.',
+  'Invalid API key · Please run /login',
+  'Error: OAuth token has expired, please re-authenticate',
+  'request failed with status 401',
+  'authentication_error: invalid x-api-key',
+  'You must run `codex login` before starting a thread',
+]) assert.strictEqual(isAuthError(text), true, `auth로 분류돼야 함: ${text}`);
+// 일반 오류는 auth가 아니다 — 배너를 띄우면 안 된다
+for (const text of [
+  'Claude usage limit reached|1772409600',
+  'turn/start 응답 시간이 초과되었습니다',
+  'fetch failed: ECONNRESET',
+]) assert.strictEqual(isAuthError(text), false, `auth가 아니어야 함: ${text}`);
+
+// C1: 작업 진행·취소 API와 6개 라우트의 jobId 수신
+assert.match(serverSource, /url\.pathname === '\/api\/jobs' && req\.method === 'GET'/, '진행 조회 라우트 GET /api/jobs (C1)');
+assert.match(serverSource, /url\.pathname === '\/api\/jobs\/cancel' && req\.method === 'POST'/, '취소 라우트 POST /api/jobs/cancel (C1)');
+assert.match(serverSource, /function startJob/, '작업 등록 함수 (C1)');
+// 긴 라우트 6개가 모두 jobId를 받아 진행·취소를 붙였다
+for (const phase of ['export-images', 'split', 'merge', 'downsample', 'downsample-files', 'pages-delete']) {
+  assert.ok(serverSource.includes(`startJob(jobId, '${phase}'`) || serverSource.includes(`startJob(q.jobId, '${phase}'`),
+    `${phase} 라우트가 jobId를 받는다 (C1)`);
+}
+assert.match(serverSource, /if \(result\.cancelled\) \{ \/\/ 문서를 바꾸는 작업/, '취소된 용량 줄이기는 스냅샷으로 되돌린다 (C1)');
+assert.match(serverSource, /async function rollback\(entry\)/, '되돌리기는 스냅샷을 pop한다 — 실행 취소 스택에 남기지 않는다 (C1)');
+assert.match(serverSource, /JOB_TTL = 60000/, '끝난 작업은 60초 뒤 지운다 (C1)');
+// C2: 인증 만료 신호
+assert.match(serverSource, /json\(res, 401, \{ error: e\.message, code: 'auth'/, 'JSON 라우트는 401 + code:auth (C2)');
+assert.match(serverSource, /code: 'auth', provider/, 'SSE는 code:auth와 provider를 함께 보낸다 (C2)');
+assert.match(serverSource, /EDITORKIM_FAKE_AUTH_ERROR/, 'WP-B 검증용 로그인 만료 모의 스위치 (C2)');
+assert.match(providerSource, /isAuthError/, '공급자 오류 문구를 판별하는 함수가 있다 (C2)');
+// C3: 실행 취소 메모리 상한
+assert.match(serverSource, /UNDO_MAX_BYTES = 256 \* 1024 \* 1024/, 'undo 바이트 상한 256MB (C3)');
+assert.match(serverSource, /undoTrimmed/, 'undo를 잘라냈음을 UI에 알린다 (C3)');
+// C4: 조기 종료
+assert.match(serverSource, /DOWNSAMPLE_MIN_GAIN = 0\.01/, '1% 미만 개선이면 다음 dpi 단계로 (C4)');
+assert.match(serverSource, /stalledDpis/, '두 dpi 연속 제자리면 중단 (C4)');
+
+console.log('OK — P6 WP-A 서버·공급자 단언 통과');
+
+// P7: 줄 단위 편집 상자 — text-grouping.js가 font-editor.js와 같은 모양으로 배선됐는지(로직 자체는 text-grouping.test.js)
+assert.match(serverSource, /url\.pathname === '\/text-grouping\.js'/, '/text-grouping.js 라우트가 font-editor.js와 같은 모양으로 있다 (P7)');
+assert.match(html, /<script src="\/text-grouping\.js">/, 'index.html이 모듈 스크립트보다 먼저 text-grouping.js를 읽는다 (P7)');
+assert.ok(html.indexOf('<script src="/text-grouping.js">') < html.indexOf('<script type="module">'),
+  'text-grouping.js는 모듈 스크립트보다 먼저 로드돼야 window.groupLines를 쓸 수 있다 (P7)');
+assert.doesNotMatch(script, /function groupLines\(/, '옛 bounds.y0 기반 groupLines 정의는 지워졌다 (P7)');
+assert.match(script, /window\.groupLines/, '모듈 스크립트는 text-grouping.js가 노출한 window.groupLines를 쓴다 (P7)');
+
+console.log('OK — P7 배선 단언 통과');

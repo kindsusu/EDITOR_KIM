@@ -713,5 +713,47 @@ const noiseRGBA = (w, h) => {
     d4.close();
   }
 
+  // --- P6/C5: 회전 페이지에서 이미지 삽입·크기 조절이 렌더 픽셀과 맞는가 ---
+  // objects()/insertImage/resizeObject의 좌표는 **회전 전** 페이지 좌표계다(pdf-engine.js rotatePages 주석 참고).
+  // 실측 2026-09-10: 회전 0·1·2·3 모두 아래 매핑으로 렌더 픽셀과 ±2.5px 안에서 일치 — 엔진 수정은 필요하지 않았다.
+  //   rot0 화면=(x0, H−y1) · rot1=(y0, x0) · rot2=(W−x1, y0) · rot3=(H−y1, W−x1)   (W·H는 회전 전 페이지 크기)
+  {
+    const red = (w, h) => { const d = Buffer.alloc(w * h * 4); for (let i = 0; i < w * h; i++) { d[i * 4] = 255; d[i * 4 + 3] = 255; } return d; };
+    const redBox = (raw) => { // 렌더 RGBA에서 빨간 픽셀의 경계 상자(장치 픽셀, 원점 좌상단)
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, n = 0;
+      for (let y = 0; y < raw.h; y++) for (let x = 0; x < raw.w; x++) {
+        const q = y * raw.stride + x * 4;
+        if (raw.data[q] > 180 && raw.data[q + 1] < 80 && raw.data[q + 2] < 80) { n++; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+      }
+      return n ? { x0, y0, x1: x1 + 1, y1: y1 + 1 } : null;
+    };
+    const expectDevice = (b, rot, W, H) => ({
+      0: { x0: b.x0, y0: H - b.y1, x1: b.x1, y1: H - b.y0 },
+      1: { x0: b.y0, y0: b.x0, x1: b.y1, y1: b.x1 },
+      2: { x0: W - b.x1, y0: b.y0, x1: W - b.x0, y1: b.y1 },
+      3: { x0: H - b.y1, y0: W - b.x1, x1: H - b.y0, y1: W - b.x0 },
+    }[rot]);
+    for (const rot of [0, 1, 2, 3]) {
+      const d = await open(src);
+      if (rot) d.rotatePages([0], 90 * rot);
+      const size = d.pageSize(0);
+      assert.strictEqual(size.rotation, rot, `pageSize.rotation = ${rot}`);
+      const W = rot % 2 ? size.h : size.w, H = rot % 2 ? size.w : size.h; // 회전 전 크기
+      const ins = d.insertImage(0, { kind: 'rgba', data: red(120, 90), width: 120, height: 90 }, { x: 100, y: 200, w: 120, h: 90 });
+      assert.ok(Math.abs(ins.bounds.x0 - 100) <= 0.5 && Math.abs(ins.bounds.y0 - 200) <= 0.5,
+        `회전 ${rot}: 삽입 bounds는 회전 전 좌표 ${JSON.stringify(ins.bounds)}`);
+      const rz = d.resizeObject(0, ins.idx, { x: 100, y: 200, w: 180, h: 135 }); // 종횡비 4:3 유지
+      assert.ok(Math.abs((rz.bounds.x1 - rz.bounds.x0) - 180) <= 0.5 && Math.abs((rz.bounds.y1 - rz.bounds.y0) - 135) <= 0.5,
+        `회전 ${rot}: 크기 조절 ${JSON.stringify(rz.bounds)}`);
+      const got = redBox(d._renderRaw(0, 1)), exp = expectDevice(rz.bounds, rot, W, H);
+      assert.ok(got, `회전 ${rot}: 렌더에 빨간 이미지가 보인다`);
+      for (const k of ['x0', 'y0', 'x1', 'y1']) {
+        assert.ok(Math.abs(got[k] - exp[k]) <= 2.5, `회전 ${rot}: 렌더 ${k} ${got[k]} ≈ 기대 ${exp[k].toFixed(1)}`);
+      }
+      d.close();
+    }
+    console.log('C5 회전 0·1·2·3 이미지 삽입·크기 조절 ↔ 렌더 픽셀 일치 OK');
+  }
+
   console.log('\nOK — 모든 검사 통과');
 })().catch((e) => { console.error('FAIL', e); process.exit(1); });

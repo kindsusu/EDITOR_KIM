@@ -54,24 +54,91 @@ async function getPdfDoc(name) {
   if (cached && cached.mtimeMs === mtimeMs) return cached;
   if (cached) cached.doc.close();
   const doc = await pdfEngine.open(fs.readFileSync(p));
-  return (pdfDocs[name] = { doc, mtimeMs, dirty: false, undo: [], redo: [] });
+  return (pdfDocs[name] = { doc, mtimeMs, dirty: false, undo: [], redo: [], undoBytes: 0, undoTrimmed: false });
 }
 
 // ponytail: undo 스택은 문서당 최대 20개(save() 바이트 통짜) — 600KB 문서 기준 12MB, 개인용 데스크톱 앱이라 넉넉함.
 //   더 큰 문서/더 긴 히스토리가 필요해지면 diff 기반으로 바꿔야 함.
 const UNDO_MAX = 20;
+// P6 C3: 개수만으로는 모자란다 — 이미지가 많은 문서는 한 장(save() 바이트)이 수십 MB라 20개면 수 GB가 된다.
+//   undo+redo 바이트 합계(entry.undoBytes)를 상한 아래로 유지한다. 최근 3단계는 무슨 일이 있어도 남긴다
+//   (방금 한 편집을 되돌릴 수 없으면 편집기가 아니다). 잘라냈으면 undoTrimmed 플래그를 한 번 UI로 보낸다.
+const UNDO_MAX_BYTES = 256 * 1024 * 1024;
+const stackBytes = (entry) => [...entry.undo, ...entry.redo].reduce((n, s) => n + s.bytes.length, 0);
+function trimStacks(entry) { // 합계를 다시 재고(최대 20+20개라 비용이 없다) 상한을 넘는 동안 가장 오래된 undo부터 버린다
+  entry.undoBytes = stackBytes(entry);
+  while (entry.undoBytes > UNDO_MAX_BYTES && entry.undo.length > 3) {
+    entry.undoBytes -= entry.undo.shift().bytes.length;
+    entry.undoTrimmed = true;
+  }
+  return entry.undoBytes;
+}
 function snapshot(entry, i) {
   entry.undo.push({ bytes: entry.doc.save(), page: i });
   if (entry.undo.length > UNDO_MAX) entry.undo.shift();
   entry.redo = [];
+  trimStacks(entry);
 }
-const stacks = (entry) => ({ undoLeft: entry.undo.length, redoLeft: entry.redo.length });
+// undoTrimmed는 1회성: 한 번 실어 보낸 뒤 되돌린다(UI가 "오래된 실행 취소 기록을 버렸습니다"를 한 번만 알리게)
+const stacks = (entry) => {
+  const trimmed = !!entry.undoTrimmed;
+  entry.undoTrimmed = false;
+  return { undoLeft: entry.undo.length, redoLeft: entry.redo.length, undoBytes: entry.undoBytes || 0, ...(trimmed ? { undoTrimmed: true } : {}) };
+};
 // 바이트를 다른 문서 객체로 바꿔 끼운다. 새 문서를 먼저 열고 나서 옛 것을 닫아, 열기에 실패해도 닫힌 핸들이 남지 않게 한다
 async function swapDoc(entry, bytes) { const doc = await pdfEngine.open(bytes); entry.doc.close(); entry.doc = doc; }
 
+// ── P6 C1: 긴 작업의 진행·취소 ─────────────────────────────────────────────
+// 클라이언트가 요청 본문에 jobId(자기가 만든 문자열)를 넣으면 그 작업의 진행을 GET /api/jobs?id=… 로 볼 수 있고
+// POST /api/jobs/cancel 로 멈출 수 있다. jobId가 없으면 추적만 없고 동작은 같다(등록하지 않는다).
+// **취소는 단위 작업(페이지 1장·파일 1개·시도 1회) 사이에서만 본다** — PDFium은 WASM 동기 호출이라
+// 한 장을 렌더하거나 한 번 downsample하는 중에는 이벤트 루프가 돌지 않아 끼어들 수 없다.
+const JOB_TTL = 60000; // 끝난 작업은 60초 뒤 지운다(UI가 마지막 폴링으로 결과를 받을 시간)
+const jobs = new Map();
+function startJob(id, phase, total = 0) {
+  const job = { id: id || null, phase, done: 0, total, message: '', cancelled: false, finished: false, error: null, timer: null };
+  if (!id) return job; // 추적 안 함
+  const old = jobs.get(id);
+  if (old?.timer) clearTimeout(old.timer);
+  jobs.set(id, job);
+  return job;
+}
+// 진행 상황을 갱신하고 "계속해도 되는가"를 돌려준다 — 라우트는 if (!progress(...)) 로 취소를 처리한다
+function progress(job, patch = {}) { Object.assign(job, patch); return !job.cancelled; }
+function endJob(job, patch = {}) {
+  if (job.finished) return job; // 오류 경로(catch)와 finally가 겹쳐 불려도 처음 상태를 지킨다
+  Object.assign(job, patch, { finished: true });
+  if (job.id && jobs.get(job.id) === job) { job.timer = setTimeout(() => jobs.delete(job.id), JOB_TTL); job.timer.unref(); }
+  return job;
+}
+const jobView = (job) => ({ id: job.id, phase: job.phase, done: job.done, total: job.total, message: job.message, finished: job.finished, cancelled: job.cancelled, error: job.error });
+// 단위 작업 사이에 이벤트 루프로 한 번 돌아간다. **이게 없으면 취소가 전혀 먹지 않는다**:
+// await는 이미 이룬 프로미스에 대해 마이크로태스크만 돌리므로 HTTP 요청(폴링·취소)이 처리되지 않는다
+// (실측 2026-09-10: setImmediate 없이 100쪽 용량 줄이기를 돌리니 127초 동안 /api/jobs 응답이 한 번도 오지 않았다).
+const tick = () => new Promise((resolve) => setImmediate(resolve));
+// 취소된 문서 편집 작업을 스냅샷으로 되돌린다: 스냅샷을 pop해 실행 취소 스택에 남기지 않는다(하지 않은 일은 되돌릴 것도 없다)
+async function rollback(entry) {
+  const last = entry.undo.pop();
+  if (last) { await swapDoc(entry, last.bytes); trimStacks(entry); }
+  return last;
+}
+
 // P5 WP-B2: 용량 줄이기의 "목표 용량까지 반복" 로직을 공유 함수로 뽑는다 — /api/pdf/downsample(열린 문서)와
 // /api/pdf/downsample-files(파일 여러 개, 열지 않고 처리)가 함께 쓴다. entry는 { doc } 모양이면 충분(undo/redo는 호출자 몫).
-async function downsampleToTarget(entry, originalBytes, { maxDpi, quality, targetBytes }) {
+// P6 C4: 조기 종료 — 목표에 닿지 못하는 문서(이미 잘 압축된 스캔 등)에서 12번을 다 돌지 않는다.
+//   비교 기준은 "전체 최선"이 아니라 **같은 dpi 단계 안의 직전 시도**다(검수 결정):
+//   전체 최선과 견주면 낮은 dpi의 첫 시도가 최선보다 크기만 해도 그 단계의 품질 단계를 통째로 잃어버린다.
+//   · 같은 dpi 안에서: 품질을 한 단 낮춘 시도가 그 단계의 직전 시도보다 1% 이상 줄지 않으면 남은 품질 단계를 건너뛴다
+//     (품질을 더 낮춰도 안 줄어드는 이미지는 해상도를 낮춰야 줄어든다).
+//   · dpi 단계 사이에서: 그 단계의 최선이 직전 단계의 최선보다 1% 이상 작지 않으면 "개선 없음"으로 센다.
+//   · 개선 없는 dpi 단계가 두 번 연속이면 멈춘다(더 낮춰도 같은 결과 — 대개 전부 '줄여도 커짐'으로 건너뛴 문서).
+//   · 목표에 닿으면 즉시 멈추고, 목표 미달이면 전체 최소 결과로 확정한다.
+//   · attempts에는 실제로 돌린 시도만 남는다(건너뛴 조합은 기록하지 않는다).
+//   · 맞바꿈: 품질 단계를 건너뛰다가 목표를 스칠 수 있다(예: q60이 0.5%만 줄었는데 q45라면 목표에 닿는 경우).
+//     그래도 최선 결과는 언제나 확정되고, 시간을 몇 분씩 쓰는 쪽이 사용자에게 더 나쁘다.
+// report(patch) → false면 취소. 호출자(라우트)가 진행 단위를 자기 방식으로 세므로(시도 1회 / 파일 1개) 여기서는 job을 직접 만지지 않는다.
+const DOWNSAMPLE_MIN_GAIN = 0.01;
+async function downsampleToTarget(entry, originalBytes, { maxDpi, quality, targetBytes, report }) {
   if (!targetBytes) { // 목표 용량 없이 한 번만 실행
     const r = entry.doc.downsample({ maxDpi, quality });
     return {
@@ -83,17 +150,37 @@ async function downsampleToTarget(entry, originalBytes, { maxDpi, quality, targe
   const dpis = [...new Set([maxDpi, 120, 96, 72])];
   const quals = [...new Set([quality, 60, 45])];
   const attempts = [];
-  let best = null, reached = false, finalResult = null;
+  const keepGoing = (patch) => !report || report(patch) !== false;
+  let best = null, reached = false, finalResult = null, stalledDpis = 0, cancelled = false;
+  let prevStepBest = null; // 직전 dpi 단계의 최선 바이트(단계 사이 비교 기준)
   outer:
   for (const d of dpis) {
+    let stepBest = null; // 이 dpi 단계의 최선
+    let prevInStep = null; // 이 dpi 단계의 직전 시도 결과(단계 안 비교 기준)
     for (const qv of quals) {
+      await tick(); // 시도 1회는 몇 초~수십 초짜리 동기 WASM 호출 → 그 앞에서만 멈출 수 있다
+      if (!keepGoing({ message: `${d}dpi / 품질 ${qv} 시도 중`, attempt: attempts.length + 1 })) { cancelled = true; break outer; }
       await swapDoc(entry, originalBytes);
       const r = entry.doc.downsample({ maxDpi: d, quality: qv });
       attempts.push({ maxDpi: d, quality: qv, before: r.before, after: r.after, changed: r.changed, skipped: r.skipped.length });
-      if (!best || r.after < best.after) best = { maxDpi: d, quality: qv, bytes: entry.doc.save(), result: r };
+      // P6 버그 고침: 옛 best에는 after 필드가 없어 `r.after < best.after`가 언제나 false였다 —
+      // 목표 미달이면 "최소 결과"가 아니라 첫 시도 결과로 확정됐다(실측: 12회를 돌아 3.15MB를 찾고도 16.53MB로 확정).
+      if (!best || r.after < best.after) best = { maxDpi: d, quality: qv, after: r.after, bytes: entry.doc.save(), result: r };
+      if (!keepGoing({ message: `${d}dpi / 품질 ${qv} → ${(r.after / 1048576).toFixed(1)}MB`, attempt: attempts.length })) { cancelled = true; break outer; }
       if (r.after <= targetBytes) { reached = true; finalResult = { maxDpi: d, quality: qv, result: r }; break outer; }
+      // 단계 안 비교: 첫 시도는 이 단계의 기준이므로 언제나 통과, 그 뒤는 직전 시도보다 1% 이상 줄어야 계속한다
+      const stepImproved = prevInStep === null || r.after <= prevInStep * (1 - DOWNSAMPLE_MIN_GAIN);
+      if (stepBest === null || r.after < stepBest) stepBest = r.after;
+      prevInStep = r.after;
+      if (!stepImproved) break; // 이 dpi에서 품질을 더 낮춰도 소용없다 → 다음 dpi
     }
+    // 단계 사이 비교: 첫 단계는 기준이므로 개선으로 보고, 그 뒤는 직전 단계 최선보다 1% 이상 작아야 개선이다
+    const dpiImproved = stepBest !== null && (prevStepBest === null || stepBest <= prevStepBest * (1 - DOWNSAMPLE_MIN_GAIN));
+    if (stepBest !== null) prevStepBest = stepBest;
+    if (dpiImproved) stalledDpis = 0;
+    else if (++stalledDpis >= 2) break; // 두 dpi 단계 연속 제자리 → 더 낮춰도 같다
   }
+  if (cancelled) return { cancelled: true, attempts, before: originalBytes.length };
   if (!reached) { await swapDoc(entry, best.bytes); finalResult = { maxDpi: best.maxDpi, quality: best.quality, result: best.result }; }
   return {
     before: originalBytes.length, after: finalResult.result.after, changed: finalResult.result.changed, skipped: finalResult.result.skipped,
@@ -177,11 +264,25 @@ const server = http.createServer(async (req, res) => {
     if (!trustedRequest(req)) return json(res, 403, { error: '허용되지 않은 요청 출처' });
     if (url.pathname === '/') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); return fs.createReadStream(path.join(ROOT, 'index.html')).pipe(res); }
     if (url.pathname === '/font-editor.js') { res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }); return fs.createReadStream(path.join(ROOT, 'font-editor.js')).pipe(res); }
+    if (url.pathname === '/text-grouping.js') { res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }); return fs.createReadStream(path.join(ROOT, 'text-grouping.js')).pipe(res); }
     if (url.pathname === '/vendor/marked.js') { res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }); return fs.createReadStream(MARKED_BROWSER).pipe(res); }
     if (url.pathname === '/vendor/purify.js') { res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }); return fs.createReadStream(DOMPURIFY_BROWSER).pipe(res); }
     if (url.pathname === '/api/health') { // ?provider=claude|codex 이면 그 공급자만 검사(로그인 대기 중 2초마다 부르므로)
       const only = url.searchParams.get('provider');
       return json(res, 200, { appVersion: APP_VERSION, providers: await ai.health(['claude', 'codex'].includes(only) ? only : undefined) });
+    }
+    // P6 C1: 진행 조회·취소. UI는 긴 작업을 시작할 때 만든 jobId로 500ms마다 폴링하고 [취소]에서 cancel을 부른다
+    if (url.pathname === '/api/jobs' && req.method === 'GET') {
+      const job = jobs.get(url.searchParams.get('id') || '');
+      if (!job) return json(res, 404, { error: '작업을 찾을 수 없습니다' }); // 아직 시작 전이거나 끝난 뒤 60초가 지났다
+      return json(res, 200, jobView(job));
+    }
+    if (url.pathname === '/api/jobs/cancel' && req.method === 'POST') {
+      const { id } = JSON.parse(await body(req));
+      const job = jobs.get(id || '');
+      if (!job) return json(res, 404, { error: '작업을 찾을 수 없습니다' });
+      job.cancelled = true; // 실제 중단은 라우트가 다음 단위 작업 사이에서 확인한다
+      return json(res, 200, { ok: true });
     }
     if (url.pathname === '/api/setup' && req.method === 'POST') {
       const { provider, action } = JSON.parse(await body(req));
@@ -238,34 +339,49 @@ const server = http.createServer(async (req, res) => {
     }
     // ── P4 WP-B2: 이미지 변환·페이지 추출·병합·이미지 삽입·용량 압축 ────────────
     if (url.pathname === '/api/pdf/export-images' && req.method === 'POST') { // 문서 상태는 바꾸지 않으므로 snapshot 없음
-      const { name, pages, format, dpi, dir } = JSON.parse(await body(req));
+      const { name, pages, format, dpi, dir, jobId } = JSON.parse(await body(req));
       const { doc } = await getPdfDoc(name);
       if (!dir || !fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return json(res, 400, { error: '저장할 폴더를 찾을 수 없습니다' });
       const scale = Math.max(36, Math.min(600, Number(dpi) || 150)) / 72;
       const base = path.basename(name).replace(/\.pdf$/i, '');
       const list = Array.isArray(pages) && pages.length ? pages.map(Number) : Array.from({ length: doc.pageCount }, (_, i) => i);
       const files = [];
-      for (const i of list) {
-        const num = String(i + 1).padStart(2, '0');
-        if (format === 'jpeg') {
-          const file = path.join(dir, `${base}-p${num}.jpg`);
-          fs.writeFileSync(file, doc.renderJpeg(i, scale, 85));
-          files.push(file);
-        } else {
-          const file = path.join(dir, `${base}-p${num}.png`);
-          fs.writeFileSync(file, await doc.render(i, scale));
-          files.push(file);
+      const job = startJob(jobId, 'export-images', list.length); // 진행 단위: 페이지 1장
+      try {
+        for (const i of list) {
+          await tick(); // 이벤트 루프로 한 번 돌아가 취소·폴링을 받는다
+          if (!progress(job, { message: `${i + 1}쪽 내보내는 중` })) return json(res, 200, { cancelled: true, files });
+          const num = String(i + 1).padStart(2, '0');
+          if (format === 'jpeg') {
+            const file = path.join(dir, `${base}-p${num}.jpg`);
+            writeAtomic(file, doc.renderJpeg(i, scale, 85));
+            files.push(file);
+          } else {
+            const file = path.join(dir, `${base}-p${num}.png`);
+            writeAtomic(file, await doc.render(i, scale));
+            files.push(file);
+          }
+          progress(job, { done: files.length });
         }
-      }
-      return json(res, 200, { files });
+        return json(res, 200, { files });
+      } catch (e) { job.error = e.message; throw e; }
+      finally { endJob(job); }
     }
     if (url.pathname === '/api/pdf/pages/delete' && req.method === 'POST') { // page:null 스냅샷 → undo/redo가 reloadAll을 준다
-      const { name, indices } = JSON.parse(await body(req));
+      const { name, indices, jobId } = JSON.parse(await body(req));
       const entry = await getPdfDoc(name);
-      snapshot(entry, null);
-      const r = entry.doc.deletePages(indices);
-      entry.dirty = true;
-      return json(res, 200, { ...r, ...stacks(entry) });
+      // 진행 단위: 스냅샷 → 삭제(한 번의 WASM 호출이라 그 사이에서만 취소를 본다. 빠르지만 다른 긴 작업과 형식을 맞춘다)
+      const job = startJob(jobId, 'pages-delete', 1);
+      try {
+        snapshot(entry, null);
+        await tick();
+        if (!progress(job, { message: '페이지 삭제 중' })) { await rollback(entry); return json(res, 200, { cancelled: true, ...stacks(entry) }); }
+        const r = entry.doc.deletePages(indices);
+        entry.dirty = true;
+        progress(job, { done: 1 });
+        return json(res, 200, { ...r, ...stacks(entry) });
+      } catch (e) { job.error = e.message; throw e; }
+      finally { endJob(job); }
     }
     // ── P5 WP-B2: 회전·순서 변경·추출·분할·검색 ──────────────────────────────
     if (url.pathname === '/api/pdf/pages/rotate' && req.method === 'POST') { // page:null 스냅샷 → 회전은 쪽 크기(가로/세로)가 뒤바뀌어 문서 전체를 다시 그린다
@@ -297,7 +413,7 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { path: out, pageCount });
     }
     if (url.pathname === '/api/pdf/split' && req.method === 'POST') { // N쪽씩 잘라 <이름>-1.pdf, -2.pdf … 로 폴더에 저장 (extractPages 반복 호출, 원본 불변)
-      const { name, every, outDir } = JSON.parse(await body(req));
+      const { name, every, outDir, jobId } = JSON.parse(await body(req));
       const { doc } = await getPdfDoc(name);
       const n = Number(every);
       if (!Number.isInteger(n) || n < 1) return json(res, 400, { error: '쪽 수는 1 이상의 정수로 입력하세요' });
@@ -305,14 +421,21 @@ const server = http.createServer(async (req, res) => {
       if (!outDir || !fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return json(res, 400, { error: '저장할 폴더를 찾을 수 없습니다' });
       const base = path.basename(name).replace(/\.pdf$/i, '');
       const files = [];
-      for (let start = 0, part = 1; start < doc.pageCount; start += n, part++) {
-        const indices = Array.from({ length: Math.min(n, doc.pageCount - start) }, (_, k) => start + k);
-        const bytes = doc.extractPages(indices);
-        const file = path.join(dir, `${base}-${part}.pdf`);
-        writeAtomic(file, bytes);
-        files.push(file);
-      }
-      return json(res, 200, { files });
+      const job = startJob(jobId, 'split', Math.ceil(doc.pageCount / n)); // 진행 단위: 조각 파일 1개
+      try {
+        for (let start = 0, part = 1; start < doc.pageCount; start += n, part++) {
+          await tick();
+          if (!progress(job, { message: `${part}번째 조각 만드는 중` })) return json(res, 200, { cancelled: true, files });
+          const indices = Array.from({ length: Math.min(n, doc.pageCount - start) }, (_, k) => start + k);
+          const bytes = doc.extractPages(indices);
+          const file = path.join(dir, `${base}-${part}.pdf`);
+          writeAtomic(file, bytes);
+          files.push(file);
+          progress(job, { done: files.length });
+        }
+        return json(res, 200, { files });
+      } catch (e) { job.error = e.message; throw e; }
+      finally { endJob(job); }
     }
     // 빈 질의는 PDFium FindNext가 영영 돌아오지 않는다(엔진 주석 참고) → 라우트 입구에서 바로 거절한다. 문서를 열기 전에 검사해 헛되이 열지 않는다.
     if (url.pathname === '/api/pdf/find' && req.method === 'POST') {
@@ -330,17 +453,31 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { hits, total: hits.length, truncated });
     }
     if (url.pathname === '/api/pdf/merge' && req.method === 'POST') { // 새 파일을 만드는 동작이라 실행취소 스택에는 넣지 않는다(대상이 열려 있던 문서면 캐시만 닫는다)
-      const { paths, out } = JSON.parse(await body(req));
+      const { paths, out, jobId } = JSON.parse(await body(req));
       const list = [].concat(paths || []);
       if (!list.length) return json(res, 400, { error: '병합할 파일이 없습니다' });
-      const buffers = list.map((p) => fs.readFileSync(safe(p)));
-      const merged = await pdfEngine.merge(buffers);
-      writeAtomic(safe(out), merged);
-      if (pdfDocs[out]) { pdfDocs[out].doc.close(); delete pdfDocs[out]; }
-      const check = await pdfEngine.open(merged);
-      const pageCount = check.pageCount;
-      check.close();
-      return json(res, 200, { path: out, pageCount });
+      // 진행 단위: 읽는 파일 1개 + 마지막 병합 1단계(merge 자체는 한 번의 WASM 호출이라 중간에 멈출 수 없다)
+      const job = startJob(jobId, 'merge', list.length + 1);
+      try {
+        const buffers = [];
+        for (const p of list) {
+          await tick();
+          if (!progress(job, { message: `${path.basename(p)} 읽는 중` })) return json(res, 200, { cancelled: true, files: [] });
+          buffers.push(fs.readFileSync(safe(p)));
+          progress(job, { done: buffers.length });
+        }
+        await tick();
+        if (!progress(job, { message: '병합하는 중' })) return json(res, 200, { cancelled: true, files: [] });
+        const merged = await pdfEngine.merge(buffers);
+        writeAtomic(safe(out), merged);
+        if (pdfDocs[out]) { pdfDocs[out].doc.close(); delete pdfDocs[out]; }
+        const check = await pdfEngine.open(merged);
+        const pageCount = check.pageCount;
+        check.close();
+        progress(job, { done: list.length + 1 });
+        return json(res, 200, { path: out, pageCount });
+      } catch (e) { job.error = e.message; throw e; }
+      finally { endJob(job); }
     }
     if (url.pathname === '/api/pdf/image' && req.method === 'POST') {
       const { name, i, path: imgPath, box } = JSON.parse(await body(req));
@@ -401,9 +538,20 @@ const server = http.createServer(async (req, res) => {
       const entry = await getPdfDoc(name);
       snapshot(entry, null); // 문서 전체 스냅샷 — undo/redo가 reloadAll을 준다
       const originalBytes = entry.undo[entry.undo.length - 1].bytes;
-      const result = await downsampleToTarget(entry, originalBytes, { maxDpi, quality, targetBytes });
-      entry.dirty = true;
-      return json(res, 200, { ...result, ...downsampleHint(result.skipped), ...stacks(entry) });
+      // 진행 단위: 시도 1회(dpi×품질 조합). 목표 용량이 없으면 한 번만 돈다
+      const maxAttempts = targetBytes ? new Set([maxDpi, 120, 96, 72]).size * new Set([quality, 60, 45]).size : 1;
+      const job = startJob(q.jobId, 'downsample', maxAttempts);
+      try {
+        const result = await downsampleToTarget(entry, originalBytes, { maxDpi, quality, targetBytes,
+          report: ({ message, attempt }) => progress(job, { message, done: Math.max(0, attempt - 1) }) });
+        if (result.cancelled) { // 문서를 바꾸는 작업 → 스냅샷으로 원상 복구하고 실행 취소 스택에서도 뺀다
+          await rollback(entry);
+          return json(res, 200, { cancelled: true, attempts: result.attempts, ...stacks(entry) });
+        }
+        entry.dirty = true;
+        return json(res, 200, { ...result, ...downsampleHint(result.skipped), ...stacks(entry) });
+      } catch (e) { job.error = e.message; throw e; }
+      finally { endJob(job); }
     }
     // P5 WP-B2: 빈 상태 빠른 도구 "여러 파일 용량 줄이기" — 문서를 열어 두지 않고 파일 경로 여러 개를 바로 처리한다.
     // 각 파일을 열어 downsampleToTarget을 돌리고 "<이름>-축소.pdf"로 저장한다(원본은 건드리지 않음, 실행취소 스택도 없음).
@@ -415,21 +563,33 @@ const server = http.createServer(async (req, res) => {
       const quality = Number(q.quality) > 0 ? Number(q.quality) : 75;
       const targetBytes = q.targetBytes;
       const results = [];
-      for (const p of paths) {
-        let entry = null;
-        try {
-          const src = safe(p);
-          const originalBytes = fs.readFileSync(src);
-          entry = { doc: await pdfEngine.open(originalBytes) };
-          const result = await downsampleToTarget(entry, originalBytes, { maxDpi, quality, targetBytes });
-          const dir = q.outDir ? safe(q.outDir) : path.dirname(src);
-          const outPath = path.join(dir, path.basename(src).replace(/\.pdf$/i, '') + '-축소.pdf');
-          writeAtomic(outPath, entry.doc.save());
-          results.push({ path: p, out: outPath, before: result.before, after: result.after, reached: result.reached, used: result.used, ...downsampleHint(result.skipped) });
-        } catch (e) { results.push({ path: p, error: e.message }); }
-        finally { if (entry) entry.doc.close(); }
-      }
-      return json(res, 200, { results });
+      const files = [];
+      const job = startJob(q.jobId, 'downsample-files', paths.length); // 진행 단위: 파일 1개(파일 안의 시도 사이에서도 취소를 본다)
+      try {
+        for (const p of paths) {
+          await tick();
+          if (!progress(job, { message: `${path.basename(p)} 줄이는 중` })) return json(res, 200, { cancelled: true, files, results });
+          let entry = null;
+          try {
+            const src = safe(p);
+            const originalBytes = fs.readFileSync(src);
+            entry = { doc: await pdfEngine.open(originalBytes) };
+            // 파일 안의 시도 진행은 메시지로만 보여 준다(진행 막대는 파일 수 기준을 유지)
+            const result = await downsampleToTarget(entry, originalBytes, { maxDpi, quality, targetBytes,
+              report: ({ message }) => progress(job, { message: `${path.basename(p)} — ${message}` }) });
+            if (result.cancelled) return json(res, 200, { cancelled: true, files, results }); // 만들던 파일은 쓰지 않는다(writeAtomic 전)
+            const dir = q.outDir ? safe(q.outDir) : path.dirname(src);
+            const outPath = path.join(dir, path.basename(src).replace(/\.pdf$/i, '') + '-축소.pdf');
+            writeAtomic(outPath, entry.doc.save());
+            files.push(outPath);
+            results.push({ path: p, out: outPath, before: result.before, after: result.after, reached: result.reached, used: result.used, ...downsampleHint(result.skipped) });
+          } catch (e) { results.push({ path: p, error: e.message }); }
+          finally { if (entry) entry.doc.close(); }
+          progress(job, { done: results.length });
+        }
+        return json(res, 200, { results, files });
+      } catch (e) { job.error = e.message; throw e; }
+      finally { endJob(job); }
     }
     if (url.pathname === '/api/fonts' && req.method === 'GET') return json(res, 200, pdfFonts.list(url.searchParams.get('text') || ''));
     if (url.pathname === '/api/fonts/add' && req.method === 'POST') {
@@ -452,6 +612,7 @@ const server = http.createServer(async (req, res) => {
       const timer = setTimeout(() => controller.abort(), 120000);
       res.on('close', () => { if (!res.writableFinished) controller.abort(); });
       try { return json(res, 200, await fontService.recommend(doc, q, ai, controller.signal)); }
+      catch (e) { if (e.code === 'auth' && !e.provider) e.provider = q.provider; throw e; } // P6 C2: 아래 공통 catch가 401 + code:'auth'로 보낸다
       finally { clearTimeout(timer); }
     }
     if (['/api/pdf/font-preview', '/api/pdf/font-apply'].includes(url.pathname) && req.method === 'POST') {
@@ -494,9 +655,13 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ...r, ...stacks(entry) });
     }
     if (url.pathname === '/api/pdf/fit' && req.method === 'POST') { // 폭 맞춤 편집: wrap(줄바꿈) / shrink(축소) / none
-      const { name, i, idx, text, maxWidth, mode } = JSON.parse(await body(req));
+      // blank: 같은 줄의 나머지 조각 idx들 — 여기서 함께 비운다. 편집 한 번은 실행 취소 한 번이어야 하는데,
+      // 예전에는 UI가 /api/pdf/edits로 먼저 비우고 /api/pdf/fit을 또 불러 스냅샷이 두 개 쌓였다(Ctrl+Z 두 번 필요).
+      // 순서는 그대로 유지한다: 나머지를 먼저 비우고 첫 조각을 마지막에 — 줄바꿈으로 줄 객체가 늘면 뒤 인덱스가 밀리기 때문.
+      const { name, i, idx, text, maxWidth, mode, blank } = JSON.parse(await body(req));
       const entry = await getPdfDoc(name);
       snapshot(entry, i);
+      for (const b of [].concat(blank || [])) entry.doc.setText(i, +b, ' ');
       const r = entry.doc.fitText(i, idx, text, +maxWidth, mode);
       entry.dirty = true;
       return json(res, 200, { ...r, ...stacks(entry) });
@@ -567,6 +732,7 @@ const server = http.createServer(async (req, res) => {
       if (!entry.undo.length) return json(res, 200, { ok: false });
       const { bytes, page } = entry.undo.pop();
       entry.redo.push({ bytes: entry.doc.save(), page });
+      trimStacks(entry); // redo로 옮겨도 합계는 그대로다 → 상한을 다시 확인한다(P6 C3)
       await swapDoc(entry, bytes);
       entry.dirty = true;
       return json(res, 200, { ok: true, page, reloadAll: page === null, ...stacks(entry) });
@@ -577,6 +743,7 @@ const server = http.createServer(async (req, res) => {
       if (!entry.redo.length) return json(res, 200, { ok: false });
       const { bytes, page } = entry.redo.pop();
       entry.undo.push({ bytes: entry.doc.save(), page });
+      trimStacks(entry); // P6 C3
       await swapDoc(entry, bytes);
       entry.dirty = true;
       return json(res, 200, { ok: true, page, reloadAll: page === null, ...stacks(entry) });
@@ -613,6 +780,9 @@ const server = http.createServer(async (req, res) => {
       if (!PROMPTS[mode]) return json(res, 400, { error: '잘못된 모드' });
       res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache' });
       const send = (o) => { if (!res.writableEnded) res.write(`data: ${JSON.stringify(o)}\n\n`); };
+      // WP-B 검증용 스위치: EDITORKIM_FAKE_AUTH_ERROR=1 로 서버를 띄우면 CLI를 부르지 않고 로그인 만료 오류만 보낸다.
+      // UI의 "AI 로그인이 만료됐습니다" 배너를 실제 로그아웃 없이 시험하기 위한 것 — 평소에는 이 환경변수가 없다.
+      if (process.env.EDITORKIM_FAKE_AUTH_ERROR === '1') { send({ error: '로그인이 필요합니다', code: 'auth', provider }); return res.end(); }
       // 사용자가 [중지]를 누르거나 창을 닫아 연결이 끊기면 CLI 호출도 함께 끊는다(토큰·시간 낭비 방지)
       const controller = new AbortController();
       res.on('close', () => { if (!res.writableFinished) controller.abort(); });
@@ -630,15 +800,23 @@ const server = http.createServer(async (req, res) => {
         }
         if (mode === 'chat' && result.session) sessions[key] = { model, id: result.session };
         send({ done: { ...result, provider } });
-      } catch (e) { if (!controller.signal.aborted) send({ error: e.message }); }
+      } catch (e) { // P6 C2: 로그인 만료면 code:'auth'를 함께 보낸다 — UI가 그 공급자만 다시 확인하고 재로그인 배너를 띄운다
+        if (!controller.signal.aborted) send({ error: e.message, ...(e.code === 'auth' ? { code: 'auth', provider } : {}) });
+      }
       return res.end();
     }
     json(res, 404, { error: 'not found' });
-  } catch (e) { if (!res.headersSent) json(res, 500, { error: e.message }); else res.end(); }
+  } catch (e) {
+    if (res.headersSent) return res.end();
+    // P6 C2: 인증 만료는 401 + code:'auth'(+provider) — UI가 재로그인 배너를 띄우고 그 공급자만 다시 확인한다
+    if (e.code === 'auth') return json(res, 401, { error: e.message, code: 'auth', ...(e.provider ? { provider: e.provider } : {}) });
+    json(res, 500, { error: e.message });
+  }
 });
 // 기본 포트가 사용 중이면(다른 프로그램, 개발용 서버) 다음 포트를 차례로 시도한다. ready는 실제로 연 포트로 resolve — Electron 창은 이 포트로 접속
 // listen(p, cb)의 cb는 'listening' 리스너로 남아 실패한 시도의 것까지 다음 성공 때 함께 불린다 → 리스너를 직접 달고 실패하면 떼어 낸다
-const ready = new Promise((resolve, reject) => {
+// EDITORKIM_NO_LISTEN=1 이면 포트를 열지 않는다 — server.test.js가 순수 함수(snapshot·downsampleToTarget·jobs)만 불러 쓰기 위한 것
+const ready = process.env.EDITORKIM_NO_LISTEN === '1' ? Promise.resolve(0) : new Promise((resolve, reject) => {
   const listen = (p, retries) => {
     const onError = (e) => {
       server.off('listening', onListening);
@@ -656,4 +834,6 @@ const ready = new Promise((resolve, reject) => {
 });
 ready.catch((e) => console.error('server:', e.message));
 process.once('exit', () => ai.close());
-module.exports = { PORT, ready, port: () => port };
+module.exports = { PORT, ready, port: () => port,
+  // 자체 검사용(server.test.js): 라우트를 거치지 않고 P6 C1·C3·C4 로직만 직접 부른다
+  _test: { jobs, startJob, progress, endJob, jobView, snapshot, stacks, trimStacks, downsampleToTarget, rollback, UNDO_MAX, UNDO_MAX_BYTES } };

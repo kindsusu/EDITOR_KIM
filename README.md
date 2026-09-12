@@ -16,6 +16,9 @@ A local Windows editor that changes PDF text objects directly and removes sensit
 - An empty state with quick tools (merge, reduce several files' size, export images) and a full-window drag-and-drop overlay when no document is open
 - Open PDFs straight from a browser or mail client via the Windows "Open with" association (temp-file downloads show a banner and save with "Save As")
 - Undo/redo, multi-line editing, fit-to-width, and move
+- A progress dialog with a cancel button for long document tools (size reduction, export, split, merge, page cleanup), which restores the document or reports how many files were saved when cancelled
+- An undo toast after page deletion, size reduction, rotation, or reordering, separate from the status-bar flash message
+- A banner that offers re-sign-in when the AI provider's login expires mid-session (chat, font recommendation)
 - Markdown editing with a sanitized live preview
 - AI assistant (Claude Code or ChatGPT via Codex) with per-document conversations and font recommendations — sign-in is only requested the first time an AI feature is used
 
@@ -44,7 +47,7 @@ Nothing is requested at launch — PDF and Markdown editing work without any acc
 
 ![Architecture](assets/architecture.svg)
 
-Click a text box, edit it, and press Enter to confirm. Text keeps its original embedded font where possible; characters missing from that font fall back to Malgun Gothic. The **폰트 맞추기** (font match) dialog opens for image-backed hidden text or a text box where you've already chosen a font — pick an installed font or import a TTF, preview the result, and apply with undo support. An AI font recommendation runs only when you press the recommend button in the dialog; only plain TTF fonts are supported, not OTF or variable fonts.
+Click a line, edit it, and press Enter to confirm. PDFs exported from Excel, Hangul or Chromium split one line into many text objects (per font run, sometimes per character); fragments that share a baseline and sit next to each other are merged into one editable box, while table cells stay separate (gap size plus a vertical-rule check). Text keeps its original embedded font where possible; characters missing from that font fall back to Malgun Gothic. The **폰트 맞추기** (font match) dialog opens for image-backed hidden text or a text box where you've already chosen a font — pick an installed font or import a TTF, preview the result, and apply with undo support. An AI font recommendation runs only when you press the recommend button in the dialog; only plain TTF fonts are supported, not OTF or variable fonts.
 
 ![Redaction pipeline](assets/redaction.svg)
 

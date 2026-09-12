@@ -6,6 +6,7 @@
 <script src="/vendor/marked.js"></script>
 <script src="/vendor/purify.js"></script>
 <script src="/font-editor.js"></script>
+<script src="/text-grouping.js"></script>
 <style>
   :root{--bg:#1b1b1f;--panel:#232329;--line:#33333b;--fg:#e8e8ec;--mut:#9a9aa6;--acc:#d97757;--add:#1f4d2e;--del:#5a2323}
   *{box-sizing:border-box}body{margin:0;height:100vh;display:grid;grid-template-columns:220px 1fr 380px;grid-template-rows:40px minmax(0,1fr);font:13px/1.5 system-ui,'Malgun Gothic',sans-serif;background:var(--bg);color:var(--fg)}
@@ -123,10 +124,20 @@
   #downsampleTable th,#downsampleTable td,#downsampleFilesTable th,#downsampleFilesTable td{border-bottom:1px solid var(--line);padding:3px 6px;text-align:left}
   .pdfImage{cursor:move}
   .pdfImageHandle{position:absolute;right:-5px;bottom:-5px;width:11px;height:11px;background:var(--acc);border:1px solid #fff;border-radius:2px;cursor:nwse-resize;z-index:5}
+  /* P6 WP-B1: 작업 진행 창(진행률+취소) */
+  #jobDialog progress{width:100%;height:10px;accent-color:var(--acc)}
+  /* P6 WP-B2: 실행 취소 토스트(flash와 별개, 하단 중앙에 5초) */
+  #toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:15;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px 10px;display:flex;align-items:center;gap:10px;box-shadow:0 6px 24px #0008;max-width:90vw}
+  #toast button{white-space:nowrap;flex-shrink:0}
+  /* P6 WP-B3: 로그인 만료 배너(헤더 바로 아래, 어느 화면이든 고정) */
+  #authBanner{position:fixed;left:0;right:0;top:40px;z-index:16;padding:6px 14px;background:#5a2323;color:#f0c0c0;border-bottom:1px solid #7a3030;font-size:12px;display:flex;align-items:center;gap:10px}
+  #authBanner button{flex-shrink:0}
 </style>
 </head>
 <body class="ai-collapsed">
 <header><b>EDITOR_KIM</b><span id="ver" style="color:var(--acc);opacity:.8"></span><span>PDF · Markdown 편집기</span><span class="sp"></span><span id="status">AI 상태 확인 중…</span><select id="modelPicker" title="Claude 또는 ChatGPT(Codex) 모델 선택"><option value="">AI 모델</option></select><button id="aiToggle" aria-controls="aiPanel" aria-expanded="false" title="AI 채팅 패널 열기/닫기 (Ctrl+J)">💬 채팅</button></header>
+<!-- P6 WP-B3: 로그인 만료 배너 — 채팅·폰트 추천 등에서 code:'auth'를 받으면 뜬다 -->
+<div id="authBanner" hidden role="alert"><span id="authBannerText"></span><span class="sp" style="flex:1"></span><button id="authBannerLogin" class="pri">다시 로그인</button><button id="authBannerClose" title="닫기">×</button></div>
 <aside>
   <div class="tabs" id="asideTabs">
     <button type="button" class="tabBtn on" data-tab="file">파일</button>
@@ -282,6 +293,17 @@
   <div class="row"><span class="sp"></span><button id="downsampleFilesRun" class="pri">실행</button><button id="downsampleFilesClose">닫기</button></div>
 </div></dialog>
 
+<!-- P6 WP-B1: 작업 진행 창 — runJob()이 500ms마다 /api/jobs?id=로 갱신하고, [취소]는 /api/jobs/cancel을 호출한다 -->
+<dialog id="jobDialog" class="panel"><div class="card" style="width:420px">
+  <h2 id="jobTitle">처리 중…</h2>
+  <div class="row"><progress id="jobProgress"></progress></div>
+  <div class="row"><span id="jobPct" class="hint2"></span><span class="sp"></span><span id="jobMessage" class="hint2"></span></div>
+  <div class="row"><span class="sp"></span><button id="jobCancel">취소</button></div>
+</div></dialog>
+
+<!-- P6 WP-B2: 실행 취소 토스트(flash와 별개, 하단 중앙, 5초, 여러 개는 쌓지 않고 교체) -->
+<div id="toast" hidden role="status"><span id="toastText"></span><button id="toastAction" hidden></button><button id="toastClose" title="닫기">×</button></div>
+
 <script type="module">
 const $ = (s) => document.querySelector(s);
 const escapeHtml = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -325,6 +347,8 @@ let rectMode = false, rectDrag = null;
 let searchHits = [], searchCur = -1, searchQuery = '', searchDebounce = 0;
 // 미저장 여부·실행취소 스택은 서버(/api/pdf/info)가 정본이다. 새로고침이나 목록에서 닫았다가 다시 열어도 화면이 서버 상태와 어긋나지 않는다
 let aiHealth = null, activeAi = null, setupTarget = null, setupBusy = false, loginPoll = 0; // setupTarget=null이면 대화상자는 서비스 선택 화면
+// P6 WP-B: 작업 진행 창(jobCurrentId·jobPollTimer)·토스트(toastTimer)·로그인 만료 배너(authBannerProvider) 상태
+let jobCurrentId = null, jobPollTimer = 0, toastTimer = 0, authBannerProvider = null;
 const dirty = () => cur && (cur.endsWith('.pdf') ? pdfDirty : docText !== savedText);
 window.isDirty = dirty;
 const showDirty = () => { $('#dirty').hidden = !dirty(); };
@@ -344,13 +368,20 @@ function activeProvider() { return activeAi && aiHealth?.providers?.[activeAi.pr
 function syncAiState() {
   const state = activeProvider(), ready = !!state?.loggedIn;
   $('#send').disabled = !cur; // 로그인 전에도 누를 수 있다 — 누르면 선택·로그인 대화상자가 열린다
-  if (!activeAi) { $('#aiTitle').textContent = 'AI'; setStatus('AI 미설정'); return; }
+  // P6 WP-B3: code:'auth' 배너가 뜬 공급자를 쓰는 중이면 상태줄에 재로그인 필요를 알린다.
+  // 만료된 공급자는 checkHealth → renderModelPicker가 activeAi를 비울 수 있어(로그인된 모델이 목록에서 빠짐) activeAi가 null이어도 배너 쪽 공급자로 판단한다.
+  const needsRelogin = !!authBannerProvider && (!activeAi || activeAi.provider === authBannerProvider);
+  if (!activeAi) {
+    $('#aiTitle').textContent = needsRelogin ? providerName(authBannerProvider) : 'AI';
+    setStatus(needsRelogin ? `AI: ${providerShort(authBannerProvider)} · 재로그인 필요` : 'AI 미설정');
+    return;
+  }
   const model = state?.models?.find((item) => item.id === activeAi.model);
   $('#aiTitle').textContent = `${providerName(activeAi.provider)} · ${model?.name || activeAi.model || '기본 모델'}`;
   $('#aiHint').textContent = activeAi.provider === 'claude'
     ? '비용은 API 환산액입니다. Claude 구독으로 호출하며 API 키를 저장하지 않습니다.'
     : 'PC의 ChatGPT 로그인과 Codex 사용량을 이용하며 API 키를 저장하지 않습니다.';
-  setStatus(ready ? `AI: ${providerShort(activeAi.provider)} · ${model?.name || activeAi.model || '기본 모델'}` : 'AI 미설정');
+  setStatus(needsRelogin ? `AI: ${providerShort(activeAi.provider)} · 재로그인 필요` : (ready ? `AI: ${providerShort(activeAi.provider)} · ${model?.name || activeAi.model || '기본 모델'}` : 'AI 미설정'));
 }
 function renderModelPicker(preferredProvider) {
   const picker = $('#modelPicker'), saved = localStorage.getItem('editorkim.aiChoice');
@@ -418,6 +449,19 @@ function renderSetup() {
 function showSetup(provider = null) { loginPoll++; setupTarget = provider; renderSetup(); if (!setupOpen()) $('#setup').showModal(); }
 // 쓸 수 있는 AI가 선택돼 있으면 true. 아니면 선택·로그인 대화상자를 열고 false
 function ensureAi() { if (activeProvider()?.loggedIn) return true; showSetup(); return false; }
+// P6 WP-B3: 채팅 SSE·폰트 추천 등에서 code:'auth'를 받으면 부른다. 배너는 로그인 완료(기존 폴링, checkHealth)로 스스로 사라진다.
+function showAuthBanner(provider) {
+  if (!provider) return;
+  authBannerProvider = provider;
+  $('#authBannerText').textContent = `${providerName(provider)} 로그인이 만료됐습니다`;
+  $('#authBanner').hidden = false;
+  syncAiState();
+  checkHealth(provider); // 이미 다시 로그인됐을 수도 있으니 즉시 한 번 더 확인
+}
+function hideAuthBanner() { $('#authBanner').hidden = true; authBannerProvider = null; syncAiState(); }
+$('#authBannerLogin').onclick = () => { const provider = authBannerProvider; hideAuthBanner(); if (provider) showSetup(provider); };
+$('#authBannerClose').onclick = hideAuthBanner;
+window.editorKimAuthError = showAuthBanner; // font-editor.js(폰트 추천)가 이 창을 몰라도 배너를 띄울 수 있게
 // only='claude'|'codex'면 그 공급자만 다시 검사하고 나머지는 이전 결과를 유지한다(로그인 대기 중 2초마다 부르므로 CLI 4개를 매번 띄우지 않게)
 async function checkHealth(only) {
   if (setupTarget) $('#setupStatus').textContent = '확인 중…';
@@ -432,6 +476,8 @@ async function checkHealth(only) {
   renderModelPicker(justReady ? target : null);
   if (justReady) { closeSetup(); setAiOpen(true); flash(`${providerName(target)} 준비 완료`, 2500); }
   else if (setupOpen()) renderSetup();
+  // P6 WP-B3: 배너가 뜬 공급자가 다시 로그인되면(기존 로그인 폴링을 통해서든, 여기서든) 배너를 스스로 지운다
+  if (authBannerProvider && aiHealth.providers?.[authBannerProvider]?.loggedIn) hideAuthBanner();
 }
 $('#modelPicker').onchange = async () => {
   const value = $('#modelPicker').value;
@@ -710,6 +756,7 @@ async function pdfMutate(path, payload) {
   const r = await apiPost(path, payload);
   pdfDirty = true; showDirty(); dismissHint(); // 첫 편집이므로 상태줄 첫 안내를 지운다(WP-B1)
   if ('undoLeft' in r) setUndoRedoState(r.undoLeft, r.redoLeft);
+  maybeFlashUndoTrimmed(r);
   return r;
 }
 function closeAnyPanel() {
@@ -723,7 +770,7 @@ async function undo() {
   closeAnyPanel();
   const r = await apiPost('/api/pdf/undo', { name: cur });
   if (!r.ok) return;
-  pdfDirty = true; showDirty(); setUndoRedoState(r.undoLeft, r.redoLeft);
+  pdfDirty = true; showDirty(); setUndoRedoState(r.undoLeft, r.redoLeft); maybeFlashUndoTrimmed(r);
   if (r.reloadAll) await renderPdfDoc(cur); else await refreshPage(r.page); // page:null 스냅샷(페이지 삭제·병합·압축)은 문서 전체를 다시 연다
   flash('실행 취소됨');
 }
@@ -732,7 +779,7 @@ async function redo() {
   closeAnyPanel();
   const r = await apiPost('/api/pdf/redo', { name: cur });
   if (!r.ok) return;
-  pdfDirty = true; showDirty(); setUndoRedoState(r.undoLeft, r.redoLeft);
+  pdfDirty = true; showDirty(); setUndoRedoState(r.undoLeft, r.redoLeft); maybeFlashUndoTrimmed(r);
   if (r.reloadAll) await renderPdfDoc(cur); else await refreshPage(r.page);
   flash('다시 실행됨');
 }
@@ -746,6 +793,58 @@ document.addEventListener('keydown', (e) => {
   if (k === 'z' && !e.shiftKey) { e.preventDefault(); undo(); }
   else if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); redo(); }
 });
+// stacks()가 실행 취소 기록을 메모리 상한 때문에 잘라냈으면(1회성 플래그) 알린다. undoLeft/redoLeft를 실어 보내는 응답이면 어디서나 부른다.
+function maybeFlashUndoTrimmed(r) { if (r && r.undoTrimmed) flash('실행 취소 기록이 메모리 한도로 일부 지워졌습니다', 4500); }
+
+// ---- P6 WP-B2: 토스트(flash와 별개, 실행 취소 액션 포함, 5초, 여러 개는 쌓지 않고 교체) ----
+function toast(text, opts = {}) {
+  clearTimeout(toastTimer);
+  $('#toastText').textContent = text;
+  const btn = $('#toastAction');
+  if (opts.action && opts.onAction) { btn.textContent = opts.action; btn.hidden = false; btn.onclick = () => { hideToast(); opts.onAction(); }; }
+  else { btn.hidden = true; btn.onclick = null; }
+  $('#toast').hidden = false;
+  toastTimer = setTimeout(hideToast, 5000);
+}
+function hideToast() { $('#toast').hidden = true; clearTimeout(toastTimer); toastTimer = 0; }
+$('#toastClose').onclick = hideToast;
+
+// ---- P6 WP-B1: 작업 진행 창(jobId 생성 → 요청 시작 → 500ms 폴링 → 응답 오면 닫기, [취소]는 /api/jobs/cancel) ----
+const genJobId = () => 'job_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+function showJobDialog(title) {
+  $('#jobTitle').textContent = title;
+  $('#jobProgress').removeAttribute('value'); $('#jobPct').textContent = ''; $('#jobMessage').textContent = '';
+  $('#jobCancel').disabled = false;
+  if (!$('#jobDialog').open) $('#jobDialog').showModal();
+}
+function hideJobDialog() { if ($('#jobDialog').open) $('#jobDialog').close(); }
+function updateJobDialog(info) {
+  if (info.total > 0) { $('#jobProgress').max = info.total; $('#jobProgress').value = info.done || 0; $('#jobPct').textContent = `${info.done || 0}/${info.total}`; }
+  else { $('#jobProgress').removeAttribute('value'); $('#jobPct').textContent = ''; }
+  $('#jobMessage').textContent = info.message || '';
+}
+async function pollJob(jobId) {
+  try {
+    const r = await fetch('/api/jobs?id=' + encodeURIComponent(jobId));
+    if (!r.ok) return; // 아직 서버에 안 생겼거나(요청이 곧 끝남) 이미 지워짐 — 조용히 다음 폴링을 기다린다
+    updateJobDialog(await r.json());
+  } catch {}
+}
+async function cancelJob(jobId) {
+  $('#jobCancel').disabled = true; $('#jobMessage').textContent = '취소하는 중…';
+  try { await fetch('/api/jobs/cancel', { method: 'POST', body: JSON.stringify({ id: jobId }) }); } catch {}
+}
+$('#jobCancel').onclick = () => { if (jobCurrentId) cancelJob(jobCurrentId); };
+$('#jobDialog').addEventListener('cancel', (e) => { e.preventDefault(); if (jobCurrentId) cancelJob(jobCurrentId); }); // Esc도 취소로(창이 스스로 닫히면 폴링을 잃는다)
+// task(jobId)를 실행하는 동안 진행 창을 관리한다. 1초 안에 끝나면 창을 띄우지 않는다(깜빡임 방지).
+async function runJob(label, task) {
+  const jobId = genJobId(); jobCurrentId = jobId;
+  let shown = false;
+  const showTimer = setTimeout(() => { shown = true; showJobDialog(label); }, 1000);
+  const poll = setInterval(() => pollJob(jobId), 500);
+  try { return await task(jobId); }
+  finally { clearTimeout(showTimer); clearInterval(poll); if (shown) hideJobDialog(); jobCurrentId = null; }
+}
 
 // ---- WP-B2: 회전 좌표 변환 ----
 // objects()/charBoxes()/find()의 좌표는 회전 전(unrotated) 페이지 좌표계, pageSize()/render()는 회전 후(rotation 0..3, ×90도 시계).
@@ -808,7 +907,7 @@ async function renderPdfDoc(name) {
   if (renderGeneration !== pdfRenderGeneration || cur !== name) return;
   if (!info.pages) { flash('⚠ PDF를 열지 못했습니다: ' + (info.error || '알 수 없는 오류'), 6000); return; }
   pdfPages = info.pages; pdfObjects = [];
-  pdfDirty = !!info.dirty; showDirty(); setUndoRedoState(info.undoLeft, info.redoLeft); // 서버가 기억하는 미저장 편집·실행취소 스택을 그대로 이어받는다
+  pdfDirty = !!info.dirty; showDirty(); setUndoRedoState(info.undoLeft, info.redoLeft); maybeFlashUndoTrimmed(info); // 서버가 기억하는 미저장 편집·실행취소 스택을 그대로 이어받는다
   curTemp = !!info.temp; curReadOnly = !!info.readOnly; updateTempBanner();
   buildPages(name, scale);
   updateStatusPage(); renderPageThumbs(); // 상태줄 쪽 번호·사이드바 축소본(WP-B1)
@@ -825,23 +924,12 @@ async function renderPdfDoc(name) {
   const hiddenCount = pdfObjects.reduce((n, objs) => n + objs.filter((o) => o.type === 'text' && o.hidden).length, 0);
   if (hiddenCount) flash(`이 문서의 텍스트 상자 ${hiddenCount}개는 투명합니다 — 수정 시 그림을 덮고 새로 그리며, 글꼴 모양이 달라질 수 있습니다`, 6000);
 }
-function rebuildDocText() { docText = pdfObjects.map((objs, i) => `[p.${i + 1}] ` + objs.filter((o) => o.type === 'text').map((o) => o.text).join(' ')).join('\n'); }
-// 상자 = 텍스트 객체 하나. 자동으로 묶지 않는다(표의 옆 칸 같은 다른 상자를 잘못 묶던 문제).
-// 예외: 같은 그룹 마크(EditorKimGroup)를 가진 객체들 — 줄바꿈 편집으로 생긴 줄들, 사용자가 Shift 클릭으로 묶은 상자들 — 은 상자 하나.
-// 그룹 안 텍스트는 위→아래, 왼→오른쪽 순서로 잇고, 기준선이 다르면 '\n', 같으면 그대로 이어붙인다(seps에 기록 → 가리기 범위 매핑에 사용).
-function groupLines(objs) {
-  const all = objs.filter((o) => o.type === 'text' && o.bounds);
-  const groups = new Map();
-  for (const o of all) { const k = o.group || `_${o.idx}`; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(o); }
-  const union = (arr) => arr.reduce((b, o) => ({ x0: Math.min(b.x0, o.bounds.x0), y0: Math.min(b.y0, o.bounds.y0), x1: Math.max(b.x1, o.bounds.x1), y1: Math.max(b.y1, o.bounds.y1) }), { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity });
-  const sameRow = (a, b) => Math.abs(a.bounds.y0 - b.bounds.y0) < 0.3 * Math.max(a.size || 10, b.size || 10);
-  return [...groups.entries()].map(([k, members]) => {
-    const sorted = members.sort((a, b) => (sameRow(a, b) ? a.bounds.x0 - b.bounds.x0 : b.bounds.y0 - a.bounds.y0));
-    const seps = sorted.slice(1).map((o, j) => (sameRow(o, sorted[j]) ? '' : '\n'));
-    const text = sorted.map((o, j) => (j ? seps[j - 1] : '') + o.text).join('');
-    return { objs: sorted, seps, text, group: k.startsWith('_') ? null : k, size: sorted[0].size, font: sorted[0].font, bounds: union(sorted) };
-  });
-}
+// 객체 text를 공백으로 이어 붙이면 "9 월   첫 째"처럼 조각 경계가 그대로 드러나 AI에 깨진 글이 간다 →
+// groupLines로 줄을 만들고 그 text(줄 안 이미 올바르게 이어붙임)를 줄바꿈으로 잇는다.
+function rebuildDocText() { docText = pdfObjects.map((objs, i) => `[p.${i + 1}] ` + groupLines(objs).map((line) => line.text).join('\n')).join('\n'); }
+// 상자 = 시각적 줄 하나(기준선으로 묶는다). window.groupLines는 /text-grouping.js가 정의한다 —
+// 근거·상수는 그 파일 머리말 주석을 볼 것. Node 쪽 회귀 검사는 app/text-grouping.test.js.
+const groupLines = (objs) => window.groupLines(objs);
 // page = pdfPages[i]({w,h,rotation}, 회전 후). 상자 좌표는 pdfToScreen이 회전을 반영해 화면 px로 바꿔 준다(WP-B2).
 function drawOverlay(wrap, i, objs, page) {
   const lines = groupLines(objs).map((line) => {
@@ -897,11 +985,16 @@ function attachResize(handle, i, o, page) {
     if (e.button !== 0) return;
     e.preventDefault(); e.stopPropagation();
     const box = handle.parentElement;
-    const left0 = box.offsetLeft, top0 = box.offsetTop, w0 = box.offsetWidth, h0 = box.offsetHeight, aspect = w0 / (h0 || 1);
+    // offsetLeft/Top/Width/Height는 정수로 반올림된다(CSSOM View 규격) — box.style.*는 pdfToScreen이 써 넣은 소수 그대로라 이걸 읽어야
+    // 변환 오차가 없다(실측: offset* 사용 시 회전0에서 손잡이 (+20,+10)px 드래그 결과가 기대값과 최대 0.67pt 어긋남, style 사용 시 0으로 줄어듦).
+    const left0 = parseFloat(box.style.left) || 0, top0 = parseFloat(box.style.top) || 0;
+    const w0 = parseFloat(box.style.width) || 0, h0 = parseFloat(box.style.height) || 0, aspect = w0 / (h0 || 1);
     const startX = e.clientX, startY = e.clientY;
+    const MIN_PX = 8; // 화면 px 최소 크기(더 작으면 손잡이를 다시 잡기 어렵다) — 절대 뒤집히거나(0/음수) 이보다 작아지지 않는다
     const compute = (e2) => {
-      const neww = Math.max(4, w0 + (e2.clientX - startX));
-      const newh = e2.shiftKey ? Math.max(4, h0 + (e2.clientY - startY)) : neww / aspect;
+      let neww = Math.max(MIN_PX, w0 + (e2.clientX - startX)), newh;
+      if (e2.shiftKey) newh = Math.max(MIN_PX, h0 + (e2.clientY - startY));
+      else { newh = neww / aspect; if (newh < MIN_PX) { newh = MIN_PX; neww = newh * aspect; } } // 종횡비 유지 중 최소 높이에 걸리면 너비도 같이 맞춘다
       return { neww, newh };
     };
     const onMove = (e2) => {
@@ -1135,7 +1228,7 @@ function openInlineEditor(initialText) {
       ai: () => activeAi, ensureAi, autoRecommend,
       onApply: async (result) => {
         if (cur !== name) return;
-        pdfDirty = true; showDirty(); setUndoRedoState(result.undoLeft, result.redoLeft);
+        pdfDirty = true; showDirty(); setUndoRedoState(result.undoLeft, result.redoLeft); maybeFlashUndoTrimmed(result);
         selectedObj = null; updateEditRadio(); panel.remove();
         await refreshPage(selection.i, result.idx);
         flash(`${result.fontLabel} 적용됨 (Ctrl+S로 저장)`);
@@ -1245,8 +1338,8 @@ function openInlineEditor(initialText) {
       const left = Math.max(0, row.filter((o) => o.bounds.x1 <= oldBounds.x0 + 1).reduce((m, o) => Math.max(m, o.bounds.x1), isFinite(pageL) ? Math.min(pageL, oldBounds.x0) : edgeL));
       const right = Math.min(edgeR, row.filter((o) => o.bounds.x0 >= oldBounds.x1 - 1).reduce((m, o) => Math.min(m, o.bounds.x0), isFinite(pageR) ? Math.max(pageR, oldBounds.x1) : edgeR));
       const maxWidth = Math.max(20, right - left - 2);
-      if (objs.length > 1) await pdfMutate('/api/pdf/edits', { name: cur, i, edits: objs.slice(1).map((o) => ({ idx: o.idx, text: ' ' })) });
-      const one = await pdfMutate('/api/pdf/fit', { name: cur, i, idx: objs[0].idx, text: newText, maxWidth, mode: fit });
+      // 나머지 조각 비우기까지 /api/pdf/fit 한 번에 맡긴다 — 스냅샷이 하나라 편집 한 번을 Ctrl+Z 한 번으로 되돌린다
+      const one = await pdfMutate('/api/pdf/fit', { name: cur, i, idx: objs[0].idx, text: newText, maxWidth, mode: fit, blank: objs.slice(1).map((o) => o.idx) });
       r = { ...one, results: [one] };
     }
     { const li = (r.results || []).flatMap((x) => x.lineIdxs || []); if (li.length) idxs = li; } // 투명 글자를 드러내거나 줄이 늘면 객체 위치가 바뀐다
@@ -1436,6 +1529,7 @@ async function rotatePages(indices, delta, label) {
     await pdfMutate('/api/pdf/pages/rotate', { name: cur, indices, delta });
     await renderPdfDoc(cur); // 회전으로 쪽 가로/세로가 바뀌므로 문서 전체를 다시 그린다
     flash(`${label} (Ctrl+Z로 실행 취소)`, 3000);
+    toast(label, { action: '실행 취소', onAction: undo });
   } catch {}
 }
 $('#rotateLeft').onclick = () => rotatePages([currentPageIndex()], -90, '현재 쪽을 왼쪽으로 회전했습니다');
@@ -1518,6 +1612,7 @@ async function onReorderPages(from, to) {
     await pdfMutate('/api/pdf/pages/reorder', { name: cur, order });
     await renderPdfDoc(cur); // 인덱스가 통째로 바뀌므로 문서 전체를 다시 그린다
     flash('페이지 순서를 바꿨습니다 (Ctrl+Z로 실행 취소)', 3000);
+    toast('페이지 순서를 바꿨습니다', { action: '실행 취소', onAction: undo });
   } catch {}
 }
 // 우클릭 메뉴: 삭제(기존 라우트) + 회전 ↺↻ + 새 파일로 저장(saveAs 대화상자 → 페이지 하나만 추출, WP-B2)
@@ -1580,7 +1675,13 @@ $('#splitRun').onclick = async () => {
   if (!splitDir) return flash('저장 폴더를 선택하세요');
   $('#splitResult').textContent = '처리 중…';
   try {
-    const r = await apiPost('/api/pdf/split', { name: cur, every, outDir: splitDir });
+    const r = await runJob('분할', (jobId) => apiPost('/api/pdf/split', { name: cur, every, outDir: splitDir, jobId }));
+    if (r.cancelled) {
+      const n = (r.files || []).length;
+      $('#splitResult').textContent = `취소됨 — ${n}개 파일까지 저장됨`;
+      flash(`취소됨 — ${n}개 파일까지 저장됨`, 4000);
+      return;
+    }
     $('#splitResult').textContent = `${r.files.length}개 파일로 나눴습니다 (${splitDir})`;
     flash(`분할 완료 — 파일 ${r.files.length}개`, 4000);
   } catch { $('#splitResult').textContent = '실패했습니다'; }
@@ -1713,7 +1814,13 @@ $('#downsampleFilesRun').onclick = async () => {
   const targetMb = +$('#downsampleFilesTarget').value, targetBytes = targetMb > 0 ? Math.round(targetMb * 1024 * 1024) : undefined;
   $('#downsampleFilesBody').innerHTML = '<tr><td colspan="3">처리 중…</td></tr>';
   try {
-    const r = await apiPost('/api/pdf/downsample-files', { paths: downsampleFilesPaths, maxDpi, quality, targetBytes });
+    const r = await runJob('여러 파일 용량 줄이기', (jobId) => apiPost('/api/pdf/downsample-files', { paths: downsampleFilesPaths, maxDpi, quality, targetBytes, jobId }));
+    if (r.cancelled) {
+      const n = (r.files || []).length;
+      $('#downsampleFilesBody').innerHTML = `<tr><td colspan="3">취소됨 — ${n}개 파일까지 저장됨</td></tr>`;
+      flash(`취소됨 — ${n}개 파일까지 저장됨`, 4000);
+      return;
+    }
     $('#downsampleFilesBody').innerHTML = '';
     for (const item of r.results) {
       const tr = document.createElement('tr');
@@ -1751,10 +1858,12 @@ $('#extractKeepInput').oninput = () => {
 async function runDeletePages(indices, label) {
   if (!indices.length) return flash('페이지를 선택하세요');
   try {
-    const r = await pdfMutate('/api/pdf/pages/delete', { name: cur, indices });
+    const r = await runJob(label, (jobId) => pdfMutate('/api/pdf/pages/delete', { name: cur, indices, jobId }));
     $('#pageExtractDialog').close();
-    await renderPdfDoc(cur); // 페이지 수가 바뀌므로 문서 전체를 다시 연다
+    await renderPdfDoc(cur); // 페이지 수가 바뀌므로(또는 취소로 원상 복구됐으므로) 문서 전체를 다시 연다
+    if (r.cancelled) { flash('취소됨 — 원래 상태로 되돌렸습니다', 4000); return; }
     flash(`${label} — ${r.removed}장 삭제, 총 ${r.pageCount}쪽 (Ctrl+Z로 실행 취소)`, 4000);
+    toast(label, { action: '실행 취소', onAction: undo });
   } catch {}
 }
 $('#extractKeepOnly').onclick = () => {
@@ -1803,7 +1912,12 @@ $('#mergeRun').onclick = async () => {
   const out = await window.editorKim.saveAs('병합.pdf', {});
   if (!out) return;
   try {
-    const r = await apiPost('/api/pdf/merge', { paths: list, out });
+    const r = await runJob('병합', (jobId) => apiPost('/api/pdf/merge', { paths: list, out, jobId }));
+    if (r.cancelled) {
+      const n = (r.files || []).length;
+      flash(`취소됨 — ${n}개 파일까지 저장됨`, 4000);
+      return;
+    }
     $('#mergeDialog').close();
     addFiles([out]);
     flash(`병합 완료 — ${r.pageCount}쪽 (${basename(out)})`, 4000);
@@ -1838,7 +1952,12 @@ $('#exportRun').onclick = async () => {
   }
   const format = $('#exportFormat').value, dpi = +$('#exportDpi').value;
   try {
-    const r = await apiPost('/api/pdf/export-images', { name: cur, pages, format, dpi, dir: exportDir });
+    const r = await runJob('이미지로 내보내기', (jobId) => apiPost('/api/pdf/export-images', { name: cur, pages, format, dpi, dir: exportDir, jobId }));
+    if (r.cancelled) {
+      const n = (r.files || []).length;
+      flash(`취소됨 — ${n}개 파일까지 저장됨`, 4000);
+      return;
+    }
     $('#exportImagesDialog').close();
     flash(`${r.files.length}개 파일을 ${exportDir}에 저장했습니다`, 4000);
   } catch {}
@@ -1881,13 +2000,20 @@ $('#downsampleRun').onclick = async () => {
   const targetBytes = targetMb > 0 ? Math.round(targetMb * 1024 * 1024) : undefined;
   $('#downsampleResult').textContent = '처리 중…';
   try {
-    const r = await pdfMutate('/api/pdf/downsample', { name: cur, maxDpi, quality, targetBytes });
+    const r = await runJob('용량 줄이기', (jobId) => pdfMutate('/api/pdf/downsample', { name: cur, maxDpi, quality, targetBytes, jobId }));
+    if (r.cancelled) {
+      $('#downsampleResult').textContent = '취소됨 — 원래 상태로 되돌렸습니다';
+      await renderPdfDoc(cur);
+      flash('취소됨 — 원래 상태로 되돌렸습니다', 4000);
+      return;
+    }
     const beforeMb = (r.before / 1024 / 1024).toFixed(2), afterMb = (r.after / 1024 / 1024).toFixed(2);
     const msg = `${beforeMb}MB → ${afterMb}MB · 이미지 ${r.changed}개 축소, ${r.skipped.length}개 건너뜀 (최대 ${r.used.maxDpi}dpi/품질 ${r.used.quality})`;
     $('#downsampleResult').innerHTML = r.reached === false
       ? `<span class="bad">목표 용량에 도달하지 못했습니다 — ${msg}${r.hint ? ' · ' + r.hint : ''}</span>` : msg;
     await renderPdfDoc(cur); // 이미지가 바뀌므로 문서 전체를 다시 연다
     flash('용량을 줄였습니다 (Ctrl+Z로 실행 취소)', 4000);
+    toast('용량을 줄였습니다', { action: '실행 취소', onAction: undo });
   } catch { $('#downsampleResult').textContent = '실패했습니다'; }
 };
 $('#downsampleClose').onclick = () => $('#downsampleDialog').close();
@@ -1977,7 +2103,7 @@ $('#send').onclick = async () => {
         if (!line.startsWith('data: ')) continue; const ev = JSON.parse(line.slice(6));
         if (ev.delta) { out += ev.delta; bot.textContent = mode === 'chat' ? out : `문서를 수정하는 중… ${out.length}자`; }
         if (ev.notice) flash(ev.notice, 4000);
-        if (ev.error) bot.textContent = '오류: ' + ev.error;
+        if (ev.error) { bot.textContent = '오류: ' + ev.error; if (ev.code === 'auth') showAuthBanner(activeAi.provider); } // P6 WP-B3: 로그인 만료
         if (ev.done) {
           out = ev.done.text || out;
           const seconds = Number.isFinite(ev.done.ms) ? `${(ev.done.ms / 1000).toFixed(1)}s` : '';

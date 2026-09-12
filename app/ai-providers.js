@@ -17,6 +17,15 @@ const needsShell = (file) => /\.(cmd|bat)$/i.test(file || '');
 const commandOpts = (file) => ({ env: ENV, windowsHide: true, shell: needsShell(file) });
 const commandFile = (file) => (needsShell(file) && /\s/.test(file) ? `"${file}"` : file);
 const abortError = () => Object.assign(new Error('중지됨'), { aborted: true });
+// P6 C2: 로그인 만료·미로그인을 공급자 오류 문구에서 알아본다. 두 CLI 모두 인증 실패를 전용 코드가 아니라
+// 사람이 읽는 문장(영문)으로만 알려 주므로 문구를 본다. 오탐이 나도 UI는 "다시 로그인" 배너를 띄울 뿐이라 안전한 쪽이다.
+const AUTH_ERROR_RE = /not logged in|log ?in|authentication|unauthori[sz]ed|invalid.*(api key|token)|expired|401|please run .*login/i;
+const isAuthError = (text) => AUTH_ERROR_RE.test(String(text ?? ''));
+// 공급자 오류 → Error. 인증 실패로 보이면 code:'auth'를 붙여 서버가 401/SSE로 UI에 알린다.
+const providerError = (text, fallback) => {
+  const message = String(text ?? '').trim() || fallback || '알 수 없는 오류';
+  return isAuthError(message) ? Object.assign(new Error(message), { code: 'auth' }) : new Error(message);
+};
 const codexInput = (prompt, images = []) => [{ type: 'text', text: prompt }, ...images.map((data) => ({ type: 'image', url: `data:image/png;base64,${data}` }))];
 const claudeInput = (prompt, images = []) => JSON.stringify({ type: 'user', parent_tool_use_id: null, message: { role: 'user', content: [
   { type: 'text', text: prompt }, ...images.map((data) => ({ type: 'image', source: { type: 'base64', media_type: 'image/png', data } })),
@@ -117,7 +126,7 @@ class CodexAppServer extends EventEmitter {
         const pending = this.pending.get(message.id);
         if (!pending) return;
         this.pending.delete(message.id); clearTimeout(pending.timer);
-        if (message.error) pending.reject(new Error(message.error.message || JSON.stringify(message.error)));
+        if (message.error) pending.reject(providerError(message.error.message || JSON.stringify(message.error)));
         else pending.resolve(message.result);
       } else if (message.method) this.emit('message', message);
     });
@@ -125,8 +134,8 @@ class CodexAppServer extends EventEmitter {
       for (const pending of this.pending.values()) { clearTimeout(pending.timer); pending.reject(error); }
       this.pending.clear();
     };
-    proc.on('exit', (code) => {
-      const error = new Error(stderr.trim() || `Codex App Server가 종료되었습니다 (${code})`);
+    proc.on('exit', (code) => { // stderr에 "not logged in" 류가 실려 오면 code:'auth'로 분류된다
+      const error = providerError(stderr, `Codex App Server가 종료되었습니다 (${code})`);
       if (this.proc === proc) this.proc = null;
       failAll(error); this.emit('stopped', error);
     });
@@ -213,10 +222,10 @@ class CodexAppServer extends EventEmitter {
           if (!params.item.phase || params.item.phase === 'final_answer') finalText = params.item.text || finalText;
         } else if (message.method === 'error' && params.error) {
           if (params.willRetry) return; // Codex가 스스로 재시도하는 일시 오류(네트워크 등)는 기다린다
-          cleanup(); reject(new Error(params.error.message || 'Codex 호출 오류'));
+          cleanup(); reject(providerError(params.error.message, 'Codex 호출 오류'));
         } else if (message.method === 'turn/completed') {
           cleanup();
-          if (params.turn?.status !== 'completed') return reject(new Error(params.turn?.error?.message || `Codex turn ${params.turn?.status || 'failed'}`));
+          if (params.turn?.status !== 'completed') return reject(providerError(params.turn?.error?.message, `Codex turn ${params.turn?.status || 'failed'}`));
           resolve({ text: finalText || lastAgentText || streamed, ms: Date.now() - startedAt,
             session: { threadId, generation: this.generation }, model, billing: 'ChatGPT 구독' });
         }
@@ -347,8 +356,9 @@ function createProviders({ version }) {
         if (settled) return;
         consume(buf + decoder.end());
         if (signal?.aborted) return finish(abortError());
-        if (result?.is_error) return finish(new Error(result.result || result.errors?.join('\n') || error.trim() || 'Claude 호출 오류'));
-        if (code !== 0) return finish(new Error(error.trim() || `Claude 프로세스가 종료되었습니다 (${code})`));
+        // P6 C2: is_error 결과·비정상 종료·stderr 어느 쪽으로 와도 같은 판별을 거쳐 code:'auth'가 붙는다
+        if (result?.is_error) return finish(providerError(result.result || result.errors?.join('\n') || error, 'Claude 호출 오류'));
+        if (code !== 0) return finish(providerError(error, `Claude 프로세스가 종료되었습니다 (${code})`));
         if (!result) return finish(new Error('Claude 완료 응답을 받지 못했습니다. 다시 시도하세요.'));
         finish(null, { text: result.result ?? text, cost: result.total_cost_usd, ms: result.duration_api_ms,
           session: result?.session_id, model: result?.modelUsage && Object.keys(result.modelUsage)[0], billing: 'Claude 구독' });
@@ -373,4 +383,4 @@ function createProviders({ version }) {
   };
 }
 
-module.exports = { createProviders, parseClaudeAuth, parseCodexAuth, pickExecutable, codexInput, claudeInput };
+module.exports = { createProviders, parseClaudeAuth, parseCodexAuth, pickExecutable, codexInput, claudeInput, isAuthError, providerError };

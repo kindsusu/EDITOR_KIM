@@ -1,13 +1,13 @@
 {
   "name": "editor-kim",
   "productName": "EDITOR_KIM",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "Local PDF & Markdown editor with true text editing and redaction — Claude Code or ChatGPT/Codex, no API key",
   "main": "app/main.js",
   "scripts": {
     "start": "electron .",
     "serve": "node app/server.js",
-    "test": "node app/pdf-engine.test.js && node app/ai-providers.test.js && node --test app/claude-provider.test.js && node app/pdf-fonts.test.js",
+    "test": "node app/pdf-engine.test.js && node app/text-grouping.test.js && node app/ai-providers.test.js && node app/server.test.js && node --test app/claude-provider.test.js && node app/pdf-fonts.test.js",
     "dist": "electron-builder --win",
     "md2pdf": "electron tools/md2pdf.js",
     "assets": "node tools/demo-assets.js",

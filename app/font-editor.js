@@ -23,7 +23,12 @@ window.openPdfFontEditor = async function ({ name, i, idx, text, ai = () => null
   input.value = text;
   const post = async (url, payload, signal) => {
     const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), signal });
-    const result = await res.json(); if (!res.ok || result.error) throw new Error(result.error || `HTTP ${res.status}`); return result;
+    const result = await res.json();
+    if (!res.ok || result.error) {
+      // P6 WP-B3: 401 code:'auth'(로그인 만료)를 던지는 쪽(index.html)이 배너를 띄울 수 있게 그대로 실어 보낸다
+      const err = new Error(result.error || `HTTP ${res.status}`); if (result.code) err.code = result.code; throw err;
+    }
+    return result;
   };
   const base = () => ({ name, i, idx, text: input.value, token: ctx?.token });
   const payload = () => ({ ...base(), fontId: select.value, size: Number(size.value), fit: el('.fontFit').checked });
@@ -88,7 +93,13 @@ window.openPdfFontEditor = async function ({ name, i, idx, text, ai = () => null
         el('.fontCandidates').appendChild(button);
       }
       if (result.candidates.length) { select.value = result.candidates[0].fontId; await preview(); }
-    } catch (error) { if (!closed) note.textContent = error.name === 'AbortError' ? '추천을 중지했습니다. 직접 선택할 수 있습니다.' : error.message; }
+    } catch (error) {
+      if (!closed) {
+        note.textContent = error.name === 'AbortError' ? '추천을 중지했습니다. 직접 선택할 수 있습니다.' : error.message;
+        // P6 WP-B3: 로그인이 만료됐으면(code:'auth') index.html의 상단 배너로 알린다(이 창은 로그인 대화상자를 모른다)
+        if (error.code === 'auth' && window.editorKimAuthError) window.editorKimAuthError(provider());
+      }
+    }
     finally { aiAbort = null; if (!closed) { rec.disabled = !ctx?.needsAi; el('.fontStop').hidden = true; } }
   }
   rec.onclick = recommend; el('.fontPreview').onclick = preview;

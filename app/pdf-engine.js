@@ -578,6 +578,7 @@ async function open(buffer) {
       const p = page(i), n = P.FPDFPage_CountObjects(p);
       const tp = P.FPDFText_LoadPage(p);
       const scratch = mal(32); // float 4개(bounds) + uint 4개(color) 공용
+      const mbuf = mal(24);    // FS_MATRIX {a,b,c,d,e,f} — 텍스트 객체의 기준선 원점(e,f)을 읽는다
       try {
         const list = [];
         for (let idx = 0; idx < n; idx++) {
@@ -621,11 +622,20 @@ async function open(buffer) {
             const len = P.FPDFFont_GetBaseFontName(font, nb, 256);
             item.font = len ? M.UTF8ToString(nb) : '';
             free(nb);
+            // 기준선(baseline). bounds.y0는 글자 잉크의 아래끝이라 같은 줄이라도 글자마다 다르다
+            // ("(" 처럼 아래로 내려가는 글자, 받침 없는 글자…) → 줄 묶기에 쓰면 한 줄이 여러 행으로 쪼개진다.
+            // 텍스트 행렬의 (e,f)가 그 객체가 그려지기 시작한 기준선 원점이므로 줄 판정은 이것으로 한다.
+            if (P.FPDFPageObj_GetMatrix(o, mbuf)) {
+              const m = [0, 1, 2, 3, 4, 5].map((k) => f32(mbuf + k * 4));
+              item.matrix = m;                        // [a,b,c,d,e,f]
+              item.origin = { x: m[4], y: m[5] };     // 기준선 시작점
+              item.scaledSize = item.size * Math.hypot(m[0], m[1]); // 행렬 배율까지 반영한 실제 글자 크기
+            }
           }
           list.push(item);
         }
         return list;
-      } finally { free(scratch); P.FPDFText_ClosePage(tp); }
+      } finally { free(scratch); free(mbuf); P.FPDFText_ClosePage(tp); }
     },
 
     // 줄바꿈 지원: PDF 텍스트 객체는 한 줄이라 '\n'을 넣으면 □로 그려진다.
