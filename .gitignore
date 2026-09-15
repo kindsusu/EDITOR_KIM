@@ -5,3 +5,4 @@ workspace/*
 !workspace/sample.pdf
 !workspace/회의록_초안.md
 !workspace/회의록_초안.pdf
+.claude/

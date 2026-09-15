@@ -27,6 +27,12 @@ const SIZE_DIFF_MAX = 0.6;
 const RULE_MAX_WIDTH = 3;
 // 세로 괘선으로 볼 비텍스트 객체의 높이 하한(pt) — 이보다 낮으면 점·장식이라 표 경계가 아니다.
 const RULE_MIN_HEIGHT = 4;
+// 두 조각이 모두 투명(hidden)일 때 쓰는 간격 병합 경계.
+// 투명 조각은 그림 위 검색용 텍스트라 실제로 보이는 것은 그림 속 글자 한 줄이고,
+// 조각의 폭·간격은 그림을 못 그리는 대체 폰트(예: 한글 그림 위의 Calibri) 기준이라 의미가 없다.
+// 표 칸 사이 간격은 투명 조각에서도 3 이상으로 측정되므로(세로 괘선 검사가 여전히 칸을 분리한다)
+// 3.0을 병합 경계로 잡아도 표 칸이 잘못 합쳐지지 않는다.
+const HIDDEN_GAP_MERGE_RATIO = 3.0;
 
 // 기준선(baseline) y좌표. matrix가 있고 b(기울임/회전 성분)가 거의 0이면 수평 텍스트이므로
 // origin.y(=행렬의 f)를 그대로 쓴다. 회전·기울임이면 origin.y가 기울어진 선 위의 한 점이라
@@ -93,11 +99,16 @@ function mergeRow(rowItems, nonText) {
   for (let j = 1; j < sorted.length; j++) {
     const cur = boxes[boxes.length - 1], a = cur[cur.length - 1], b = sorted[j];
     const gap = (b.bounds.x0 - a.bounds.x1) / Math.max(sizeOf(a), sizeOf(b));
-    const sameFont = a.font === b.font;
+    // 투명(그림 위 검색용) 조각은 같은 글꼴이 `BCDEEE+Calibri-Bold` / `Calibri-Bold`처럼 서브셋 접두어만 다르게 잡혀 줄이 끊긴다
+    // (덱 실측: 1쪽 인접쌍 7개 중 5개). 어차피 대체 글꼴로 다시 그리므로 접두어를 뗀 이름으로 비교한다. 보이는 글자는 그대로 엄격 비교
+    const bothHidden = !!a.hidden && !!b.hidden;
+    const baseName = (f) => String(f || '').replace(/^[A-Z]{6}\+/, '');
+    const sameFont = bothHidden ? baseName(a.font) === baseName(b.font) : a.font === b.font;
     const sameSize = Math.abs(sizeOf(a) - sizeOf(b)) < SIZE_DIFF_MAX;
     const sameHidden = !!a.hidden === !!b.hidden;
     const sameColor = a.color[0] === b.color[0] && a.color[1] === b.color[1] && a.color[2] === b.color[2]; // 알파 제외
-    if (gap < GAP_MERGE_RATIO && sameFont && sameSize && sameHidden && sameColor && !hasVerticalRuleBetween(a, b, nonText)) cur.push(b);
+    const limit = (a.hidden && b.hidden) ? HIDDEN_GAP_MERGE_RATIO : GAP_MERGE_RATIO;
+    if (gap < limit && sameFont && sameSize && sameHidden && sameColor && !hasVerticalRuleBetween(a, b, nonText)) cur.push(b);
     else boxes.push([b]);
   }
   return boxes.map((members) => ({

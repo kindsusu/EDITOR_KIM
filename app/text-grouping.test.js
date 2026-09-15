@@ -86,7 +86,48 @@ function rule({ x0, y0, x1, y1 }) { return { idx: nextIdx++, type: 'path', text:
   assert.strictEqual(lines[0].text, '첫째 줄\n둘째 줄');
 }
 
-console.log('OK — 합성 객체 단위 검사 ①~⑦ 통과');
+// ⑧ 둘 다 hidden·간격 2.0×크기 → 한 상자 (그림 위 투명 텍스트는 병합 경계를 3.0까지 넓힌다)
+{
+  const a = T('가', { x0: 0, y0: 0, x1: 9, y1: 10, hidden: true });
+  const b = T('나', { x0: 29, y0: 0, x1: 38, y1: 10, hidden: true }); // 간격 (29-9)/10 = 2.0
+  const lines = groupLines([a, b]);
+  assert.strictEqual(lines.length, 1, '⑧ 둘 다 hidden·간격 2.0 → 한 상자');
+  assert.strictEqual(lines[0].text, '가나');
+}
+
+// ⑨ ⑧과 같은 좌표인데 hidden이 아니면 → 두 상자 (일반 텍스트는 여전히 0.6 경계)
+{
+  const a = T('가', { x0: 0, y0: 0, x1: 9, y1: 10, hidden: false });
+  const b = T('나', { x0: 29, y0: 0, x1: 38, y1: 10, hidden: false });
+  const lines = groupLines([a, b]);
+  assert.strictEqual(lines.length, 2, '⑨ 보이는 글자는 간격 2.0 → 두 상자(변화 없음)');
+}
+
+// ⑩ 둘 다 hidden·간격 2.0인데 사이에 세로선 → 두 상자 (표 칸 경계 검사는 hidden에서도 유지)
+{
+  const a = T('가', { x0: 0, y0: 100, x1: 9, y1: 110, originY: 105, hidden: true });
+  const b = T('나', { x0: 29, y0: 100, x1: 38, y1: 110, originY: 105, hidden: true });
+  const mid = (a.bounds.x1 + b.bounds.x0) / 2;
+  const line = rule({ x0: mid - 1, x1: mid + 1, y0: 95, y1: 115 });
+  const lines = groupLines([a, b, line]);
+  assert.strictEqual(lines.length, 2, '⑩ hidden이어도 세로선 있으면 두 상자');
+}
+
+// ⑪ 둘 다 hidden, 글꼴 이름이 서브셋 접두어(BCDEEE+)만 다름 → 한 상자 (실측: 그림 글자 덱의 조각 대부분이 이 경우)
+{
+  const a = T('가', { x0: 0, y0: 100, x1: 9, y1: 110, originY: 105, hidden: true, font: 'BCDEEE+Calibri-Bold' });
+  const b = T('나', { x0: 12, y0: 100, x1: 21, y1: 110, originY: 105, hidden: true, font: 'Calibri-Bold' });
+  assert.strictEqual(groupLines([a, b]).length, 1, '⑪ hidden끼리는 접두어 뗀 글꼴 이름으로 비교');
+}
+
+// ⑫ 같은 쌍인데 보이는 글자 → 두 상자 (보이는 글자는 글꼴 엄격 비교 유지)
+{
+  const a = T('가', { x0: 0, y0: 100, x1: 9, y1: 110, originY: 105, font: 'BCDEEE+Calibri-Bold' });
+  const b = T('나', { x0: 12, y0: 100, x1: 21, y1: 110, originY: 105, font: 'Calibri-Bold' });
+  assert.strictEqual(groupLines([a, b]).length, 2, '⑫ 보이는 글자는 글꼴 이름이 다르면 분리');
+}
+
+console.log('OK — 합성 객체 단위 검사 ①~⑫ 통과');
 
 // --- 통합 검사: 저장소 표본 PDF ---
 (async () => {

@@ -53,6 +53,7 @@
   #emptyState .emptyCard{display:flex;flex-direction:column;align-items:center;gap:10px;max-width:420px;width:100%}
   #emptyState .emptyBig{font-size:20px;padding:12px 20px}
   #emptyState .emptyRecent{display:flex;flex-direction:column;gap:2px;width:100%;max-height:160px;overflow:auto;text-align:left}
+  #emptyState .emptyRecent .f{flex:0 0 auto}
   #emptyState .emptyTools{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-top:6px}
   #dropOverlay{position:fixed;inset:0;z-index:20;background:#000a;color:#fff;display:flex;align-items:center;justify-content:center;font-size:22px;border:3px dashed var(--acc);pointer-events:none}
   /* WP-B2: 검색 막대(Ctrl+F), 페이지 안 검색 강조 상자 */
@@ -569,9 +570,9 @@ function renderRecent() {
   renderEmptyRecent();
 }
 $('#recentList').onclick = (e) => { const el = e.target.closest('[data-r]'); if (el) openRecent(el.dataset.r); };
-// WP-B1: 빈 상태 카드의 최근 파일(최대 8개)
+// WP-B1: 빈 상태 카드의 최근 파일(최대 6개, 사이드바 목록은 그대로 전체 표시)
 function renderEmptyRecent() {
-  const r = loadRecent().slice(0, 8);
+  const r = loadRecent().slice(0, 6);
   $('#emptyRecent').hidden = !r.length;
   $('#emptyRecent').replaceChildren(...r.map((p) => fileEntry(p, true)));
 }
@@ -932,7 +933,7 @@ async function renderPdfDoc(name) {
   rebuildDocText();
   // 투명 글자(그림 위 검색용 텍스트)가 있으면 열 때 한 번만 알린다
   const hiddenCount = pdfObjects.reduce((n, objs) => n + objs.filter((o) => o.type === 'text' && o.hidden).length, 0);
-  if (hiddenCount) flash(`이 문서의 텍스트 상자 ${hiddenCount}개는 투명합니다 — 수정 시 그림을 덮고 새로 그리며, 글꼴 모양이 달라질 수 있습니다`, 6000);
+  if (hiddenCount) flash(`이 문서의 텍스트 상자 ${hiddenCount}개는 투명합니다 — 수정 시 그림을 덮고 새로 그리며, 글꼴 모양이 달라질 수 있습니다 — 줄 단위로 묶어 보여줍니다`, 6000);
 }
 // 객체 text를 공백으로 이어 붙이면 "9 월   첫 째"처럼 조각 경계가 그대로 드러나 AI에 깨진 글이 간다 →
 // groupLines로 줄을 만들고 그 text(줄 안 이미 올바르게 이어붙임)를 줄바꿈으로 잇는다.
