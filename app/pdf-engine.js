@@ -109,6 +109,7 @@ async function pdfium() {
     const wasmBinary = fs.readFileSync(require.resolve('@embedpdf/pdfium/pdfium.wasm'));
     _P = await require('@embedpdf/pdfium').init({ wasmBinary });
     _P.PDFiumExt_Init();
+    require('./pdf-system-fonts').install(_P);
   }
   return _P;
 }
@@ -673,10 +674,10 @@ async function open(buffer) {
           const text = lines[k] || ' ';
           const entry = chosenFont(o);
           let font = entry ? customFont(entry, text) : P.FPDFTextObj_GetFont(o), fb = false;
-          if (!canRender(font, text, size)) { font = fallbackFont(bold, text); fb = true; if (!font || !canRender(font, text, size)) continue; }
+          if (!canRender(font, text, size)) { font = fallbackFont(bold, text); fb = true; if (!font || !canRender(font, text, size)) return { ok: false, reason: '입력한 글자를 표시할 폰트가 없습니다.' }; }
           const neo = P.FPDFPageObj_CreateTextObj(doc, font, size);
           const u = utf16(text); const ok = neo && P.FPDFText_SetText(neo, u); free(u);
-          if (!ok) { if (neo) P.FPDFPageObj_Destroy(neo); continue; }
+          if (!ok) { if (neo) P.FPDFPageObj_Destroy(neo); return { ok: false, reason: '새 줄을 만들지 못했습니다.' }; }
           M.setValue(m + 16, e - k * lh * cc, 'float'); M.setValue(m + 20, f - k * lh * d, 'float'); P.FPDFPageObj_SetMatrix(neo, m);
           if (color) P.FPDFPageObj_SetFillColor(neo, color[0], color[1], color[2], color[3]);
           copyTextStyle(o, neo);
@@ -687,7 +688,7 @@ async function open(buffer) {
           lineIdxs.push(P.FPDFPage_CountObjects(p) - 1); fallback = fallback || fb;
         }
         P.FPDFPage_GenerateContent(p);
-        return { ok: true, fallbackFont: fallback, inserted: lineIdxs.length - 1, lineIdxs, group: gid };
+        return { ok: true, fallbackFont: fallback, inserted: lineIdxs.length - 1, lineIdxs, group: gid, ...(r.revealed ? { revealed: true } : {}) };
       } finally { free(m); free(c); }
     },
     // 폭 맞춤. 긴 글을 넣어도 옆 글자와 겹치지 않게:
@@ -696,10 +697,13 @@ async function open(buffer) {
     //   'none'   그대로 (setText)
     fitText(i, idx, text, maxWidth, mode = 'wrap') {
       if (!(maxWidth > 0) || mode === 'none') return api.setText(i, idx, text);
-      const width = (s) => { const r = api._setOne(i, idx, s); if (!r.ok) return -1; if (r.idx != null) idx = r.idx; const b = api.objects(i)[idx].bounds; return b.x1 - b.x0; };
+      let revealed = false, measurementFailure = null;
+      const width = (s) => { const r = api._setOne(i, idx, s); if (!r.ok) { measurementFailure = r; return -1; } if (r.idx != null) idx = r.idx; revealed ||= !!r.revealed; const b = api.objects(i)[idx].bounds; return b.x1 - b.x0; };
+      const result = (r) => revealed ? { ...r, revealed: true, ...(r.lineIdxs ? {} : { idx: r.idx ?? idx }) } : r;
       const lines = String(text ?? '').split(/\r?\n/);
       if (mode === 'shrink') {
         const w = Math.max(...lines.map(width));
+        if (measurementFailure) return measurementFailure;
         const r = api.setText(i, idx, text);
         if (r.ok && w > maxWidth) {
           const s = maxWidth / w, m = mal(24), p = page(i);
@@ -714,12 +718,13 @@ async function open(buffer) {
           } finally { free(m); }
           r.scaled = s;
         }
-        return r;
+        return result(r);
       }
       const out = [];
       for (let line of lines) {
         for (let guard = 0; guard < 50 && line !== null; guard++) {
           const w = width(line);
+          if (measurementFailure) return measurementFailure;
           if (w < 0 || w <= maxWidth || line.trim().length < 2) { out.push(line); break; }
           let cut = Math.max(1, Math.floor(line.length * maxWidth / w)); // 폭 비례로 자르고, 그 앞의 공백이 있으면 단어 경계로
           const sp = line.lastIndexOf(' ', cut); if (sp > 0) cut = sp;
@@ -729,7 +734,7 @@ async function open(buffer) {
       }
       const r = api.setText(i, idx, out.join('\n'));
       r.wrapped = out.length;
-      return r;
+      return result(r);
     },
 
     // 한 줄 교체(내부). 1) 원본 폰트로 그릴 수 있으면 그대로 SetText (폰트·모양 보존)

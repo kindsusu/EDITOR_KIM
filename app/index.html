@@ -1325,11 +1325,12 @@ function openInlineEditor(initialText) {
     close();
     if (newText === text) return; // 변경 없으면 그대로 둔다
     let idxs = objs.map((o) => o.idx);
+    let editObjs = objs, remove = [];
     if (selectedObj.group) {
-      // 그룹(줄바꿈 줄들·사용자 묶음): 첫 객체(가장 작은 idx)만 남기고 나머지는 지운 뒤 첫 객체에 전체 텍스트를 다시 넣는다 (뒤 idx부터 지워 앞 idx가 안 밀리게)
+      // 그룹의 나머지 객체 제거도 같은 편집 트랜잭션에 포함한다.
       const first = objs.reduce((a, o) => (o.idx < a.idx ? o : a));
-      for (const o of objs.filter((o) => o !== first).sort((a, b) => b.idx - a.idx)) await pdfMutate('/api/pdf/remove', { name: cur, i, idx: o.idx });
-      objs.splice(0, objs.length, first); idxs = [first.idx];
+      remove = objs.filter((o) => o !== first).map((o) => o.idx);
+      editObjs = [first]; idxs = [first.idx];
     }
     // 줄을 이루는 조각 객체 중 첫 조각에 전체 텍스트를 넣고 나머지는 비운다 (원본 폰트 유지, idx는 편집 후에도 안정적)
     // 빈 문자열("")로 SetText하면 PDFium(WASM)이 unreachable로 죽는다 — 대신 공백 하나로 채운다 (원래도 조각 사이에 공백이 섞여 있어 시각적으로 동일)
@@ -1337,11 +1338,12 @@ function openInlineEditor(initialText) {
     const fit = fitSel.value;
     let r;
     if (fit === 'none') {
-      const edits = [...objs.slice(1).map((o) => ({ idx: o.idx, text: ' ' })), { idx: objs[0].idx, text: newText }];
-      r = await pdfMutate('/api/pdf/edits', { name: cur, i, edits });
+      const edits = [...editObjs.slice(1).map((o) => ({ idx: o.idx, text: ' ' })), { idx: editObjs[0].idx, text: newText }];
+      r = await pdfMutate('/api/pdf/edits', { name: cur, i, edits, remove });
     } else {
       // 사용 가능한 폭 = 같은 줄에서 왼쪽 이웃의 오른쪽 끝 ~ 오른쪽 이웃의 왼쪽 끝 (이웃이 없으면 페이지 본문의 좌우 끝)
-      const size = selectedObj.size || 10, texts = (pdfObjects[i] || []).filter((o) => o.type === 'text' && o.bounds && !idxs.includes(o.idx));
+      const size = selectedObj.size || 10, originalIdxs = new Set(objs.map((o) => o.idx));
+      const texts = (pdfObjects[i] || []).filter((o) => o.type === 'text' && o.bounds && !originalIdxs.has(o.idx));
       const row = texts.filter((o) => Math.abs(o.bounds.y0 - oldBounds.y0) < 0.6 * size);
       const pageL = Math.min(...texts.map((o) => o.bounds.x0)), pageR = Math.max(...texts.map((o) => o.bounds.x1));
       // 이웃이 없어도 페이지 가장자리(여백 18pt)는 넘지 않는다
@@ -1350,10 +1352,10 @@ function openInlineEditor(initialText) {
       const right = Math.min(edgeR, row.filter((o) => o.bounds.x0 >= oldBounds.x1 - 1).reduce((m, o) => Math.min(m, o.bounds.x0), isFinite(pageR) ? Math.max(pageR, oldBounds.x1) : edgeR));
       const maxWidth = Math.max(20, right - left - 2);
       // 나머지 조각 비우기까지 /api/pdf/fit 한 번에 맡긴다 — 스냅샷이 하나라 편집 한 번을 Ctrl+Z 한 번으로 되돌린다
-      const one = await pdfMutate('/api/pdf/fit', { name: cur, i, idx: objs[0].idx, text: newText, maxWidth, mode: fit, blank: objs.slice(1).map((o) => o.idx) });
+      const one = await pdfMutate('/api/pdf/fit', { name: cur, i, idx: editObjs[0].idx, text: newText, maxWidth, mode: fit, blank: editObjs.slice(1).map((o) => o.idx), remove });
       r = { ...one, results: [one] };
     }
-    { const li = (r.results || []).flatMap((x) => x.lineIdxs || []); if (li.length) idxs = li; } // 투명 글자를 드러내거나 줄이 늘면 객체 위치가 바뀐다
+    if (r.lineIdxs?.length) idxs = r.lineIdxs; // 투명 글자를 드러내거나 줄이 늘면 객체 위치가 바뀐다
     if (align !== 'left') { // 새 폭을 재서 왼쪽/오른쪽 끝이 원래 자리에 오도록 이동
       const fresh = await (await fetch(`/api/pdf/objects?name=${encodeURIComponent(cur)}&i=${i}`)).json();
       const nb = idxs.reduce((b, ix) => {
@@ -1364,7 +1366,7 @@ function openInlineEditor(initialText) {
       if (dx) await pdfMutate('/api/pdf/move', { name: cur, i, idxs, dx, dy: 0 });
     }
     selectedObj = null; updateEditRadio();
-    await refreshPage(i, objs[0].idx);
+    await refreshPage(i, idxs[0]);
     const addedLines = (r.results || []).reduce((n, x) => n + (x.inserted || 0), 0);
     const revealed = (r.results || []).some((x) => x.revealed) || r.revealed;
     flash(revealed ? '그림으로 그려진 글자였습니다 — 그림을 배경색으로 덮고 글자를 새로 그렸습니다' : r.scaled ? `폭에 맞춰 글자를 ${Math.round(r.scaled * 100)}%로 줄였습니다` : addedLines ? `줄 ${addedLines}개를 아래에 추가했습니다 — 기존 줄과 겹치면 드래그로 옮기세요` : r.fallbackFont ? '원본 폰트에 없는 글자라 맑은 고딕으로 대체됨' : '저장 전 (Ctrl+S)');

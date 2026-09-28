@@ -12,11 +12,11 @@ const WS = path.join(__dirname, '..', 'workspace');
 // 합성 텍스트 객체. matrix는 [1, skewB, 0, 1, originX, originY] — 회전·기울임 없는 보통 글자는 skewB=0이라
 // origin.y(=matrix[5])가 그대로 기준선이고, scaledSize = size(행렬 배율 1이므로).
 let nextIdx = 0;
-function T(text, { x0, y0, x1, y1, originX = x0, originY = y0, size = 10, font = 'Helvetica', hidden = false, color = [0, 0, 0, 255], group = null, skewB = 0 }) {
+function T(text, { x0, y0, x1, y1, originX = x0, originY = y0, size = 10, font = 'Helvetica', fontId, hidden = false, color = [0, 0, 0, 255], group = null, skewB = 0 }) {
   const matrix = [1, skewB, 0, 1, originX, originY];
   return {
     idx: nextIdx++, type: 'text', text, bounds: { x0, y0, x1, y1 },
-    size, font, hidden, color, group,
+    size, font, fontId, hidden, color, group,
     matrix, origin: { x: originX, y: originY }, scaledSize: size * Math.hypot(matrix[0], matrix[1]),
   };
 }
@@ -120,14 +120,24 @@ function rule({ x0, y0, x1, y1 }) { return { idx: nextIdx++, type: 'path', text:
   assert.strictEqual(groupLines([a, b]).length, 1, '⑪ hidden끼리는 접두어 뗀 글꼴 이름으로 비교');
 }
 
-// ⑫ 같은 쌍인데 보이는 글자 → 두 상자 (보이는 글자는 글꼴 엄격 비교 유지)
+// ⑫ 보이는 글자도 서브셋 접두어만 다르면 한 상자
 {
-  const a = T('가', { x0: 0, y0: 100, x1: 9, y1: 110, originY: 105, font: 'BCDEEE+Calibri-Bold' });
-  const b = T('나', { x0: 12, y0: 100, x1: 21, y1: 110, originY: 105, font: 'Calibri-Bold' });
-  assert.strictEqual(groupLines([a, b]).length, 2, '⑫ 보이는 글자는 글꼴 이름이 다르면 분리');
+  const a = T('가', { x0: 0, y0: 100, x1: 9, y1: 110, originY: 105, font: 'BCDEEE+Pretendard-Bold' });
+  const b = T('나', { x0: 12, y0: 100, x1: 21, y1: 110, originY: 105, font: 'FGHIJK+Pretendard-Bold' });
+  assert.strictEqual(groupLines([a, b]).length, 1, '⑫ 보이는 글자는 서브셋 접두어 차이를 무시');
 }
 
-console.log('OK — 합성 객체 단위 검사 ①~⑫ 통과');
+// ⑬ 접두어 정규화 뒤에도 서로 다른 굵기와 명시적 fontId는 분리
+{
+  const a = T('가', { x0: 0, y0: 100, x1: 9, y1: 110, originY: 105, font: 'BCDEEE+Pretendard-Bold' });
+  const bold = T('나', { x0: 12, y0: 100, x1: 21, y1: 110, originY: 105, font: 'FGHIJK+Pretendard-Regular' });
+  assert.strictEqual(groupLines([a, bold]).length, 2, '⑬ Bold와 Regular는 분리');
+  const idA = T('다', { x0: 0, y0: 100, x1: 9, y1: 110, originY: 105, font: 'Pretendard-Bold', fontId: 'font-a' });
+  const idB = T('라', { x0: 12, y0: 100, x1: 21, y1: 110, originY: 105, font: 'Pretendard-Bold', fontId: 'font-b' });
+  assert.strictEqual(groupLines([idA, idB]).length, 2, '⑬ 명시적 fontId가 다르면 분리');
+}
+
+console.log('OK — 합성 객체 단위 검사 ①~⑬ 통과');
 
 // --- 통합 검사: 저장소 표본 PDF ---
 (async () => {

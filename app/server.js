@@ -16,6 +16,7 @@ const CONF = path.join(os.homedir(), '.editor-kim.json');
 const pdfEngine = require('./pdf-engine');
 const pdfFonts = require('./pdf-fonts');
 const fontService = require('./pdf-font-service');
+const { applyEdits, verifyEdits } = require('./pdf-edit-service');
 const APP_VERSION = require('../package.json').version;
 const ai = require('./ai-providers').createProviders({ version: APP_VERSION });
 
@@ -78,6 +79,36 @@ function snapshot(entry, i) {
   if (entry.undo.length > UNDO_MAX) entry.undo.shift();
   entry.redo = [];
   trimStacks(entry);
+}
+// All line fragments are edited on a private copy. A failed PDFium operation
+// never changes the live document, dirty bit, or either history stack.
+async function editTransaction(entry, i, edits, options = {}) {
+  const originalDoc = entry.doc, originalUndo = entry.undo, originalRedo = entry.redo;
+  const originalUndoLength = originalUndo.length, originalRedoLength = originalRedo.length, originalDirty = entry.dirty;
+  const before = originalDoc.save();
+  let next = await pdfEngine.open(before);
+  let result;
+  try {
+    result = applyEdits(next, i, edits, options);
+    const persisted = await pdfEngine.open(next.save());
+    try { verifyEdits(persisted, i, edits, result.results); }
+    catch (error) { persisted.close(); throw error; }
+    next.close(); next = persisted;
+    // Opening the copy yields to the event loop; refuse to overwrite a newer edit.
+    if (entry.doc !== originalDoc || entry.undo !== originalUndo || entry.redo !== originalRedo ||
+      entry.undo.length !== originalUndoLength || entry.redo.length !== originalRedoLength || entry.dirty !== originalDirty ||
+      !entry.doc.save().equals(before)) {
+      throw new Error('파일이 변경됐습니다. 다시 편집하세요.');
+    }
+  } catch (error) { next.close(); throw error; }
+  entry.undo.push({ bytes: before, page: i });
+  if (entry.undo.length > UNDO_MAX) entry.undo.shift();
+  entry.redo = [];
+  trimStacks(entry);
+  entry.doc = next;
+  entry.dirty = true;
+  originalDoc.close();
+  return result;
 }
 // undoTrimmed는 1회성: 한 번 실어 보낸 뒤 되돌린다(UI가 "오래된 실행 취소 기록을 버렸습니다"를 한 번만 알리게)
 const stacks = (entry) => {
@@ -633,18 +664,14 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/pdf/edit' && req.method === 'POST') {
       const { name, i, idx, text } = JSON.parse(await body(req));
       const entry = await getPdfDoc(name);
-      snapshot(entry, i);
-      const r = entry.doc.setText(i, idx, text);
-      entry.dirty = true;
+      const { primaryResult: r } = await editTransaction(entry, i, [{ idx, text }], { primary: idx });
       return json(res, 200, { ...r, ...stacks(entry) });
     }
     if (url.pathname === '/api/pdf/edits' && req.method === 'POST') {
-      const { name, i, edits } = JSON.parse(await body(req));
+      const { name, i, edits, remove } = JSON.parse(await body(req));
       const entry = await getPdfDoc(name);
-      snapshot(entry, i);
-      const results = edits.map(({ idx, text }) => entry.doc.setText(i, idx, text));
-      entry.dirty = true;
-      return json(res, 200, { results, fallbackFont: results.some((r) => r.fallbackFont), ...stacks(entry) });
+      const result = await editTransaction(entry, i, edits, { primary: edits?.at(-1)?.idx, remove: [].concat(remove || []) });
+      return json(res, 200, { ...result, lineIdxs: result.primaryResult.lineIdxs || [result.primaryResult.idx], ...stacks(entry) });
     }
     if (url.pathname === '/api/pdf/group' && req.method === 'POST') { // 상자 묶기(id 생략→새 그룹) / 풀기(id:null)
       const { name, i, idxs, id } = JSON.parse(await body(req));
@@ -657,14 +684,14 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/api/pdf/fit' && req.method === 'POST') { // 폭 맞춤 편집: wrap(줄바꿈) / shrink(축소) / none
       // blank: 같은 줄의 나머지 조각 idx들 — 여기서 함께 비운다. 편집 한 번은 실행 취소 한 번이어야 하는데,
       // 예전에는 UI가 /api/pdf/edits로 먼저 비우고 /api/pdf/fit을 또 불러 스냅샷이 두 개 쌓였다(Ctrl+Z 두 번 필요).
-      // 순서는 그대로 유지한다: 나머지를 먼저 비우고 첫 조각을 마지막에 — 줄바꿈으로 줄 객체가 늘면 뒤 인덱스가 밀리기 때문.
-      const { name, i, idx, text, maxWidth, mode, blank } = JSON.parse(await body(req));
+      const { name, i, idx, text, maxWidth, mode, blank, remove } = JSON.parse(await body(req));
       const entry = await getPdfDoc(name);
-      snapshot(entry, i);
-      for (const b of [].concat(blank || [])) entry.doc.setText(i, +b, ' ');
-      const r = entry.doc.fitText(i, idx, text, +maxWidth, mode);
-      entry.dirty = true;
-      return json(res, 200, { ...r, ...stacks(entry) });
+      const result = await editTransaction(entry, i, [
+        ...[].concat(blank || []).map((b) => ({ idx: b, text: ' ' })),
+        { idx, text },
+      ], { primary: idx, fit: { maxWidth: +maxWidth, mode }, remove: [].concat(remove || []) });
+      const r = result.primaryResult;
+      return json(res, 200, { ...r, lineIdxs: r.lineIdxs || [r.idx], ...stacks(entry) });
     }
     if (url.pathname === '/api/pdf/charboxes' && req.method === 'GET') {
       const { doc } = await getPdfDoc(url.searchParams.get('name'));

@@ -99,16 +99,17 @@ function mergeRow(rowItems, nonText) {
   for (let j = 1; j < sorted.length; j++) {
     const cur = boxes[boxes.length - 1], a = cur[cur.length - 1], b = sorted[j];
     const gap = (b.bounds.x0 - a.bounds.x1) / Math.max(sizeOf(a), sizeOf(b));
-    // 투명(그림 위 검색용) 조각은 같은 글꼴이 `BCDEEE+Calibri-Bold` / `Calibri-Bold`처럼 서브셋 접두어만 다르게 잡혀 줄이 끊긴다
-    // (덱 실측: 1쪽 인접쌍 7개 중 5개). 어차피 대체 글꼴로 다시 그리므로 접두어를 뗀 이름으로 비교한다. 보이는 글자는 그대로 엄격 비교
-    const bothHidden = !!a.hidden && !!b.hidden;
+    // PDF의 6자리 서브셋 접두어는 글꼴의 다른 스타일을 뜻하지 않는다.
+    // 보이는 글자와 hidden 글자 모두 접두어를 제외해 비교하되, 스타일 이름(예: Bold)은 유지한다.
     const baseName = (f) => String(f || '').replace(/^[A-Z]{6}\+/, '');
-    const sameFont = bothHidden ? baseName(a.font) === baseName(b.font) : a.font === b.font;
+    const sameFont = baseName(a.font) === baseName(b.font);
+    // 명시적 폰트 ID가 양쪽에 있으면 서로 다른 ID를 합치지 않는다.
+    const sameFontId = !a.fontId || !b.fontId || a.fontId === b.fontId;
     const sameSize = Math.abs(sizeOf(a) - sizeOf(b)) < SIZE_DIFF_MAX;
     const sameHidden = !!a.hidden === !!b.hidden;
     const sameColor = a.color[0] === b.color[0] && a.color[1] === b.color[1] && a.color[2] === b.color[2]; // 알파 제외
     const limit = (a.hidden && b.hidden) ? HIDDEN_GAP_MERGE_RATIO : GAP_MERGE_RATIO;
-    if (gap < limit && sameFont && sameSize && sameHidden && sameColor && !hasVerticalRuleBetween(a, b, nonText)) cur.push(b);
+    if (gap < limit && sameFont && sameFontId && sameSize && sameHidden && sameColor && !hasVerticalRuleBetween(a, b, nonText)) cur.push(b);
     else boxes.push([b]);
   }
   return boxes.map((members) => ({
