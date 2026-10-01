@@ -1,7 +1,7 @@
 {
   "name": "editor-kim",
   "productName": "EDITOR_KIM",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "description": "Local PDF & Markdown editor with true text editing and redaction — Claude Code or ChatGPT/Codex, no API key",
   "main": "app/main.js",
   "scripts": {
