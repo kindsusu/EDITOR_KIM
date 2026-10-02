@@ -153,7 +153,48 @@ function rule({ x0, y0, x1, y1 }) { return { idx: nextIdx++, type: 'path', text:
   assert.strictEqual(lines[0].text, '123', '⑭ 상자 글은 입력 글자만');
 }
 
-console.log('OK — 합성 객체 단위 검사 ①~⑭ 통과');
+// ⑮ Chromium PDF: 낱말 끝 조각에 공백이 붙고("월 ") 공백만 든 조각(" ")이 또 있다 → 줄 글은 한 칸, 조각은 objs에 남고 가리기 위치는 맞는다
+{
+  const a = T('9월 ', { x0: 0, y0: 0, x1: 22, y1: 10 });
+  const sp = T(' ', { x0: 22, y0: 0, x1: 25, y1: 10, originX: 22 });
+  const b = T('첫째', { x0: 25, y0: 0, x1: 45, y1: 10, originX: 25 });
+  const lines = groupLines([a, sp, b]);
+  assert.strictEqual(lines.length, 1, '⑮ 한 상자');
+  assert.strictEqual(lines[0].text, '9월 첫째', '⑮ 중복 공백 조각은 글을 보태지 않는다');
+  assert.deepStrictEqual(lines[0].objs.map((o) => o.idx), [a.idx, sp.idx, b.idx], '⑮ 공백 조각도 objs에 남아 편집·이동 때 함께 처리된다');
+  // index.html의 mapRangeToParts와 같은 계산: "첫째"(3~5)를 고르면 b의 0~2만 가린다
+  let off = 0; const parts = [];
+  for (const o of lines[0].objs) { const s = off, e = off + o.text.length; off = e; const x = Math.max(3, s), y = Math.min(5, e); if (x < y) parts.push({ idx: o.idx, from: x - s, to: y - s }); }
+  assert.deepStrictEqual(parts, [{ idx: b.idx, from: 0, to: 2 }], '⑮ 가리기 글자 위치가 어긋나지 않는다');
+  // 앞 글이 공백으로 끝나지 않으면 공백 조각은 그대로 글에 들어간다(낱말 사이 공백이 그 조각뿐인 PDF)
+  const c = T('A', { x0: 0, y0: 50, x1: 9, y1: 60, originY: 50 });
+  const sp2 = T(' ', { x0: 9, y0: 50, x1: 12, y1: 60, originX: 9, originY: 50 });
+  const d = T('B', { x0: 12, y0: 50, x1: 21, y1: 60, originX: 12, originY: 50 });
+  assert.strictEqual(groupLines([c, sp2, d])[0].text, 'A B', '⑮ 유일한 공백은 지우지 않는다');
+}
+
+// ⑯ 가린 자리: 글자가 지워져 틈이 벌어져도 가림 상자가 틈을 덮으면 한 줄, 틈은 ■로 보이고 가리기 위치 대응이 맞다
+{
+  const mask = (x0, x1) => ({ ...rule({ x0, y0: -1, x1, y1: 11 }), mask: true });
+  const a = T('대표, ', { x0: 0, y0: 0, x1: 20, y1: 10 });
+  const b = T(', 재무', { x0: 60, y0: 0, x1: 80, y1: 10, originX: 60 }); // 틈 40pt = 4×글자크기
+  const lines = groupLines([a, b, mask(22, 41), mask(41, 59)]);
+  assert.strictEqual(lines.length, 1, '⑯ 가림 상자가 틈을 덮으면 한 줄');
+  assert.strictEqual(lines[0].text, '대표, ■■■■, 재무', '⑯ 틈은 ■ 자리 표시(40pt / 0.9em ≈ 4글자)');
+  assert.deepStrictEqual(lines[0].seps, ['■■■■']);
+  // mapRangeToParts와 같은 계산: "재무"(10~12)는 b의 2~4
+  let off = 0; const parts = [];
+  for (const [j, o] of lines[0].objs.entries()) { const s = off, e = off + o.text.length; off = e + (lines[0].seps[j] || '').length; const x = Math.max(10, s), y = Math.min(12, e); if (x < y) parts.push({ idx: o.idx, from: x - s, to: y - s }); }
+  assert.deepStrictEqual(parts, [{ idx: b.idx, from: 2, to: 4 }], '⑯ 자리 표시 뒤 가리기 위치가 맞다');
+  // 가림 상자가 틈 일부만 덮으면(사이에 덮이지 않은 15pt) 잇지 않는다
+  assert.strictEqual(groupLines([a, b, mask(22, 30), mask(45, 59)]).length, 2, '⑯ 덮이지 않은 틈이 있으면 두 줄');
+  // 가림 상자가 없으면 지금처럼 두 줄
+  assert.strictEqual(groupLines([a, b]).length, 2, '⑯ 가림 상자 없으면 두 줄');
+  // 표 칸 경계(세로 괘선)는 가림 상자가 덮어도 넘지 않는다
+  assert.strictEqual(groupLines([a, b, mask(22, 59), rule({ x0: 40, y0: -1, x1: 41, y1: 11 })]).length, 2, '⑯ 세로 괘선이 있으면 두 줄');
+}
+
+console.log('OK — 합성 객체 단위 검사 ①~⑯ 통과');
 
 // --- 통합 검사: 저장소 표본 PDF ---
 (async () => {
@@ -173,6 +214,17 @@ console.log('OK — 합성 객체 단위 검사 ①~⑭ 통과');
     assert.strictEqual(koLines.length, 15, '회의록_초안.pdf 1쪽 → 상자 15개');
     assert.ok(koLines[0].text.startsWith('9월'), '첫 상자는 9월로 시작');
     assert.ok(koLines[0].text.endsWith('(초안)'), '첫 상자는 (초안)으로 끝남');
+    assert.strictEqual(koLines[0].text, '9월 첫째 주 경영관리회의 회의록 (초안)', '첫 상자 글은 낱말 사이 한 칸(v3.0.0은 두 칸)');
+    assert.ok(koLines.every((l) => !/ {2}/.test(l.text)), '어느 줄에도 두 칸 공백이 없다');
+    // 줄 일부를 가려도 그 줄은 한 상자로 남는다(v3.0.0은 가린 자리에서 둘로 쪼개졌다)
+    const att = koLines.find((l) => l.text.startsWith('참석'));
+    const from = att.text.indexOf('인사팀장');
+    let off = 0; const parts = [];
+    for (const o of att.objs) { const s = off, e = off + o.text.length; off = e; const x = Math.max(from, s), y = Math.min(from + 4, e); if (x < y) parts.push({ idx: o.idx, from: x - s, to: y - s }); }
+    for (const p of parts.sort((m, n) => n.idx - m.idx)) assert.ok(koDoc.redact(0, p.idx, p.from, p.to).ok, '인사팀장 가리기');
+    const maskedLines = groupLines(koDoc.objects(0));
+    assert.strictEqual(maskedLines.length, 15, '가린 뒤에도 상자 15개');
+    assert.strictEqual(maskedLines.find((l) => l.text.startsWith('참석')).text, '참석: 대표, ■■■■, 재무팀장, 영업팀장', '가린 줄은 한 상자, 가린 자리는 ■');
     koDoc.close();
   } else {
     console.log('회의록_초안.pdf 없음 — 통합 검사 건너뜀');

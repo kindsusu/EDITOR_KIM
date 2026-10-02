@@ -93,9 +93,36 @@ function hasVerticalRuleBetween(a, b, nonText) {
 
 // 한 행 안에서 왼→오른쪽으로 훑으며 이어붙일 조각을 상자로 묶는다.
 // 아래 조건을 전부 만족해야 잇는다 — 하나라도 어긋나면 거기서 상자를 끊는다.
+// 가린 글자 자리 표시. 가리기는 글자를 지우고 그 자리에 가림 상자(mask)만 남기므로 앞뒤 글 사이가 벌어져
+// 줄이 둘로 쪼개졌다(실측: "참석: 대표, ████, 재무팀장" → "참석: 대표, " / ", 재무팀장, 영업팀장").
+// 벌어진 틈을 가림 상자가 빈틈없이 덮고 있으면 같은 줄로 잇고, 틈 자리는 이 글자로 보인다.
+// 줄을 고쳐 적용해도 이 글자는 검정 사각형으로 그려지고 가림 상자가 그 위를 덮는다 — 가린 글자는 이미 지워져 있다.
+const MASK_GLYPH = '■';
+// 자리 표시 글자 수 = 틈 폭 / (이 값 × 글자 크기). 한글 한 글자 간격이 약 0.93em
+// (실측: 회의록_초안.pdf 글자 크기 약 11pt, "대"→"표" 시작점 간격 10.2pt). 가린 "인사팀장"(틈 42.9pt) → 4글자.
+const MASK_GLYPH_EM = 0.9;
+
+// a와 b(같은 행, a가 왼쪽) 사이 틈을 가림 상자가 덮고 있으면 자리 표시 글자열, 아니면 null.
+// 가림 상자끼리·글자와의 사이는 GAP_MERGE_RATIO까지 비어 있어도 이어진 것으로 본다(낱말 사이 공백 폭).
+function maskBridge(a, b, nonText) {
+  const lo = a.bounds.x1, hi = b.bounds.x0, size = Math.max(sizeOf(a), sizeOf(b)), tol = GAP_MERGE_RATIO * size;
+  const masks = nonText
+    .filter((m) => m.mask && m.bounds.x1 > lo - tol && m.bounds.x0 < hi + tol && m.bounds.y0 < a.bounds.y1 && m.bounds.y1 > a.bounds.y0)
+    .sort((m, n) => m.bounds.x0 - n.bounds.x0);
+  if (!masks.length) return null;
+  let reach = lo;
+  for (const m of masks) {
+    if (m.bounds.x0 > reach + tol) return null; // 가림 상자 사이에 덮이지 않은 틈이 있다
+    reach = Math.max(reach, m.bounds.x1);
+  }
+  if (reach < hi - tol) return null;
+  const covered = Math.min(hi, reach) - Math.max(lo, masks[0].bounds.x0);
+  return MASK_GLYPH.repeat(Math.max(1, Math.round(covered / (MASK_GLYPH_EM * size))));
+}
+
 function mergeRow(rowItems, nonText) {
   const sorted = rowItems.slice().sort((a, b) => xOf(a) - xOf(b));
-  const boxes = [[sorted[0]]];
+  const boxes = [[sorted[0]]], sepsOf = new Map([[boxes[0], []]]);
   for (let j = 1; j < sorted.length; j++) {
     const cur = boxes[boxes.length - 1], a = cur[cur.length - 1], b = sorted[j];
     const gap = (b.bounds.x0 - a.bounds.x1) / Math.max(sizeOf(a), sizeOf(b));
@@ -109,17 +136,42 @@ function mergeRow(rowItems, nonText) {
     const sameHidden = !!a.hidden === !!b.hidden;
     const sameColor = a.color[0] === b.color[0] && a.color[1] === b.color[1] && a.color[2] === b.color[2]; // 알파 제외
     const limit = (a.hidden && b.hidden) ? HIDDEN_GAP_MERGE_RATIO : GAP_MERGE_RATIO;
-    if (gap < limit && sameFont && sameFontId && sameSize && sameHidden && sameColor && !hasVerticalRuleBetween(a, b, nonText)) cur.push(b);
+    const alike = sameFont && sameFontId && sameSize && sameHidden && sameColor && !hasVerticalRuleBetween(a, b, nonText);
+    // 빈 조각(가려서 지워진 글자 등)은 틈 판정의 기준이 되지 않도록 아래에서 먼저 건너뛴다
+    const bridge = alike && gap >= limit && (b.text || '').trim() ? maskBridge(a, b, nonText) : null;
+    if (alike && gap < limit) { cur.push(b); sepsOf.get(cur).push(''); }
+    else if (bridge) { cur.push(b); sepsOf.get(cur).push(bridge); }
     // 줄에 안 맞는 공백·빈 조각은 줄을 끊지 않고 건너뛴다. 전자계약 양식은 입력 칸의 글자마다 사이에 빈 흰색 조각(크기 0)을 끼우고,
     // 칸 밑에 양식 원본의 넓은 공백 조각이 겹쳐 있어 숫자·주소가 한 글자씩 상자가 됐다(계약서 실측: 1쪽 한 글자 상자 227개).
     // 건너뛴 조각은 어느 상자에도 안 들어간다 — 예전에도 공백만 든 상자는 아래 visible 필터에서 버려졌다.
     else if (!(b.text || '').trim()) continue;
-    else boxes.push([b]);
+    else { const box = [b]; boxes.push(box); sepsOf.set(box, []); }
   }
-  return boxes.map((members) => ({
-    objs: members, seps: members.slice(1).map(() => ''), text: members.map((o) => o.text).join(''),
-    group: null, size: members[0].size, font: members[0].font, bounds: unionBounds(members),
-  }));
+  return boxes.map((members) => {
+    const seps = sepsOf.get(members);
+    const objs = dropDuplicateSpaces(members, seps);
+    return {
+      objs, seps, text: objs.map((o, j) => (j ? seps[j - 1] : '') + o.text).join(''),
+      group: null, size: objs[0].size, font: objs[0].font, bounds: unionBounds(objs),
+    };
+  });
+}
+
+// Chromium이 만든 PDF는 낱말 끝 조각에 공백을 붙이고("월 ") 그 뒤에 공백만 든 조각(" ")을 또 둔다.
+// 그대로 이으면 줄 글이 "9월  첫째  주"처럼 두 칸이 돼 편집 창·AI로 보내는 문서 글에 그대로 보인다(v3.0.0 실측: 회의록_초안.pdf 모든 줄).
+// 앞 글이 이미 공백으로 끝났으면 공백만 든 조각은 글을 보태지 않도록 text를 ''로 바꾼 사본으로 둔다.
+// 조각 자체는 objs에 남긴다 — 편집(나머지 조각 비우기)·이동이 idx로 함께 처리해야 하고,
+// text 길이로 글자 위치를 맞추는 가리기(mapRangeToParts)는 길이 0인 조각을 자연히 건너뛴다.
+// seps[j-1]은 members[j] 앞에 끼우는 글(가린 자리 표시 등) — 공백 판정은 그것까지 이어 붙인 글 기준이다.
+function dropDuplicateSpaces(members, seps = []) {
+  let tail = '';
+  return members.map((o, j) => {
+    const t = o.text || '';
+    if (j && seps[j - 1]) tail = seps[j - 1];
+    if (j && !t.trim() && /\s$/.test(tail)) return { ...o, text: '', dupSpace: true };
+    tail = t || tail;
+    return o;
+  });
 }
 
 // objs -> [{ objs, seps, text, group, size, font, bounds }]

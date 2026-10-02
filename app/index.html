@@ -1456,7 +1456,8 @@ function openInlineEditor(initialText, caret) {
     if (from === to) return flash('가릴 범위를 선택하세요');
     maskParts(mapRangeToParts(selectedObj.objs, from, to, selectedObj.seps), ta.value.slice(from, to));
   };
-  maskLineBtn.onclick = () => maskParts(selectedObj.objs.map((o) => ({ idx: o.idx, from: 0, to: o.text.length })), selectedObj.text);
+  // 길이 0 조각(groupLines가 글을 비운 중복 공백 조각)은 가릴 글자가 없다 — 서버에 빈 범위를 보내지 않는다
+  maskLineBtn.onclick = () => maskParts(selectedObj.objs.filter((o) => o.text.length).map((o) => ({ idx: o.idx, from: 0, to: o.text.length })), selectedObj.text);
 }
 async function refreshPage(i, editedIdx) {
   const renderGeneration = pdfRenderGeneration, name = cur, seq = refreshSeq[i] = (refreshSeq[i] || 0) + 1; // seq: 같은 쪽의 더 새로운 호출이 있으면 이 응답은 버린다
@@ -1838,7 +1839,7 @@ function openSearchHitCtxMenu(hitIdx, x, y) {
   maskLine.disabled = !line; if (!line) maskLine.title = '이 결과가 속한 줄을 찾지 못했습니다';
   maskLine.onclick = async () => {
     closeCtxMenu();
-    const r = await pdfMutate('/api/pdf/mask', { name: cur, i: hit.i, parts: line.objs.map((o) => ({ idx: o.idx, from: 0, to: o.text.length })), color: maskColor() });
+    const r = await pdfMutate('/api/pdf/mask', { name: cur, i: hit.i, parts: line.objs.filter((o) => o.text.length).map((o) => ({ idx: o.idx, from: 0, to: o.text.length })), color: maskColor() });
     await refreshPage(hit.i);
     flash(r.ok === false ? '가리지 못했습니다 — 사각형 가리기로 덮으세요' : '줄 전체를 가렸습니다'); runSearch(); // 객체 idx가 바뀌었을 수 있어 다시 찾는다
   };
