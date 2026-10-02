@@ -6,7 +6,10 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const root = path.join(__dirname, '..');
-const home = fs.mkdtempSync(path.join(os.tmpdir(), 'editor-kim-shots-'));
+// 임시 홈은 %TEMP%가 아니라 store/ 아래에 둔다 — %TEMP% 안의 파일은 앱이 "임시 파일입니다" 띠를 띄워 화면에 찍힌다
+const out = path.join(root, 'store');
+fs.mkdirSync(out, { recursive: true });
+const home = fs.mkdtempSync(path.join(out, '.home-'));
 const ws = path.join(home, '문서');
 fs.mkdirSync(ws);
 for (const f of ['회의록_초안.pdf', '회의록_초안.md']) fs.copyFileSync(path.join(root, 'workspace', f), path.join(ws, f));
@@ -21,11 +24,11 @@ app.whenReady().then(async () => {
   process.env.USERPROFILE = home; process.env.HOME = home;
   process.env.EDITORKIM_PORT = '4849';
   const port = await require(path.join(root, 'app', 'server.js')).ready;
-  const win = new BrowserWindow({ width: W, height: H, show: false, backgroundColor: '#1b1b1f', webPreferences: { offscreen: true, partition: 'store-shots' } });
+  // 설치된 앱과 같은 화면이 되도록 preload를 붙인다(없으면 브라우저 모드 화면이 찍힌다). 대화상자용 IPC 처리기는 없지만 찍는 데는 쓰지 않는다
+  const win = new BrowserWindow({ width: W, height: H, show: false, backgroundColor: '#1b1b1f',
+    webPreferences: { offscreen: true, partition: 'store-shots', preload: path.join(root, 'app', 'preload.js') } });
   await win.loadURL(`http://localhost:${port}`);
   await wait(1500);
-  const out = path.join(root, 'store');
-  fs.mkdirSync(out, { recursive: true });
   const shot = async (name) => {
     await wait(1500);
     const img = await win.webContents.capturePage();
@@ -36,15 +39,25 @@ app.whenReady().then(async () => {
   };
   // 반환값(DOM 등)은 복제할 수 없어 버린다
   const js = (code) => win.webContents.executeJavaScript(`Promise.resolve((() => { ${code} })()).then(() => true)`);
-  const clickFile = (name) => js(`const el = [...document.querySelectorAll('body *')].find((e) => e.children.length === 0 && e.textContent.trim() === ${JSON.stringify(name)}); (el.closest('.f, li, button') || el).click();`);
+  // 첫 실행 안내·AI 로그인 창 등 떠 있는 대화상자는 닫고 찍는다
+  const closeDialogs = () => js(`document.querySelectorAll('dialog[open]').forEach((d) => d.close());`);
+  const pdf = path.join(ws, '회의록_초안.pdf'), md = path.join(ws, '회의록_초안.md');
 
-  await clickFile('회의록_초안.pdf');
+  // 연결 프로그램으로 연 것과 같은 경로(main.js의 open-paths) — 목록에 둘 다 넣고 첫 파일(PDF)을 연다
+  win.webContents.send('open-paths', [pdf, md]);
+  await wait(2500);
+  await closeDialogs();
   await shot('screenshot-1-pdf.png');
-  // 한 줄을 눌러 편집 창을 연 장면
-  await js(`const b = [...document.querySelectorAll('.pdfBox')][2]; b && b.click();`);
+  // 제목 줄을 눌러 편집 창을 연 장면(아래 줄을 고르면 창이 화면 밑으로 잘린다). 상자는 마우스 누름/뗌으로 선택하므로(attachDrag) .click()이 아니라 실제 입력을 보낸다
+  const at = await win.webContents.executeJavaScript(`(() => { const b = [...document.querySelectorAll('#pdf .pdfBox:not(.pdfMask):not(.pdfImage)')][0]; if (!b) return null; const r = b.getBoundingClientRect(); return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) }; })()`);
+  if (at) {
+    for (const type of ['mouseMove', 'mouseDown', 'mouseUp']) win.webContents.sendInputEvent({ type, x: at.x, y: at.y, button: 'left', clickCount: 1 });
+  } else console.log('편집할 줄 상자를 찾지 못했습니다');
   await shot('screenshot-2-edit.png');
-  await js(`document.querySelectorAll('.pdfEditor').forEach((e) => e.remove());`);
-  await clickFile('회의록_초안.md');
+  win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' });
+  await wait(300);
+  await js(`document.querySelector('#files [data-f$=".md"]').click();`);
+  await closeDialogs();
   await shot('screenshot-3-markdown.png');
 
   win.destroy();
