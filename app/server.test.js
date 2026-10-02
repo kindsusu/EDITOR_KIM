@@ -4,21 +4,43 @@
 const assert = require('assert');
 
 process.env.EDITORKIM_NO_LISTEN = '1';
+process.env.EDITORKIM_PORT = '4848'; // 라우트 검사는 아래에서 직접 listen한다(사용자 앱의 4747은 쓰지 않는다)
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const http = require('http');
 const engine = require('./pdf-engine');
 
-// 가짜 문서: downsample()은 아래 script(maxDpi·quality → after 바이트)가 정하고, save()는 그 길이만큼의 버퍼를 준다
+// 가짜 문서: downsample()은 아래 script(maxDpi·quality → after 바이트)가 정하고,
+// 문서 내용은 문자열 state로 흉내 낸다 — open(bytes)이 state를 읽고 save()가 그대로 돌려준다.
+// move(i, idxs, dx): state에 '+m'을 붙인다. idxs가 비면 일부만 바꾼 뒤 ok:false, dx==='throw'면 바꾼 뒤 던진다(되돌리기 검사용)
 let script = () => 1000;
-let lastAfter = 1000;
-engine.open = async (bytes) => ({
-  downsample({ maxDpi, quality }) {
-    lastAfter = script(maxDpi, quality);
-    return { ok: true, changed: 1, skipped: [], before: bytes.length, after: lastAfter };
-  },
-  save() { return Buffer.alloc(lastAfter); }, // best.bytes — 길이만 쓰인다
-  close() {},
-});
+let failOpen = false;
+const closed = [];
+engine.open = async (bytes) => {
+  if (failOpen) throw new Error('열기 실패(가짜)');
+  const doc = {
+    state: Buffer.from(bytes).toString(),
+    downsample({ maxDpi, quality }) {
+      const after = script(maxDpi, quality);
+      return { ok: true, changed: 1, skipped: [], before: bytes.length, after };
+    },
+    pageCount: 1,
+    pageSize: () => ({ w: 100, h: 100, rotation: 0 }),
+    move(i, idxs, dx) {
+      doc.state += '+partial';
+      if (dx === 'throw') throw new Error('엔진 오류(가짜)');
+      if (!idxs.length) return { ok: false, moved: 0 };
+      doc.state = doc.state.replace('+partial', '+m');
+      return { ok: true, moved: idxs.length };
+    },
+    save() { return Buffer.from(doc.state); },
+    close() { closed.push(doc); },
+  };
+  return doc;
+};
 const { _test } = require('./server.js');
-const { jobs, startJob, progress, endJob, jobView, snapshot, stacks, trimStacks, downsampleToTarget, rollback, UNDO_MAX_BYTES } = _test;
+const { server, pdfDocs, jobs, startJob, progress, endJob, jobView, snapshot, stacks, trimStacks, downsampleToTarget, UNDO_MAX_BYTES } = _test;
 
 (async () => {
   // ── C1: 작업 등록·진행·취소·완료 ──────────────────────────────────────────
@@ -181,14 +203,133 @@ const { jobs, startJob, progress, endJob, jobView, snapshot, stacks, trimStacks,
     assert.deepStrictEqual(r.used, { maxDpi: 150, quality: 60 });
   }
 
-  // ── 취소된 문서 편집의 원상 복구: 스냅샷을 pop해 실행 취소 스택에 남기지 않는다 ──
-  {
-    const entry = { doc: await engine.open(Buffer.alloc(10)), undo: [{ bytes: Buffer.alloc(777), page: null }], redo: [], undoBytes: 777, undoTrimmed: false };
-    const popped = await rollback(entry);
-    assert.strictEqual(popped.bytes.length, 777);
-    assert.deepStrictEqual([entry.undo.length, entry.undoBytes], [0, 0]);
-    assert.strictEqual(await rollback({ undo: [], redo: [], undoBytes: 0 }), undefined, '스냅샷이 없으면 아무것도 하지 않는다');
+  // ── 라우트 검사(가짜 엔진, 127.0.0.1:4848) ─────────────────────────────────
+  await new Promise((resolve) => server.listen(4848, '127.0.0.1', resolve));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'editor-kim-server-'));
+  const raw = (method, route, data, headers = {}) => new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port: 4848, method, path: route, headers }, (res) => {
+      const chunks = []; res.on('data', (c) => chunks.push(c));
+      res.on('end', () => { const text = Buffer.concat(chunks).toString(); let body = text; try { body = JSON.parse(text); } catch {} resolve({ status: res.statusCode, body }); });
+    });
+    req.on('error', reject);
+    req.end(data);
+  });
+  const post = (route, data) => raw('POST', route, JSON.stringify(data));
+  const info = async (name) => (await raw('GET', '/api/pdf/info?' + new URLSearchParams({ name }))).body;
+  try {
+    // 1: '//' 같은 경로가 프로세스를 죽이지 않고 400
+    assert.strictEqual((await raw('GET', '//')).status, 400);
+    assert.strictEqual((await raw('GET', '/api/workspace')).status, 200, '서버가 살아 있다');
+
+    // 2: 큰 한글 본문이 조각 경계에서 깨지지 않는다 / 깨진 JSON은 400 / 상한 초과는 413
+    {
+      const md = path.join(dir, '한글.md'), text = '# 회의록\n' + '가나다라마바사아자차카타파하 한글 문장입니다. '.repeat(7000);
+      assert.ok(Buffer.byteLength(text) > 280000);
+      assert.strictEqual((await raw('PUT', '/api/file?' + new URLSearchParams({ name: md }), Buffer.from(text))).status, 200);
+      assert.ok(fs.readFileSync(md, 'utf8') === text, '저장한 글자가 그대로다(U+FFFD 없음)'); // strictEqual은 실패 시 280KB 차이를 찍는다
+      const bad = await raw('POST', '/api/pdf/move', '{not json');
+      assert.strictEqual(bad.status, 400);
+      assert.match(bad.body.error, /요청 형식/);
+      const big = await raw('PUT', '/api/file?' + new URLSearchParams({ name: path.join(dir, 'big.md') }), Buffer.alloc(65 * 1024 * 1024, 0x61));
+      assert.strictEqual(big.status, 413);
+      assert.ok(!fs.existsSync(path.join(dir, 'big.md')), '상한을 넘으면 쓰지 않는다');
+    }
+
+    const name = path.join(dir, 'a.pdf');
+    fs.writeFileSync(name, 'v1');
+    let clock = Date.now();
+    const bump = (content) => { fs.writeFileSync(name, content); const t = new Date((clock += 10000)); fs.utimesSync(name, t, t); };
+    const count = Object.keys(pdfDocs).length;
+    // 3c: 같은 파일의 다른 표기는 한 항목
+    assert.strictEqual((await info(name)).dirty, false);
+    assert.strictEqual((await info(dir + path.sep + '.' + path.sep + 'a.pdf')).dirty, false);
+    if (process.platform === 'win32') assert.strictEqual((await info(name.toUpperCase())).dirty, false);
+    assert.strictEqual(Object.keys(pdfDocs).length, count + 1, '표기가 달라도 캐시 항목은 하나');
+    const entry = () => Object.values(pdfDocs)[count];
+
+    // 3a: 디스크가 바뀌어 다시 열다 실패해도 닫힌 문서가 캐시에 남지 않는다(다음 요청에서 이중 close·해제 후 사용 없음)
+    {
+      const old = entry().doc;
+      bump('v2'); failOpen = true;
+      assert.strictEqual((await raw('GET', '/api/pdf/info?' + new URLSearchParams({ name }))).status, 500);
+      failOpen = false;
+      assert.strictEqual(Object.keys(pdfDocs).length, count, '실패한 항목은 캐시에서 빠졌다');
+      assert.strictEqual((await info(name)).dirty, false);
+      assert.strictEqual(closed.filter((d) => d === old).length, 1, '옛 문서는 정확히 한 번 닫혔다');
+      assert.strictEqual(entry().doc.state, 'v2');
+    }
+
+    // 4: 실패한 변경(ok:false·예외)은 스택·dirty·문서를 건드리지 않는다
+    {
+      const live = entry().doc;
+      const before = await info(name);
+      const noop = await post('/api/pdf/move', { name, i: 0, idxs: [], dx: 1, dy: 0 });
+      assert.deepStrictEqual([noop.status, noop.body.ok], [200, false]);
+      const thrown = await post('/api/pdf/move', { name, i: 0, idxs: [1], dx: 'throw', dy: 0 });
+      assert.strictEqual(thrown.status, 500);
+      assert.deepStrictEqual(await info(name), before, 'undo/redo/dirty 그대로');
+      assert.strictEqual(entry().doc.state, 'v2', '부분 변경은 되돌려졌다');
+      assert.notStrictEqual(entry().doc, live, '되돌리기는 변경 전 바이트로 다시 연 문서');
+      const ok = await post('/api/pdf/move', { name, i: 0, idxs: [1], dx: 1, dy: 0 });
+      assert.deepStrictEqual([ok.status, ok.body.undoLeft, ok.body.redoLeft], [200, 1, 0]);
+      assert.strictEqual(entry().dirty, true);
+      assert.strictEqual((await post('/api/pdf/mask', { name, i: 0 })).status, 400, 'parts가 없으면 400');
+    }
+
+    // 5: 실행 취소·다시 실행 — 바꿔 끼우기가 실패하면 스택은 그대로
+    {
+      failOpen = true;
+      assert.strictEqual((await post('/api/pdf/undo', { name })).status, 500);
+      failOpen = false;
+      const after = await info(name);
+      assert.deepStrictEqual([after.undoLeft, after.redoLeft], [1, 0], '실패한 undo는 스택을 옮기지 않는다');
+      assert.strictEqual(entry().doc.state, 'v2+m');
+      const u = await post('/api/pdf/undo', { name });
+      assert.deepStrictEqual([u.body.ok, u.body.undoLeft, u.body.redoLeft], [true, 0, 1]);
+      assert.strictEqual(entry().doc.state, 'v2');
+      failOpen = true;
+      assert.strictEqual((await post('/api/pdf/redo', { name })).status, 500);
+      failOpen = false;
+      const mid = await info(name);
+      assert.deepStrictEqual([mid.undoLeft, mid.redoLeft], [0, 1], '실패한 redo도 스택을 옮기지 않는다');
+      const r = await post('/api/pdf/redo', { name });
+      assert.deepStrictEqual([r.body.undoLeft, r.body.redoLeft], [1, 0]);
+      assert.strictEqual(entry().doc.state, 'v2+m');
+    }
+
+    // 3b: 미저장 편집 중 디스크 파일이 바뀌어도 다시 열지 않고 externalChange로 알린다
+    {
+      bump('v3');
+      const i3 = await info(name);
+      assert.strictEqual(i3.externalChange, true);
+      assert.deepStrictEqual([i3.dirty, i3.undoLeft], [true, 1], '편집과 실행 취소 기록이 남는다');
+      assert.strictEqual(entry().doc.state, 'v2+m');
+      const moved = await post('/api/pdf/move', { name, i: 0, idxs: [1], dx: 1, dy: 0 });
+      assert.strictEqual(moved.body.externalChange, true, '변경 응답에도 실린다');
+      assert.strictEqual((await post('/api/pdf/save', { name })).body.ok, true);
+      assert.strictEqual((await info(name)).externalChange, undefined, '저장하면 풀린다');
+      assert.strictEqual(fs.readFileSync(name, 'utf8'), 'v2+m+m');
+    }
+
+    // 11: 긴 작업 중인 문서를 바꾸는 요청은 409 / 등록 전에 온 취소는 기억된다
+    {
+      entry().busy = true;
+      for (const [route, data] of [['/api/pdf/move', { name, i: 0, idxs: [1], dx: 1, dy: 0 }], ['/api/pdf/undo', { name }], ['/api/pdf/save', { name }], ['/api/pdf/close', { name }]]) {
+        const r = await post(route, data);
+        assert.deepStrictEqual([r.status, r.body.error], [409, '긴 작업이 끝난 뒤 다시 시도하세요.'], route);
+      }
+      entry().busy = false;
+      const c = await post('/api/jobs/cancel', { id: 'early-1' });
+      assert.deepStrictEqual([c.status, c.body.pending], [200, true]);
+      const job = startJob('early-1', 'downsample', 1);
+      assert.strictEqual(job.cancelled, true, '먼저 온 취소가 적용된다');
+      assert.strictEqual(progress(job), false);
+      endJob(job); clearTimeout(job.timer); jobs.delete('early-1');
+    }
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 
-  console.log('OK — P6 서버 로직(C1 작업·C3 undo 상한·C4 조기 종료) 검사 통과');
+  console.log('OK — P6 서버 로직(C1 작업·C3 undo 상한·C4 조기 종료)·라우트(주소·본문·캐시·되돌리기·409) 검사 통과');
 })().catch((e) => { console.error('FAIL', e); process.exit(1); });

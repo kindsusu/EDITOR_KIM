@@ -25,6 +25,23 @@ const noiseRGBA = (w, h) => {
   return d;
 };
 
+// 손으로 만든 한 쪽짜리 PDF (xref 오프셋까지 정확히). 폰트 F1 = Helvetica. pageExtra는 페이지 사전에 더할 항목(/CropBox, /Rotate)
+const mkPdf = ({ content, w = 400, h = 400, pageExtra = '' }) => {
+  const objs = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${w} ${h}] ${pageExtra} /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>`,
+    `<< /Length ${Buffer.byteLength(content, 'latin1')} >>\nstream\n${content}\nendstream`,
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>',
+  ];
+  let out = '%PDF-1.7\n'; const offs = [];
+  objs.forEach((o, k) => { offs.push(Buffer.byteLength(out, 'latin1')); out += `${k + 1} 0 obj\n${o}\nendobj\n`; });
+  const xref = Buffer.byteLength(out, 'latin1');
+  out += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n` + offs.map((o) => String(o).padStart(10, '0') + ' 00000 n \n').join('')
+    + `trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return Buffer.from(out, 'latin1');
+};
+
 (async () => {
   // --- sample.pdf (Helvetica, 한글 글리프 없음) ---
   const src = fs.readFileSync(path.join(WS, 'sample.pdf'));
@@ -753,6 +770,162 @@ const noiseRGBA = (w, h) => {
       d.close();
     }
     console.log('C5 회전 0·1·2·3 이미지 삽입·크기 조절 ↔ 렌더 픽셀 일치 OK');
+  }
+
+  // --- batch: 한 쪽을 여러 번 고쳐도 콘텐츠 스트림은 한 번만 다시 쓴다 (GenerateContent 고아 스트림으로 파일이 불던 회귀) ---
+  {
+    const paths = [];
+    for (let k = 0; k < 4000; k++) paths.push(`${(k % 80) * 7} ${Math.floor(k / 80) * 7} 3 3 re f`);
+    const frags = [];
+    for (let k = 0; k < 48; k++) frags.push(`BT /F1 8 Tf ${10 + k * 8} 380 Td (w${k % 10}) Tj ET`);
+    const base = mkPdf({ content: `0 0 1 rg\n${paths.join('\n')}\n0 g\n${frags.join('\n')}` });
+    const editAll = (d, tag) => d.objects(0).filter((o) => o.type === 'text').forEach((o) => assert.ok(d.setText(0, o.idx, tag).ok));
+    const d0 = await open(base);
+    editAll(d0, 'xx');
+    const loose = d0.save().length; d0.close();
+    let bytes = base; const sizes = [];
+    for (let n = 0; n < 5; n++) { // 편집 48건 → 저장 → 재열기, 다섯 번
+      const d = await open(bytes);
+      const r = d.batch(() => {
+        editAll(d, `e${n}`);
+        // batch 안에서도 객체 목록·텍스트 페이지·렌더는 메모리의 페이지 객체로 동작한다(다시 쓴 스트림이 필요 없다)
+        assert.ok(d.objects(0).filter((o) => o.type === 'text').every((o) => o.text === `e${n}`), 'batch 안 objects()에 편집 반영');
+        assert.ok(d.pageText(0).includes(`e${n}`), 'batch 안 pageText()에 편집 반영');
+        d.batch(() => d.addRect(0, { x0: 300, y0: 300, x1: 340, y1: 330 }, [0, 0, 0, 255])); // 중첩 batch
+        const c = d.sampleColor(0, { x0: 305, y0: 305, x1: 335, y1: 325 });
+        assert.ok(c.slice(0, 3).every((v) => v < 30), `batch 안 렌더에 가림 상자 반영: ${c}`);
+        return 'done';
+      });
+      assert.strictEqual(r, 'done', 'batch는 fn의 반환값을 돌려준다');
+      bytes = d.save(); d.close(); sizes.push(bytes.length);
+    }
+    console.log(`batch: 원본 ${base.length}B, batch 없이 48건 ${loose}B, batch 5회 저장·재열기 ${sizes.join(' → ')}B`);
+    assert.ok(sizes[0] < base.length * 1.3, `batch 편집 1회 증가가 작아야 함 (${base.length} → ${sizes[0]})`);
+    assert.ok(sizes[4] < sizes[0] * 1.1, `저장·재열기를 반복해도 크기가 그대로 (${sizes.join(', ')})`);
+    // 예외가 나도 가장 바깥 batch가 끝나면 재생성되고, 저장본에 편집이 남는다
+    const d = await open(base);
+    assert.throws(() => d.batch(() => { d.setText(0, d.objects(0).find((o) => o.type === 'text').idx, 'thrown'); throw new Error('boom'); }), /boom/);
+    const re = await open(d.save()); d.close();
+    assert.ok(re.pageText(0).includes('thrown'), '예외 뒤에도 편집이 저장된다');
+    re.close();
+  }
+
+  // --- redact: 겹쳐 그린 사본(가짜 굵게·그림자)도 함께 지운다 ---
+  {
+    const twin = 'BT /F1 12 Tf 50 300 Td (SECRET keep) Tj ET\nBT /F1 12 Tf 50 300 Td (SECRET keep) Tj ET';
+    const d = await open(mkPdf({ content: twin }));
+    const before = d.objects(0);
+    assert.deepStrictEqual(before.map((o) => o.text), ['SECRET keep', ''], '사본은 텍스트 페이지에서 중복으로 빠진다');
+    assert.strictEqual(d.charBoxes(0, 1).length, 0);
+    const r = d.redact(0, 0, 0, 6);
+    assert.ok(r.ok && r.rects.length === 1 && r.inserted === 1 && r.twins === 1, `사본 포함 가리기: ${JSON.stringify(r)}`);
+    assert.ok(!d.pageText(0).includes('SECRET'));
+    const re = await open(d.save()); d.close();
+    const pt = re.pageText(0);
+    assert.ok(!pt.includes('SECRET') && !/S\s*E\s*C\s*R/.test(pt), `저장·재열기 뒤 사본에서도 지운 글자가 안 나와야 함: ${JSON.stringify(pt)}`);
+    assert.ok(pt.includes('keep'), '뒷부분은 남는다');
+    re.close();
+    // 그림자가 대상보다 앞 인덱스에 있고 사이에 다른 객체가 끼어 중복으로 안 빠지면(둘 다 같은 텍스트로 읽힘):
+    // 대상보다 앞 인덱스는 밀리지 않고, inserted는 대상의 뒷부분을 가리킨다
+    const mid = [0, 1, 2, 3, 4].map((k) => `BT /F1 12 Tf 50 ${100 + k * 14} Td (other${k}) Tj ET`).join('\n');
+    const d2 = await open(mkPdf({ content: `BT /F1 12 Tf 51 299.5 Td (SECRET keep) Tj ET\n${mid}\nBT /F1 12 Tf 50 300 Td (SECRET keep) Tj ET` }));
+    assert.deepStrictEqual([d2.objects(0)[0].text, d2.objects(0)[6].text], ['SECRET keep', 'SECRET keep'], '둘 다 읽히는 그림자');
+    const r2 = d2.redact(0, 6, 0, 6, [0, 0, 0, 255]);
+    assert.ok(r2.ok && r2.twins === 1 && r2.inserted === 8, `앞쪽 사본: ${JSON.stringify(r2)}`);
+    const o2 = d2.objects(0).map((o) => o.text); // 두 뒷부분은 이제 붙어 있어 뒤 것이 중복('')으로 빠진다
+    assert.deepStrictEqual(o2.slice(0, 9), [' ', 'other0', 'other1', 'other2', 'other3', 'other4', ' ', 'keep', ''], '대상보다 앞 인덱스 그대로, 사본 뒷부분은 대상 뒷부분 아래(z)');
+    const re2 = await open(d2.save()); d2.close();
+    assert.ok(!re2.pageText(0).includes('SECRET'), '저장 뒤 앞쪽 사본에서도 지운 글자 없음');
+    re2.close();
+    console.log('redact 사본 처리 OK', JSON.stringify(r));
+  }
+
+  // --- redact: 뒷부분 객체가 원래 객체의 그리기 방식(투명 모드 3)·그룹·폰트 마크를 이어받는다 ---
+  {
+    const d = await open(mkPdf({ content: 'BT 3 Tr /F1 12 Tf 50 300 Td (SECRET keep) Tj ET' }));
+    d.setGroup(0, [0], 'gTest');
+    const r = d.redact(0, 0, 0, 6);
+    assert.ok(r.ok, JSON.stringify(r));
+    const suf = d.objects(0)[r.inserted];
+    assert.strictEqual(suf.text, 'keep');
+    assert.strictEqual(suf.renderMode, 3, '투명 OCR 글자의 뒷부분은 계속 투명');
+    assert.strictEqual(suf.group, 'gTest', '그룹 마크 유지');
+    const re = await open(d.save()); d.close();
+    const suf2 = re.objects(0).find((o) => o.text === 'keep');
+    assert.ok(suf2 && suf2.renderMode === 3 && suf2.hidden, '저장·재열기 뒤에도 투명');
+    re.close();
+    console.log('redact 뒷부분 스타일 유지 OK');
+  }
+
+  // --- 픽셀 샘플링: /Rotate·CropBox가 있어도 같은 페이지 좌표의 색을 읽는다 ---
+  {
+    const content = '1 0 0 rg 150 150 60 40 re f\n0 0 1 rg 230 260 30 30 re f\n0 g BT /F1 14 Tf 60 330 Td (INK) Tj ET';
+    for (const extra of ['', '/CropBox [100 100 300 340]', '/Rotate 90', '/CropBox [100 100 300 340] /Rotate 90', '/Rotate 180', '/Rotate 270 /CropBox [40 100 330 360]']) {
+      const d = await open(mkPdf({ content, pageExtra: extra }));
+      const red = d.sampleColor(0, { x0: 160, y0: 160, x1: 200, y1: 180 });
+      const blue = d.sampleColor(0, { x0: 235, y0: 265, x1: 255, y1: 285 });
+      const ink = d.sampleInk(0, { x0: 140, y0: 140, x1: 230, y1: 200 }); // 흰 배경이 다수, 빨강이 소수
+      assert.deepStrictEqual([red, blue, ink], [[255, 0, 0, 255], [0, 0, 255, 255], [255, 0, 0, 255]], `${extra || '기본'}: 빨강·파랑·잉크`);
+      if (!/CropBox/.test(extra)) { // 글자 잉크 구간: 글자 상자를 씨앗으로 넓은 범위에서 찾아도 글자 폭으로 좁혀진다
+        const t = d.objects(0).find((o) => o.type === 'text').bounds;
+        const e = d._inkExtent(0, { x0: t.x0 - 40, y0: t.y0, x1: t.x1 + 40, y1: t.y1 }, t);
+        assert.ok(Math.abs(e.x0 - t.x0) < 3 && Math.abs(e.x1 - t.x1) < 3, `${extra || '기본'}: 잉크 구간 ${e.x0.toFixed(1)}–${e.x1.toFixed(1)} ≈ 글자 ${t.x0.toFixed(1)}–${t.x1.toFixed(1)}`);
+      }
+      d.close();
+    }
+    console.log('회전·CropBox 픽셀 샘플링 OK');
+  }
+
+  // --- fitText shrink: 기울임(c≠0) 글자는 a·b·c·d를 함께 줄여 모양을 유지한다 ---
+  {
+    const d = await open(mkPdf({ content: 'BT /F1 12 Tf 1 0 0.3 1 50 300 Tm (Slanted text that is long) Tj ET', w: 600 }));
+    const r = d.fitText(0, 0, 'Slanted text that is quite a bit longer now', 120, 'shrink');
+    const o = d.objects(0)[0], [, b, c, dd] = o.matrix;
+    assert.ok(r.ok && r.scaled < 1, JSON.stringify(r));
+    assert.ok(Math.abs(c / dd - 0.3) < 0.01 && Math.abs(b) < 0.01, `기울기 유지: c/d ${(c / dd).toFixed(3)}`);
+    assert.ok(o.bounds.x1 - o.bounds.x0 <= 125, `폭 ${(o.bounds.x1 - o.bounds.x0).toFixed(1)} ≤ 120`);
+    d.close();
+    console.log('fitText shrink 기울임 유지 OK');
+  }
+
+  // --- fitText wrap: 줄이 50개를 넘어도 남은 글을 버리지 않는다 ---
+  {
+    const d = await open(mkPdf({ content: 'BT /F1 10 Tf 20 380 Td (start) Tj ET', w: 600 }));
+    const words = Array.from({ length: 60 }, (_, k) => `w${k}`).join(' ');
+    const r = d.fitText(0, 0, words, 20, 'wrap'); // 한 줄에 낱말 하나 → 60줄이 필요하다
+    assert.ok(r.ok && r.wrapped === 51, `50번 자른 뒤 남은 글은 한 줄로: ${r.wrapped}`);
+    const objs = d.objects(0);
+    assert.strictEqual(r.lineIdxs.map((k) => objs[k].text).join(' '), words, 'wrap: 50줄 넘게 잘려도 글자 손실 없음');
+    d.close();
+    console.log('fitText wrap 50줄 초과 OK', r.wrapped, '줄');
+    // 뒤 줄(한글) 때문에 대체 글꼴로 바뀌어도, 넓은 글자·좁은 글자가 섞여도 최종 줄은 maxWidth 안 (전에는 5–28% 넘쳤다)
+    if (process.platform === 'win32') {
+      for (const [mode, t] of [['shrink', 'Latin words that are fairly long here and more\n가나'], ['wrap', 'Latin words that are fairly long here and more\n가나'],
+        ['wrap', 'abc 가나다라마바사아자차카타파하 iii jjj lll 가나다라마바사 ttt 가나다라마바사아자차카타']]) {
+        const d3 = await open(src);
+        const r3 = d3.fitText(0, 5, t, 120, mode), o3 = d3.objects(0);
+        const widths = (r3.lineIdxs || [5]).map((k) => o3[k].bounds.x1 - o3[k].bounds.x0);
+        assert.ok(r3.ok && widths.every((w) => w <= 120 * 1.02), `${mode}: 줄 폭 ${widths.map((w) => w.toFixed(0))} ≤ 120`);
+        d3.close();
+      }
+    }
+  }
+
+  // --- find: NUL이 섞인 질의도 멈추지 않는다 ---
+  {
+    const d = await open(src);
+    assert.deepStrictEqual(d.find(0, '\u0000'), [], 'NUL만 있으면 빈 질의');
+    assert.strictEqual(d.find(0, '\u0000Claude').length, 3, 'NUL을 빼고 찾는다');
+    d.close();
+    console.log('find NUL OK');
+  }
+
+  // --- 글꼴에 없는 글자: 실패 이유를 알려 준다 ---
+  {
+    const d = await open(src);
+    const r = d.setText(0, 0, 'emoji \u{1F600}');
+    assert.ok(!r.ok && /대체 글꼴/.test(r.reason || ''), `실패 이유: ${JSON.stringify(r)}`);
+    d.close();
   }
 
   console.log('\nOK — 모든 검사 통과');

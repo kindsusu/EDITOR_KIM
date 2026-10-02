@@ -137,7 +137,23 @@ function rule({ x0, y0, x1, y1 }) { return { idx: nextIdx++, type: 'path', text:
   assert.strictEqual(groupLines([idA, idB]).length, 2, '⑬ 명시적 fontId가 다르면 분리');
 }
 
-console.log('OK — 합성 객체 단위 검사 ①~⑬ 통과');
+// ⑭ 전자계약 입력 칸: 글자마다 사이에 빈 흰색 조각(크기 0) + 밑에 다른 글꼴의 넓은 공백 → 공백·빈 조각은 줄을 끊지 않는다
+{
+  const ink = [35, 31, 32, 255], font = 'FDKRVC+NotoSansCJKkr-Regular';
+  const objs = [
+    T('1', { x0: 0, y0: 100, x1: 5, y1: 110, originY: 100, size: 10, font, color: ink }),
+    T(' ', { x0: 2, y0: 100, x1: 70, y1: 109, originY: 100.8, size: 9.6, font: 'BERSWC+Dotum' }),
+    T('', { x0: 5.5, y0: 100, x1: 5.5, y1: 100, originX: 5.5, originY: 100, size: 0, font, color: [255, 255, 255, 255] }),
+    T('2', { x0: 6, y0: 100, x1: 11, y1: 110, originX: 5.5, originY: 100, size: 10, font, color: ink }),
+    T('', { x0: 11.5, y0: 100, x1: 11.5, y1: 100, originX: 11.5, originY: 100, size: 0, font, color: [255, 255, 255, 255] }),
+    T('3', { x0: 12, y0: 100, x1: 17, y1: 110, originX: 11.5, originY: 100, size: 10, font, color: ink }),
+  ];
+  const lines = groupLines(objs);
+  assert.strictEqual(lines.length, 1, '⑭ 빈 조각이 끼어도 입력 칸은 한 상자');
+  assert.strictEqual(lines[0].text, '123', '⑭ 상자 글은 입력 글자만');
+}
+
+console.log('OK — 합성 객체 단위 검사 ①~⑭ 통과');
 
 // --- 통합 검사: 저장소 표본 PDF ---
 (async () => {

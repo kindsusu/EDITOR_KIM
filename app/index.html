@@ -320,7 +320,7 @@ function flash(text, ms = 1500) {
 async function apiPost(path, payload) {
   let r; try { r = await fetch(path, { method: 'POST', body: JSON.stringify(payload) }); } catch (error) { flash('⚠ 서버에 연결할 수 없습니다', 4000); throw error; }
   const data = await r.json().catch(() => ({}));
-  if (!r.ok || data.error) { const message = data.error || `HTTP ${r.status}`; flash('⚠ ' + message, 5000); throw new Error(message); }
+  if (!r.ok || data.error) { const message = data.error || (r.status === 409 ? '다른 작업이 진행 중입니다 — 끝난 뒤 다시 시도하세요' : `HTTP ${r.status}`); flash('⚠ ' + message, 5000); throw new Error(message); }
   return data;
 }
 // AI 패널은 실행할 때마다 접힌 상태로 시작. 상단 버튼·옆 탭·Ctrl+J로 언제든 토글한다.
@@ -343,9 +343,12 @@ let cur = null, docText = '', savedText = '', pending = null, curTemp = false, c
 const ZOOM_MIN = 0.5, ZOOM_MAX = 3, ZOOM_DEFAULT = 1.5;
 const clampZoom = (s) => Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, Math.round((+s || ZOOM_DEFAULT) * 100) / 100));
 let pdfPages = [], pdfObjects = [], pdfScale = clampZoom(localStorage.getItem('editorkim.zoom')), pdfDirty = false, selectedObj = null, selectedMask = null, pdfRenderGeneration = 0;
+// 변경 카운터: 저장하는 동안 편집이 있었는지 판별(저장 후에도 미저장 표시를 유지). pdfDocName: 화면에 그려진 PDF(같은 문서를 다시 그릴 때만 쪽·스크롤을 유지). externalWarned: 외부 변경 경고는 문서당 한 번
+let mutationSeq = 0, pdfDocName = null, externalWarned = null;
+const refreshSeq = []; // 쪽별 refreshPage 순번 — 늦게 온 오래된 응답이 새 화면을 덮지 못하게
 let rectMode = false, rectDrag = null;
 // WP-B2: 검색 상태(Ctrl+F) — 페이지 전체 검색 결과·현재 위치·debounce 타이머
-let searchHits = [], searchCur = -1, searchQuery = '', searchDebounce = 0;
+let searchHits = [], searchCur = -1, searchQuery = '', searchDebounce = 0, searchSeq = 0;
 // 미저장 여부·실행취소 스택은 서버(/api/pdf/info)가 정본이다. 새로고침이나 목록에서 닫았다가 다시 열어도 화면이 서버 상태와 어긋나지 않는다
 let aiHealth = null, activeAi = null, setupTarget = null, setupBusy = false, loginPoll = 0; // setupTarget=null이면 대화상자는 서비스 선택 화면
 // P6 WP-B: 작업 진행 창(jobCurrentId·jobPollTimer)·토스트(toastTimer)·로그인 만료 배너(authBannerProvider) 상태
@@ -603,8 +606,8 @@ async function removeFile(p) {
   if (cur === p && dirty() && !confirm('저장하지 않은 변경이 있습니다. 버리고 목록에서 닫을까요?')) return;
   files = files.filter((f) => f !== p); saveFilesLS();
   if (cur === p) {
-    pdfRenderGeneration++; closeAnyPanel(); clearMulti(); closeSearchBar();
-    cur = null; docText = savedText = ''; selectedObj = null; pdfDirty = false; pdfPages = []; pdfObjects = []; $('#pdf').innerHTML = '';
+    pdfRenderGeneration++; closeAnyPanel(); clearMulti(); closeSearchBar(); hideToast();
+    cur = null; pdfDocName = null; docText = savedText = ''; selectedObj = null; pdfDirty = false; pdfPages = []; pdfObjects = []; $('#pdf').innerHTML = '';
     curTemp = curReadOnly = false; updateTempBanner();
     $('#fname').textContent = '파일을 선택하세요'; $('#fname').title = '';
     $('#md').hidden = $('#pdf').hidden = $('#diff').hidden = $('#diffbar').hidden = true;
@@ -691,7 +694,8 @@ async function open(name) {
   if (dirty() && !confirm('저장하지 않은 변경이 있습니다. 버리고 다른 파일을 열까요?')) return;
   if (cur && cur.endsWith('.pdf') && pdfDirty) await apiPost('/api/pdf/close', { name: cur }).catch(() => {}); // 버리기로 했으니 서버 캐시도 닫는다
   pdfRenderGeneration++; // 이전 문서·확대 렌더가 늦게 끝나도 새 화면을 건드리지 못하게 무효화
-  closeAnyPanel(); clearMulti(); closeSearchBar();
+  closeAnyPanel(); clearMulti(); closeSearchBar(); hideToast(); // 토스트의 [실행 취소]는 이전 문서 것이다
+  pdfDocName = null; externalWarned = null; // 명시적으로 여는 것이므로 1쪽부터
   cur = name; pending = null; docText = ''; selectedObj = null; selectedMask = null; pdfDirty = false; $('#send').disabled = true;
   curTemp = curReadOnly = false; updateTempBanner();
   pushRecent(name); renderFiles();
@@ -709,15 +713,30 @@ async function open(name) {
   if (isPdf) { document.querySelector('[value=chat]').checked = true; await renderPdfDoc(name); maybeShowHint(); } // 미저장 여부·실행취소 스택은 서버 info로 채워진다
   else {
     const r = await fetch('/api/file?name=' + encodeURIComponent(name));
+    if (cur !== name) return; // 읽는 동안 다른 파일로 넘어갔다 — 늦은 결과로 다른 문서를 덮어쓰지 않는다
     if (!r.ok) { flash('⚠ 파일을 읽지 못했습니다', 4000); return removeFile(name); }
+    const text = await r.text();
+    if (cur !== name) return;
     curTemp = r.headers.get('X-Editor-Kim-Temp') === '1'; curReadOnly = r.headers.get('X-Editor-Kim-Readonly') === '1'; updateTempBanner();
-    docText = savedText = await r.text(); $('#src').value = docText; preview(); updateMdStatus();
+    docText = savedText = text; $('#src').value = docText; preview(); updateMdStatus();
     renderPageThumbs();
   }
   if (cur !== name) return; // 읽는 동안 다른 파일로 넘어갔다
   updateEditRadio(); showDirty(); syncAiState();
 }
-function preview() { $('#prev').innerHTML = DOMPurify.sanitize(marked.parse($('#src').value)); }
+// 원격 이미지는 자동으로 불러오지 않는다(열람만으로 외부에 요청이 나가는 것을 막음) — 링크로 바꿔 누르면 기본 브라우저로 연다.
+// innerHTML에 바로 넣으면 img가 즉시 요청을 보내므로, 요청이 없는 DOMParser 문서에서 치환한 뒤 옮긴다. data:·상대 경로 이미지는 그대로 둔다.
+function preview() {
+  const doc = new DOMParser().parseFromString(DOMPurify.sanitize(marked.parse($('#src').value)), 'text/html');
+  doc.querySelectorAll('img').forEach((img) => {
+    const src = img.getAttribute('src') || '';
+    img.removeAttribute('srcset');
+    if (!/^(https?:)?\/\//i.test(src)) return;
+    const a = doc.createElement('a'); a.href = src; a.textContent = `[원격 이미지: ${img.getAttribute('alt') || src}]`;
+    img.replaceWith(a);
+  });
+  $('#prev').replaceChildren(...doc.body.childNodes);
+}
 $('#src').oninput = () => { docText = $('#src').value; preview(); showDirty(); updateMdStatus(); };
 // Markdown 저장. 실패(파일 잠김·권한)를 그대로 알리고 미저장 표시를 유지한다 — 조용히 "저장됨"으로 넘어가면 닫을 때 편집을 잃는다
 async function putText(name, text) {
@@ -726,22 +745,27 @@ async function putText(name, text) {
 }
 async function save() {
   if (!cur) return;
+  const name = cur, seq = mutationSeq, text = $('#src').value; // 저장하는 동안 다른 파일로 가거나 편집이 생길 수 있다
   try {
-    if (cur.endsWith('.pdf')) { await apiPost('/api/pdf/save', { name: cur }); pdfDirty = false; }
-    else { await putText(cur, $('#src').value); savedText = docText; }
+    if (name.endsWith('.pdf')) { await apiPost('/api/pdf/save', { name }); if (cur === name && seq === mutationSeq) pdfDirty = false; } // 저장 중 편집이 있었으면 미저장 표시 유지
+    else { await putText(name, text); if (cur === name) savedText = text; }
     showDirty(); flash('저장됨');
   } catch (error) { flash('⚠ ' + error.message, 5000); }
 }
 async function saveAs() {
   if (!cur || !window.editorKim) return;
+  const name = cur, seq = mutationSeq;
   const to = await window.editorKim.saveAs(cur, { suggestDocFolder: curTemp || curReadOnly });
   if (!to) return;
+  const text = $('#src').value;
   try {
-    if (cur.endsWith('.pdf')) { await apiPost('/api/pdf/saveas', { name: cur, to }); pdfDirty = false; }
-    else { await putText(to, $('#src').value); savedText = docText; }
+    if (name.endsWith('.pdf')) await apiPost('/api/pdf/saveas', { name, to });
+    else await putText(to, text);
   } catch (error) { flash('⚠ ' + error.message, 5000); return; }
   if (!files.includes(to)) files.push(to);
-  saveFilesLS(); cur = to; pushRecent(to); renderFiles();
+  if (cur !== name) { saveFilesLS(); renderFiles(); flash('다른 이름으로 저장됨 — 그사이 다른 문서로 옮겨 현재 화면은 그대로 둡니다', 4000); return; } // 늦은 결과로 다른 문서를 바꿔치지 않는다
+  if (name.endsWith('.pdf')) { if (seq === mutationSeq) pdfDirty = false; } else savedText = text;
+  saveFilesLS(); cur = to; if (pdfDocName === name) pdfDocName = to; pushRecent(to); renderFiles();
   $('#fname').textContent = basename(to); $('#fname').title = to;
   curTemp = curReadOnly = false; updateTempBanner(); // 새 경로가 현재 문서가 됐으니 임시 배너는 사라진다
   showDirty(); flash('다른 이름으로 저장됨');
@@ -764,11 +788,20 @@ window.onbeforeunload = (e) => { if (dirty() && !window.editorKim) { e.preventDe
 function setUndoRedoState(u, r) { $('#undoBtn').disabled = !u; $('#redoBtn').disabled = !r; }
 // PDF를 바꾸는 모든 호출을 여기로 통일: dirty 표시 + 실행취소/다시실행 버튼 상태 갱신. 실패하면 상태줄에 알리고 예외(apiPost)
 async function pdfMutate(path, payload) {
-  const r = await apiPost(path, payload);
-  pdfDirty = true; showDirty(); dismissHint(); // 첫 편집이므로 상태줄 첫 안내를 지운다(WP-B1)
+  const name = cur; mutationSeq++;
+  let r;
+  try { r = await apiPost(path, payload); } finally { mutationSeq++; } // 시작·끝 모두 올려야 저장과 겹친 편집을 놓치지 않는다. 409(다른 작업 진행 중)는 apiPost가 메시지를 띄운다
+  if (cur !== name) return r; // 그사이 다른 파일로 넘어갔다 — 이전 파일의 결과로 현재 화면 상태를 바꾸지 않는다
+  if (r && r.ok !== false) { pdfDirty = true; showDirty(); dismissHint(); } // ok:false = 서버가 아무것도 바꾸지 않았다(실행 취소 기록도 없음). 첫 편집이면 상태줄 첫 안내를 지운다(WP-B1)
   if ('undoLeft' in r) setUndoRedoState(r.undoLeft, r.redoLeft);
-  maybeFlashUndoTrimmed(r);
+  maybeFlashUndoTrimmed(r); noteExternalChange(r);
   return r;
+}
+// 서버가 디스크 변경을 감지하고도 메모리의 미저장 편집본을 유지했다는 신호 — 문서당 한 번만 알린다
+function noteExternalChange(r) {
+  if (!r || !r.externalChange || externalWarned === cur) return;
+  externalWarned = cur;
+  flash('⚠ 다른 프로그램이 이 파일을 바꿨습니다 — 저장하지 않은 편집본을 유지하고 있으며, 저장하면 그 변경을 덮어씁니다', 8000);
 }
 function closeAnyPanel() {
   $('#pdf').querySelectorAll('.pdfEditor').forEach((el) => el.remove());
@@ -779,18 +812,20 @@ function closeAnyPanel() {
 async function undo() {
   if (!cur || !cur.endsWith('.pdf') || $('#undoBtn').disabled) return;
   closeAnyPanel();
-  const r = await apiPost('/api/pdf/undo', { name: cur });
-  if (!r.ok) return;
-  pdfDirty = true; showDirty(); setUndoRedoState(r.undoLeft, r.redoLeft); maybeFlashUndoTrimmed(r);
+  const name = cur; mutationSeq++;
+  let r; try { r = await apiPost('/api/pdf/undo', { name }); } finally { mutationSeq++; }
+  if (!r.ok || cur !== name) return;
+  pdfDirty = true; showDirty(); setUndoRedoState(r.undoLeft, r.redoLeft); maybeFlashUndoTrimmed(r); noteExternalChange(r);
   if (r.reloadAll) await renderPdfDoc(cur); else await refreshPage(r.page); // page:null 스냅샷(페이지 삭제·병합·압축)은 문서 전체를 다시 연다
   flash('실행 취소됨');
 }
 async function redo() {
   if (!cur || !cur.endsWith('.pdf') || $('#redoBtn').disabled) return;
   closeAnyPanel();
-  const r = await apiPost('/api/pdf/redo', { name: cur });
-  if (!r.ok) return;
-  pdfDirty = true; showDirty(); setUndoRedoState(r.undoLeft, r.redoLeft); maybeFlashUndoTrimmed(r);
+  const name = cur; mutationSeq++;
+  let r; try { r = await apiPost('/api/pdf/redo', { name }); } finally { mutationSeq++; }
+  if (!r.ok || cur !== name) return;
+  pdfDirty = true; showDirty(); setUndoRedoState(r.undoLeft, r.redoLeft); maybeFlashUndoTrimmed(r); noteExternalChange(r);
   if (r.reloadAll) await renderPdfDoc(cur); else await refreshPage(r.page);
   flash('다시 실행됨');
 }
@@ -812,7 +847,8 @@ function toast(text, opts = {}) {
   clearTimeout(toastTimer);
   $('#toastText').textContent = text;
   const btn = $('#toastAction');
-  if (opts.action && opts.onAction) { btn.textContent = opts.action; btn.hidden = false; btn.onclick = () => { hideToast(); opts.onAction(); }; }
+  const forFile = cur; // 토스트가 뜬 문서 — 다른 문서로 넘어간 뒤에는 [실행 취소]가 엉뚱한 파일을 되돌리지 않게 한다
+  if (opts.action && opts.onAction) { btn.textContent = opts.action; btn.hidden = false; btn.onclick = () => { hideToast(); if (cur === forFile) opts.onAction(); }; }
   else { btn.hidden = true; btn.onclick = null; }
   $('#toast').hidden = false;
   toastTimer = setTimeout(hideToast, 5000);
@@ -911,16 +947,25 @@ function buildPages(name, scale) {
   $('#pdf').replaceChildren(frag);
 }
 async function renderPdfDoc(name) {
-  const renderGeneration = ++pdfRenderGeneration, scale = pdfScale;
-  $('#pdf').innerHTML = '';
+  const renderGeneration = ++pdfRenderGeneration, scale = pdfScale, el = $('#pdf');
+  // 같은 문서를 다시 그리는 경우(회전·순서·삭제·실행 취소)에는 보던 쪽과 쪽 안 위치를 유지한다. 명시적으로 여는 경우(open)는 pdfDocName이 비어 1쪽부터
+  const keep = pdfDocName === name && el.children.length ? { page: currentPageIndex(), offset: el.scrollTop - el.children[currentPageIndex()].offsetTop } : null;
+  closeAnyPanel(); clearMulti(); // 열린 편집 패널·다중 선택·선택 객체는 다시 그리기 전 객체를 가리킨다
+  searchHits = []; clearSearchHighlights(); updateSearchCount(); // 옛 위치의 검색 강조는 지우고, 끝에서 다시 찾는다
+  el.innerHTML = '';
   let info;
   try { info = await (await fetch('/api/pdf/info?name=' + encodeURIComponent(name))).json(); } catch (error) { info = { error: error.message }; }
   if (renderGeneration !== pdfRenderGeneration || cur !== name) return;
-  if (!info.pages) { flash('⚠ PDF를 열지 못했습니다: ' + (info.error || '알 수 없는 오류'), 6000); return; }
+  if (!info.pages) {
+    flash('⚠ PDF를 열지 못했습니다: ' + (info.error || '알 수 없는 오류'), 6000);
+    pdfPages = []; pdfObjects = []; pdfDocName = null; renderPageThumbs(); updateStatusPage(); // 이전 PDF의 쪽·축소본이 남아 있지 않게
+    return;
+  }
   pdfPages = info.pages; pdfObjects = [];
-  pdfDirty = !!info.dirty; showDirty(); setUndoRedoState(info.undoLeft, info.redoLeft); maybeFlashUndoTrimmed(info); // 서버가 기억하는 미저장 편집·실행취소 스택을 그대로 이어받는다
+  pdfDirty = !!info.dirty; showDirty(); setUndoRedoState(info.undoLeft, info.redoLeft); maybeFlashUndoTrimmed(info); noteExternalChange(info); // 서버가 기억하는 미저장 편집·실행취소 스택을 그대로 이어받는다
   curTemp = !!info.temp; curReadOnly = !!info.readOnly; updateTempBanner();
-  buildPages(name, scale);
+  buildPages(name, scale); pdfDocName = name;
+  if (keep && pdfPages.length) { const p = Math.min(keep.page, pdfPages.length - 1); el.scrollTop = el.children[p].offsetTop + (p === keep.page ? keep.offset : 0); } // 쪽 수가 줄었으면 마지막 쪽으로
   updateStatusPage(); renderPageThumbs(); // 상태줄 쪽 번호·사이드바 축소본(WP-B1)
   for (let i = 0; i < pdfPages.length; i++) {
     let objs;
@@ -931,6 +976,7 @@ async function renderPdfDoc(name) {
     if (wrap && !wrap.querySelector('.pdfBox')) drawOverlay(wrap, i, pdfObjects[i], pdfPages[i]); // 로딩 중 확대했으면 applyZoom이 이미 그렸다
   }
   rebuildDocText();
+  if (!$('#searchBar').hidden && $('#searchInput').value) runSearch(true); // 검색 중이었으면 새 문서 기준으로 다시 찾는다
   // 투명 글자(그림 위 검색용 텍스트)가 있으면 열 때 한 번만 알린다
   const hiddenCount = pdfObjects.reduce((n, objs) => n + objs.filter((o) => o.type === 'text' && o.hidden).length, 0);
   if (hiddenCount) flash(`이 문서의 텍스트 상자 ${hiddenCount}개는 투명합니다 — 수정 시 그림을 덮고 새로 그리며, 글꼴 모양이 달라질 수 있습니다 — 줄 단위로 묶어 보여줍니다`, 6000);
@@ -941,6 +987,11 @@ function rebuildDocText() { docText = pdfObjects.map((objs, i) => `[p.${i + 1}] 
 // 상자 = 시각적 줄 하나(기준선으로 묶는다). window.groupLines는 /text-grouping.js가 정의한다 —
 // 근거·상수는 그 파일 머리말 주석을 볼 것. Node 쪽 회귀 검사는 app/text-grouping.test.js.
 const groupLines = (objs) => window.groupLines(objs);
+// 이동·크기 조절: 서버가 거절하거나 연결이 끊겨도(apiPost가 이미 오류를 띄웠다) 상자가 옮겨진 채 남지 않도록 항상 다시 그린다
+async function mutateThenRefresh(i, path, payload) {
+  try { await pdfMutate(path, payload); } catch {}
+  await refreshPage(i);
+}
 // page = pdfPages[i]({w,h,rotation}, 회전 후). 상자 좌표는 pdfToScreen이 회전을 반영해 화면 px로 바꿔 준다(WP-B2).
 function drawOverlay(wrap, i, objs, page) {
   const lines = groupLines(objs).map((line) => {
@@ -951,8 +1002,7 @@ function drawOverlay(wrap, i, objs, page) {
     attachDrag(box, async (dxPx, dyPx) => {
       const { dx, dy } = screenDeltaToPdf(page, dxPx, dyPx);
       const idxs = line.objs.map((o) => o.idx);
-      await pdfMutate('/api/pdf/move', { name: cur, i, idxs, dx, dy });
-      await refreshPage(i);
+      await mutateThenRefresh(i, '/api/pdf/move', { name: cur, i, idxs, dx, dy });
     }, (e) => (e && e.shiftKey ? toggleMulti(i, line, wrap, box) : (clearMulti(), selectLine(i, line, wrap, box)))); // Shift 클릭 = 여러 상자 선택
     wrap.appendChild(box);
     return { line, box };
@@ -965,8 +1015,7 @@ function drawOverlay(wrap, i, objs, page) {
     box._maskObj = o;
     attachDrag(box, async (dxPx, dyPx) => {
       const { dx, dy } = screenDeltaToPdf(page, dxPx, dyPx);
-      await pdfMutate('/api/pdf/move', { name: cur, i, idxs: [o.idx], dx, dy });
-      await refreshPage(i);
+      await mutateThenRefresh(i, '/api/pdf/move', { name: cur, i, idxs: [o.idx], dx, dy });
     }, () => openMaskPanel(i, o, wrap, box), .6);
     wrap.appendChild(box);
     return { idx: o.idx, box };
@@ -978,8 +1027,7 @@ function drawOverlay(wrap, i, objs, page) {
     box.style.left = s.left + 'px'; box.style.top = s.top + 'px'; box.style.width = s.width + 'px'; box.style.height = s.height + 'px';
     attachDrag(box, async (dxPx, dyPx) => {
       const { dx, dy } = screenDeltaToPdf(page, dxPx, dyPx);
-      await pdfMutate('/api/pdf/move', { name: cur, i, idxs: [o.idx], dx, dy });
-      await refreshPage(i);
+      await mutateThenRefresh(i, '/api/pdf/move', { name: cur, i, idxs: [o.idx], dx, dy });
     }, () => selectImage(i, o, wrap, box));
     const handle = document.createElement('div'); handle.className = 'pdfImageHandle';
     attachResize(handle, i, o, page);
@@ -1017,8 +1065,7 @@ function attachResize(handle, i, o, page) {
       const { neww, newh } = compute(e2);
       const b = screenToPdf(page, { left: left0, top: top0, width: neww, height: newh });
       const box2 = { x: Math.min(b.x0, b.x1), y: Math.min(b.y0, b.y1), w: Math.abs(b.x1 - b.x0), h: Math.abs(b.y1 - b.y0) };
-      await pdfMutate('/api/pdf/object/resize', { name: cur, i, idx: o.idx, box: box2 });
-      await refreshPage(i);
+      await mutateThenRefresh(i, '/api/pdf/object/resize', { name: cur, i, idx: o.idx, box: box2 });
     };
     document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp);
   };
@@ -1181,7 +1228,7 @@ function openMaskPanel(i, o, wrap, box) {
     const { dx, dy } = screenDeltaToPdf(pdfPages[pi], sxScreen, syScreen, 1); // scale=1: 화면 방향만 반영, 줌과 무관하게 고정 pt만큼 이동
     await pdfMutate('/api/pdf/move', { name: cur, i: pi, idxs: [idx], dx, dy });
     const boxed = await refreshPage(pi);
-    const hit = boxed.masks.find((m) => m.idx === idx);
+    const hit = boxed.masks?.find((m) => m.idx === idx); // 늦은 응답이면 refreshPage가 []를 돌려준다
     if (hit) openMaskPanel(pi, hit.box._maskObj, wrap, hit.box);
   }
 }
@@ -1212,7 +1259,8 @@ function selectLine(i, line, wrap, box) {
   openInlineEditor(line.text);
 }
 // 줄 아래에 뜨는 편집 패널. 페이지 바닥을 넘으면 줄 위로 뒤집고, 페이지 폭 안으로 clamp한다.
-function openInlineEditor(initialText) {
+// caret({start,end}): 확대·화살표 이동으로 다시 열 때 이전 커서·선택을 복원한다. 없으면(처음 열기) 전체 선택
+function openInlineEditor(initialText, caret) {
   const { wrap, box, size, font } = selectedObj;
   $('#pdf').querySelectorAll('.pdfEditor').forEach((el) => el.remove());
   $('#pdf').querySelectorAll('.pdfBox.editing').forEach((el) => el.classList.remove('editing'));
@@ -1239,7 +1287,7 @@ function openInlineEditor(initialText) {
       ai: () => activeAi, ensureAi, autoRecommend,
       onApply: async (result) => {
         if (cur !== name) return;
-        pdfDirty = true; showDirty(); setUndoRedoState(result.undoLeft, result.redoLeft); maybeFlashUndoTrimmed(result);
+        mutationSeq++; pdfDirty = true; showDirty(); setUndoRedoState(result.undoLeft, result.redoLeft); maybeFlashUndoTrimmed(result);
         selectedObj = null; updateEditRadio(); panel.remove();
         await refreshPage(selection.i, result.idx);
         flash(`${result.fontLabel} 적용됨 (Ctrl+S로 저장)`);
@@ -1296,6 +1344,7 @@ function openInlineEditor(initialText) {
     if (top + ph > pageH - 4) top = box.offsetTop - ph - 6; // 아래로 넘치면 줄 위로 뒤집기
     top = Math.max(4, top);
     panel.style.left = left + 'px'; panel.style.top = top + 'px'; panel.style.visibility = 'visible';
+    ta.focus(); if (caret) ta.setSelectionRange(caret.start, caret.end); else ta.select(); // visibility:hidden 상태에서는 focus()가 무시되므로 보이게 된 뒤에
   });
 
   function updateMaskState() {
@@ -1304,68 +1353,68 @@ function openInlineEditor(initialText) {
   }
   ta.oninput = () => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 180) + 'px'; updateMaskState(); };
   updateMaskState();
-  ta.focus(); ta.select();
 
   const close = () => { panel.remove(); box.classList.remove('editing'); };
 
+  let committing = false; // 적용 요청이 끝나기 전의 Enter·버튼 중복 호출을 막는다
   const commit = async () => {
+    if (committing || !selectedObj) return;
     const newText = ta.value || ' ', align = alignSel.value; // 빈 문자열은 PDFium을 죽이므로 공백으로 대체
-    const { i, objs, text, bounds: oldBounds } = selectedObj;
-    // 폰트 대화상자는 투명 글자(그림 속 서체)이거나 이미 폰트를 지정한 줄에서만 자동으로 연다. 원본 폰트에 없는 글자를 넣는 흔한 경우는
-    // 예전처럼 맑은 고딕 폴백으로 바로 고친다(대화상자는 [폰트 맞추기] 버튼으로 언제든 열 수 있다).
-    // AI 추천은 대화상자의 버튼을 눌렀을 때만 실행한다 — 선택 영역 이미지 전송과 수십 초 대기를 사용자가 결정한다.
-    if (newText !== text && newText.trim() && !/[\r\n]/.test(newText) && objs.length === 1 && !selectedObj.group && (objs[0].hidden || objs[0].fontId)) {
-      const selection = selectedObj, name = cur;
-      try {
-        const status = await apiPost('/api/pdf/font-status', { name, i, idx: objs[0].idx, text: newText });
-        if (selection !== selectedObj || name !== cur || newText !== (ta.value || ' ')) return;
-        if (status.needsAi) { await openFonts(false); return; }
-      } catch (error) { flash(error.message); return; }
-    }
-    close();
-    if (newText === text) return; // 변경 없으면 그대로 둔다
-    let idxs = objs.map((o) => o.idx);
-    let editObjs = objs, remove = [];
-    if (selectedObj.group) {
-      // 그룹의 나머지 객체 제거도 같은 편집 트랜잭션에 포함한다.
-      const first = objs.reduce((a, o) => (o.idx < a.idx ? o : a));
-      remove = objs.filter((o) => o !== first).map((o) => o.idx);
-      editObjs = [first]; idxs = [first.idx];
-    }
-    // 줄을 이루는 조각 객체 중 첫 조각에 전체 텍스트를 넣고 나머지는 비운다 (원본 폰트 유지, idx는 편집 후에도 안정적)
-    // 빈 문자열("")로 SetText하면 PDFium(WASM)이 unreachable로 죽는다 — 대신 공백 하나로 채운다 (원래도 조각 사이에 공백이 섞여 있어 시각적으로 동일)
-    // 나머지 조각을 먼저 비우고 첫 조각을 마지막에: 여러 줄 텍스트면 첫 조각 뒤에 줄 객체가 끼어들어 뒤 인덱스가 밀리기 때문
-    const fit = fitSel.value;
-    let r;
-    if (fit === 'none') {
-      const edits = [...editObjs.slice(1).map((o) => ({ idx: o.idx, text: ' ' })), { idx: editObjs[0].idx, text: newText }];
-      r = await pdfMutate('/api/pdf/edits', { name: cur, i, edits, remove });
-    } else {
-      // 사용 가능한 폭 = 같은 줄에서 왼쪽 이웃의 오른쪽 끝 ~ 오른쪽 이웃의 왼쪽 끝 (이웃이 없으면 페이지 본문의 좌우 끝)
-      const size = selectedObj.size || 10, originalIdxs = new Set(objs.map((o) => o.idx));
-      const texts = (pdfObjects[i] || []).filter((o) => o.type === 'text' && o.bounds && !originalIdxs.has(o.idx));
-      const row = texts.filter((o) => Math.abs(o.bounds.y0 - oldBounds.y0) < 0.6 * size);
-      const pageL = Math.min(...texts.map((o) => o.bounds.x0)), pageR = Math.max(...texts.map((o) => o.bounds.x1));
-      // 이웃이 없어도 페이지 가장자리(여백 18pt)는 넘지 않는다
-      const edgeL = 18, edgeR = pdfPages[i].w - 18;
-      const left = Math.max(0, row.filter((o) => o.bounds.x1 <= oldBounds.x0 + 1).reduce((m, o) => Math.max(m, o.bounds.x1), isFinite(pageL) ? Math.min(pageL, oldBounds.x0) : edgeL));
-      const right = Math.min(edgeR, row.filter((o) => o.bounds.x0 >= oldBounds.x1 - 1).reduce((m, o) => Math.min(m, o.bounds.x0), isFinite(pageR) ? Math.max(pageR, oldBounds.x1) : edgeR));
-      const maxWidth = Math.max(20, right - left - 2);
-      // 나머지 조각 비우기까지 /api/pdf/fit 한 번에 맡긴다 — 스냅샷이 하나라 편집 한 번을 Ctrl+Z 한 번으로 되돌린다
-      const one = await pdfMutate('/api/pdf/fit', { name: cur, i, idx: editObjs[0].idx, text: newText, maxWidth, mode: fit, blank: editObjs.slice(1).map((o) => o.idx), remove });
-      r = { ...one, results: [one] };
-    }
-    if (r.lineIdxs?.length) idxs = r.lineIdxs; // 투명 글자를 드러내거나 줄이 늘면 객체 위치가 바뀐다
-    if (align !== 'left') { // 새 폭을 재서 왼쪽/오른쪽 끝이 원래 자리에 오도록 이동
-      const fresh = await (await fetch(`/api/pdf/objects?name=${encodeURIComponent(cur)}&i=${i}`)).json();
-      const nb = idxs.reduce((b, ix) => {
-        const o = fresh[ix]; if (!o || !o.bounds) return b;
-        return { x0: Math.min(b.x0, o.bounds.x0), y0: Math.min(b.y0, o.bounds.y0), x1: Math.max(b.x1, o.bounds.x1), y1: Math.max(b.y1, o.bounds.y1) };
-      }, { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity });
-      const dx = align === 'center' ? ((oldBounds.x0 + oldBounds.x1) - (nb.x0 + nb.x1)) / 2 : oldBounds.x1 - nb.x1;
-      if (dx) await pdfMutate('/api/pdf/move', { name: cur, i, idxs, dx, dy: 0 });
-    }
-    selectedObj = null; updateEditRadio();
+    const sel = selectedObj, name = cur;
+    const { i, objs, text, bounds: oldBounds } = sel;
+    committing = true;
+    let r, first;
+    try {
+      // 폰트 대화상자는 투명 글자(그림 속 서체)이거나 이미 폰트를 지정한 줄에서만 자동으로 연다. 원본 폰트에 없는 글자를 넣는 흔한 경우는
+      // 예전처럼 맑은 고딕 폴백으로 바로 고친다(대화상자는 [폰트 맞추기] 버튼으로 언제든 열 수 있다).
+      // AI 추천은 대화상자의 버튼을 눌렀을 때만 실행한다 — 선택 영역 이미지 전송과 수십 초 대기를 사용자가 결정한다.
+      if (newText !== text && newText.trim() && !/[\r\n]/.test(newText) && objs.length === 1 && !sel.group && (objs[0].hidden || objs[0].fontId)) {
+        try {
+          const status = await apiPost('/api/pdf/font-status', { name, i, idx: objs[0].idx, text: newText });
+          if (sel !== selectedObj || name !== cur || newText !== (ta.value || ' ')) return;
+          if (status.needsAi) { await openFonts(false); return; }
+        } catch (error) { flash(error.message); return; }
+      }
+      if (newText === text) { close(); return; } // 변경 없으면 그대로 둔다
+      // 서버 응답 전에는 편집기를 닫지 않는다 — 실패하면 입력한 글이 그대로 남아 다시 시도할 수 있다
+      ta.readOnly = true; okBtn.disabled = true;
+      // 첫 조각에 전체 텍스트를 넣고(원본 폰트 유지) 나머지 조각을 정리한다. 그룹은 가장 앞 idx를 첫 조각으로 삼는다.
+      // 보이는 조각은 remove로 지운다 — 공백 ' '으로 비우면 일부 글꼴에서 'ÿ'로 읽혀 서버가 편집을 거부한다.
+      // 투명(hidden) 조각은 드러내기 경로가 그림을 덮으므로 기존처럼 공백으로 비운다(blank). 빈 문자열("")로 SetText하면 PDFium(WASM)이 죽는다.
+      first = sel.group ? objs.reduce((a, o) => (o.idx < a.idx ? o : a)) : objs[0];
+      const siblings = objs.filter((o) => o !== first);
+      const remove = siblings.filter((o) => sel.group || !o.hidden).map((o) => o.idx);
+      const blank = siblings.filter((o) => !sel.group && o.hidden).map((o) => o.idx);
+      // 정렬 유지(가운데/오른쪽)는 서버가 같은 트랜잭션에서 이동한다 — 편집 한 번이 Ctrl+Z 한 번으로 되돌아간다
+      const alignReq = align !== 'left' ? { mode: align, oldBounds } : undefined;
+      const fit = fitSel.value;
+      if (fit === 'none') {
+        const edits = [...blank.map((idx) => ({ idx, text: ' ' })), { idx: first.idx, text: newText }];
+        r = await pdfMutate('/api/pdf/edits', { name, i, edits, remove, align: alignReq });
+      } else {
+        // 사용 가능한 폭 = 같은 줄에서 왼쪽 이웃의 오른쪽 끝 ~ 오른쪽 이웃의 왼쪽 끝 (이웃이 없으면 페이지 본문의 좌우 끝)
+        const size = sel.size || 10, originalIdxs = new Set(objs.map((o) => o.idx));
+        const texts = (pdfObjects[i] || []).filter((o) => o.type === 'text' && o.bounds && !originalIdxs.has(o.idx));
+        const row = texts.filter((o) => Math.abs(o.bounds.y0 - oldBounds.y0) < 0.6 * size);
+        const pageL = Math.min(...texts.map((o) => o.bounds.x0)), pageR = Math.max(...texts.map((o) => o.bounds.x1));
+        // 이웃이 없어도 페이지 가장자리(여백 18pt)는 넘지 않는다
+        const edgeL = 18, edgeR = pdfPages[i].w - 18;
+        const left = Math.max(0, row.filter((o) => o.bounds.x1 <= oldBounds.x0 + 1).reduce((m, o) => Math.max(m, o.bounds.x1), isFinite(pageL) ? Math.min(pageL, oldBounds.x0) : edgeL));
+        const right = Math.min(edgeR, row.filter((o) => o.bounds.x0 >= oldBounds.x1 - 1).reduce((m, o) => Math.min(m, o.bounds.x0), isFinite(pageR) ? Math.max(pageR, oldBounds.x1) : edgeR));
+        const maxWidth = Math.max(20, right - left - 2);
+        // 나머지 조각 비우기까지 /api/pdf/fit 한 번에 맡긴다 — 스냅샷이 하나라 편집 한 번을 Ctrl+Z 한 번으로 되돌린다
+        const one = await pdfMutate('/api/pdf/fit', { name, i, idx: first.idx, text: newText, maxWidth, mode: fit, blank, remove, align: alignReq });
+        r = { ...one, results: [one] };
+      }
+      close();
+    } catch (error) {
+      ta.readOnly = false; okBtn.disabled = false; // 편집기를 열어 둔 채 오류를 알린다(apiPost가 이미 띄웠으면 그대로)
+      if (!$('#status').textContent.startsWith('⚠')) flash('⚠ ' + (error.message || '적용하지 못했습니다'), 5000);
+      return;
+    } finally { committing = false; }
+    if (!r || cur !== name) return;
+    const idxs = r.lineIdxs?.length ? r.lineIdxs : [first.idx]; // 투명 글자를 드러내거나 줄이 늘면 객체 위치가 바뀐다
+    if (selectedObj === sel) { selectedObj = null; updateEditRadio(); }
     await refreshPage(i, idxs[0]);
     const addedLines = (r.results || []).reduce((n, x) => n + (x.inserted || 0), 0);
     const revealed = (r.results || []).some((x) => x.revealed) || r.revealed;
@@ -1374,6 +1423,7 @@ function openInlineEditor(initialText) {
   okBtn.onclick = commit;
   cancelBtn.onclick = close;
   ta.onkeydown = (e) => {
+    if (e.isComposing || e.keyCode === 229) return; // 한글 조합 중 Enter는 글자 확정이다 — 적용하지 않는다
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); commit(); }
     else if (e.key === 'Escape') { e.preventDefault(); close(); }
   };
@@ -1381,14 +1431,14 @@ function openInlineEditor(initialText) {
   // 화살표 이동: 즉시 옮기고 같은 줄을 다시 선택해 패널을 유지한다
   async function nudge(sxScreen, syScreen) {
     const { i, objs } = selectedObj;
-    const idxs = objs.map((o) => o.idx), savedVal = ta.value;
+    const idxs = objs.map((o) => o.idx), savedVal = ta.value, caret = { start: ta.selectionStart, end: ta.selectionEnd };
     const { dx, dy } = screenDeltaToPdf(pdfPages[i], sxScreen, syScreen, 1); // scale=1: 화면 방향만 반영, 줌과 무관하게 고정 pt만큼 이동
     await pdfMutate('/api/pdf/move', { name: cur, i, idxs, dx, dy });
     const boxed = await refreshPage(i);
     const hit = boxed.find(({ line }) => line.objs.some((o) => idxs.includes(o.idx)));
     if (!hit) return;
     selectedObj = lineSelection(i, hit.line, wrap, hit.box);
-    openInlineEditor(savedVal);
+    openInlineEditor(savedVal, caret);
   }
 
   async function maskParts(parts, maskedText) {
@@ -1397,8 +1447,9 @@ function openInlineEditor(initialText) {
     selectedObj = null; updateEditRadio();
     await refreshPage(i);
     close();
+    if (r.ok === false) { flash('가리지 못했습니다 — 이 글자는 가릴 수 없는 형식입니다. 사각형 가리기로 덮으세요'); return; }
     const sub = (maskedText || '').trim();
-    flash(sub && r.textLeft.includes(sub) ? '⚠ 가린 글자가 텍스트에 남아 있습니다' : hid ? '가림 완료 — 텍스트는 제거됨. 이 글자는 그림으로도 그려져 있어 그림은 덮기만 했습니다' : '가림 완료 — 텍스트에서도 제거됨');
+    flash(sub && (r.textLeft || '').includes(sub) ? '⚠ 가린 글자가 텍스트에 남아 있습니다' : hid ? '가림 완료 — 텍스트는 제거됨. 이 글자는 그림으로도 그려져 있어 그림은 덮기만 했습니다' : '가림 완료 — 텍스트에서도 제거됨');
   }
   maskSelBtn.onclick = () => {
     const from = ta.selectionStart, to = ta.selectionEnd;
@@ -1408,18 +1459,19 @@ function openInlineEditor(initialText) {
   maskLineBtn.onclick = () => maskParts(selectedObj.objs.map((o) => ({ idx: o.idx, from: 0, to: o.text.length })), selectedObj.text);
 }
 async function refreshPage(i, editedIdx) {
-  const renderGeneration = pdfRenderGeneration, name = cur;
+  const renderGeneration = pdfRenderGeneration, name = cur, seq = refreshSeq[i] = (refreshSeq[i] || 0) + 1; // seq: 같은 쪽의 더 새로운 호출이 있으면 이 응답은 버린다
   clearMulti(); // 상자를 다시 그리므로 다중 선택은 해제
   const wrap = $('#pdf').children[i];
   if (!wrap) return [];
   wrap.querySelector('img').src = pageUrl(name, i);
   const thumbImg = $('#pageThumbs').children[i]?.querySelector('img'); if (thumbImg) thumbImg.src = pageUrl(name, i, 0.25); // 사이드바 축소본도 갱신(WP-B1)
   const objs = await (await fetch(`/api/pdf/objects?name=${encodeURIComponent(name)}&i=${i}`)).json();
-  if (renderGeneration !== pdfRenderGeneration || cur !== name || !wrap.isConnected) return [];
+  if (renderGeneration !== pdfRenderGeneration || cur !== name || !wrap.isConnected || seq !== refreshSeq[i] || !Array.isArray(objs)) return [];
   pdfObjects[i] = objs;
-  wrap.querySelectorAll('.pdfBox, .pdfEditor').forEach((el) => el.remove());
+  wrap.querySelectorAll('.pdfBox, .pdfEditor, .searchHit').forEach((el) => el.remove());
   const boxed = drawOverlay(wrap, i, objs, pdfPages[i]);
   rebuildDocText();
+  if (searchQuery && !$('#searchBar').hidden) runSearch(true); // 줄이 움직였으면 강조·n/m도 새 위치로(스크롤은 건드리지 않는다)
   if (editedIdx != null) checkOverflow(i, editedIdx, boxed);
   return boxed;
 }
@@ -1441,7 +1493,7 @@ function applyZoom(next, anchor) {
   const target = wraps.find((w) => docY >= w.offsetTop && docY <= w.offsetTop + w.offsetHeight)
     || wraps.reduce((best, w) => (Math.abs(w.offsetTop - docY) < Math.abs(best.offsetTop - docY) ? w : best), wraps[0]);
   const fx = (docX - target.offsetLeft) / target.offsetWidth, fy = (docY - target.offsetTop) / target.offsetHeight;
-  const editing = selectedObj && { i: selectedObj.i, idxs: selectedObj.objs.map((o) => o.idx), text: el.querySelector('.pdfEditor textarea')?.value };
+  const editing = selectedObj && { i: selectedObj.i, idxs: selectedObj.objs.map((o) => o.idx), text: el.querySelector('.pdfEditor textarea')?.value, caret: (() => { const t = el.querySelector('.pdfEditor textarea'); return t && { start: t.selectionStart, end: t.selectionEnd }; })() };
   closeAnyPanel(); clearMulti();
   pdfScale = next; showZoom(); localStorage.setItem('editorkim.zoom', pdfScale);
   const boxedByPage = wraps.map((wrap, i) => {
@@ -1455,7 +1507,7 @@ function applyZoom(next, anchor) {
   el.scrollLeft = target.offsetLeft + fx * target.offsetWidth - ax;
   if (editing) {
     const hit = boxedByPage[editing.i].find(({ line }) => line.objs.some((o) => editing.idxs.includes(o.idx)));
-    if (hit) { selectedObj = lineSelection(editing.i, hit.line, wraps[editing.i], hit.box); updateEditRadio(); openInlineEditor(editing.text ?? hit.line.text); }
+    if (hit) { selectedObj = lineSelection(editing.i, hit.line, wraps[editing.i], hit.box); updateEditRadio(); openInlineEditor(editing.text ?? hit.line.text, editing.caret || undefined); }
   }
   clearTimeout(zoomTimer);
   zoomTimer = setTimeout(() => {
@@ -1709,6 +1761,7 @@ function openSearchBar() {
   if ($('#searchInput').value) runSearch();
 }
 function closeSearchBar() {
+  clearTimeout(searchDebounce); searchSeq++; // 대기 중인 검색·늦은 응답이 닫은 뒤에 강조를 다시 그리지 못하게
   $('#searchBar').hidden = true;
   searchHits = []; searchCur = -1; searchQuery = '';
   clearSearchHighlights(); updateSearchCount();
@@ -1720,24 +1773,26 @@ document.addEventListener('keydown', (e) => {
   else if (e.key === 'Escape' && !$('#searchBar').hidden) closeSearchBar();
 });
 $('#searchInput').addEventListener('input', () => { clearTimeout(searchDebounce); searchDebounce = setTimeout(runSearch, 250); });
-$('#searchMatchCase').onchange = runSearch;
+$('#searchMatchCase').onchange = () => runSearch();
 $('#searchInput').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') { e.preventDefault(); searchStep(e.shiftKey ? -1 : 1); }
+  if (e.key === 'Enter') { if (e.isComposing || e.keyCode === 229) return; e.preventDefault(); searchStep(e.shiftKey ? -1 : 1); } // 한글 조합 확정 Enter로 다음 결과로 넘어가지 않게
 });
 $('#searchPrev').onclick = () => searchStep(-1);
 $('#searchNext').onclick = () => searchStep(1);
 // 빈 질의는 서버가 400을 돌려준다(PDFium이 빈 질의로 멈추는 것을 막는 안전판) — 여기서도 미리 걸러 헛된 요청을 안 보낸다
-async function runSearch() {
-  const q = $('#searchInput').value;
+// quiet=true: 편집·되돌리기 뒤 새 위치로 다시 찾는 경우 — 현재 번호를 유지하고 화면을 스크롤하지 않는다
+async function runSearch(quiet) {
+  quiet = quiet === true;
+  const q = $('#searchInput').value, prevCur = searchCur, seq = ++searchSeq;
   clearSearchHighlights();
   searchHits = []; searchCur = -1; searchQuery = q;
   if (!q || !cur || !cur.endsWith('.pdf')) { updateSearchCount(); return; }
   try {
     const r = await apiPost('/api/pdf/find', { name: cur, query: q, matchCase: $('#searchMatchCase').checked });
-    if (searchQuery !== q || !cur) return; // 늦게 도착한 응답은 버린다(입력이 그새 바뀜)
+    if (seq !== searchSeq || !cur) return; // 늦게 도착한 응답은 버린다(입력이 바뀌었거나 검색줄을 닫음)
     searchHits = r.hits || [];
-    drawSearchHighlights();
-    if (searchHits.length) searchStep(1, true); else updateSearchCount();
+    if (quiet && searchHits.length) { searchCur = Math.min(Math.max(prevCur, 0), searchHits.length - 1); drawSearchHighlights(); updateSearchCount(); }
+    else { drawSearchHighlights(); if (searchHits.length) searchStep(1, true); else updateSearchCount(); }
     if (r.truncated) flash('결과가 많아 처음 500건만 표시합니다', 3000);
   } catch { updateSearchCount(); }
 }
@@ -1783,9 +1838,9 @@ function openSearchHitCtxMenu(hitIdx, x, y) {
   maskLine.disabled = !line; if (!line) maskLine.title = '이 결과가 속한 줄을 찾지 못했습니다';
   maskLine.onclick = async () => {
     closeCtxMenu();
-    await pdfMutate('/api/pdf/mask', { name: cur, i: hit.i, parts: line.objs.map((o) => ({ idx: o.idx, from: 0, to: o.text.length })), color: maskColor() });
+    const r = await pdfMutate('/api/pdf/mask', { name: cur, i: hit.i, parts: line.objs.map((o) => ({ idx: o.idx, from: 0, to: o.text.length })), color: maskColor() });
     await refreshPage(hit.i);
-    flash('줄 전체를 가렸습니다'); runSearch(); // 객체 idx가 바뀌었을 수 있어 다시 찾는다
+    flash(r.ok === false ? '가리지 못했습니다 — 사각형 가리기로 덮으세요' : '줄 전체를 가렸습니다'); runSearch(); // 객체 idx가 바뀌었을 수 있어 다시 찾는다
   };
   menu.appendChild(maskLine);
   document.body.appendChild(menu);
@@ -2102,6 +2157,8 @@ $('#send').onclick = async () => {
   const isPdf = cur.endsWith('.pdf');
   if (mode === 'edit' && isPdf) mode = 'editText'; // PDF에서는 선택 객체 텍스트만 고침
   const sendDoc = mode === 'editText' && selectedObj ? selectedObj.text : docText;
+  // 보낸 시점의 문서·선택 줄·본문을 기억한다 — 답이 오는 동안 바뀌었으면 수정안을 엉뚱한 곳에 적용하지 않는다
+  const sentCur = cur, sentDoc = docText, lineKey = (o) => o && `${o.i}:${o.objs.map((x) => x.idx).join(',')}`, sentLine = lineKey(selectedObj);
   add('me', (mode !== 'chat' ? '✏️ ' : '') + q); $('#q').value = ''; $('#send').disabled = true;
   const bot = add('bot', mode === 'chat' ? '…' : '문서를 수정하는 중…'); let out = '';
   chatAbort = new AbortController(); $('#stop').hidden = false;
@@ -2123,7 +2180,9 @@ $('#send').onclick = async () => {
           const billing = Number.isFinite(ev.done.cost) ? `API 환산 $${ev.done.cost.toFixed(3)}` : (ev.done.billing || '구독');
           const meta = document.createElement('small'); meta.textContent = [ev.done.model, seconds, billing].filter(Boolean).join(' · ');
           const clean = out.replace(/^```(?:markdown|md)?\n|\n```$/g, '').trim();
-          if (mode === 'edit') { bot.textContent = '수정안을 만들었습니다. 왼쪽에서 변경 내용을 확인하고 적용하세요.'; showDiff(docText, clean); }
+          const stale = mode !== 'chat' && (cur !== sentCur || (mode === 'edit' ? docText !== sentDoc : lineKey(selectedObj) !== sentLine));
+          if (stale) bot.textContent = `${out}\n\n(다른 문서(또는 다른 줄)로 바뀌어 수정안을 적용하지 않았습니다.)`;
+          else if (mode === 'edit') { bot.textContent = '수정안을 만들었습니다. 왼쪽에서 변경 내용을 확인하고 적용하세요.'; showDiff(docText, clean); }
           else if (mode === 'editText' && selectedObj) { bot.textContent = '수정안을 만들었습니다. 문서에서 확인하고 Enter로 확정하세요.'; openInlineEditor(clean); }
           else bot.textContent = out;
           bot.appendChild(meta);
@@ -2145,12 +2204,13 @@ function lineDiff(a, b) {
   while (i < n) out.push(['-', A[i++]]); while (j < m) out.push(['+', B[j++]]);
   return out;
 }
+let pendingFor = null; // 수정안을 만든 문서 — 적용은 같은 문서일 때만
 function showDiff(oldT, newT) {
-  pending = newT; const esc = (s) => s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  pending = newT; pendingFor = cur; const esc = (s) => s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
   $('#diff').innerHTML = lineDiff(oldT, newT).map(([k, l]) => `<div class="${k === '+' ? 'a' : k === '-' ? 'd' : ''}">${k} ${esc(l) || ' '}</div>`).join('');
   $('#md').hidden = true; $('#diff').hidden = false; $('#diffbar').hidden = false;
 }
-$('#accept').onclick = () => { $('#src').value = docText = pending; preview(); closeDiff(); showDirty(); updateMdStatus(); flash('변경 적용됨 (Ctrl+S로 저장)'); };
+$('#accept').onclick = () => { if (pending == null || pendingFor !== cur) { pending = null; $('#diff').hidden = $('#diffbar').hidden = true; return flash('다른 문서로 바뀌어 수정안을 적용하지 않았습니다', 4000); } $('#src').value = docText = pending; preview(); closeDiff(); showDirty(); updateMdStatus(); flash('변경 적용됨 (Ctrl+S로 저장)'); };
 $('#reject').onclick = closeDiff;
 function closeDiff() { pending = null; $('#diff').hidden = true; $('#diffbar').hidden = true; $('#md').hidden = false; }
 

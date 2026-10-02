@@ -110,6 +110,10 @@ function mergeRow(rowItems, nonText) {
     const sameColor = a.color[0] === b.color[0] && a.color[1] === b.color[1] && a.color[2] === b.color[2]; // 알파 제외
     const limit = (a.hidden && b.hidden) ? HIDDEN_GAP_MERGE_RATIO : GAP_MERGE_RATIO;
     if (gap < limit && sameFont && sameFontId && sameSize && sameHidden && sameColor && !hasVerticalRuleBetween(a, b, nonText)) cur.push(b);
+    // 줄에 안 맞는 공백·빈 조각은 줄을 끊지 않고 건너뛴다. 전자계약 양식은 입력 칸의 글자마다 사이에 빈 흰색 조각(크기 0)을 끼우고,
+    // 칸 밑에 양식 원본의 넓은 공백 조각이 겹쳐 있어 숫자·주소가 한 글자씩 상자가 됐다(계약서 실측: 1쪽 한 글자 상자 227개).
+    // 건너뛴 조각은 어느 상자에도 안 들어간다 — 예전에도 공백만 든 상자는 아래 visible 필터에서 버려졌다.
+    else if (!(b.text || '').trim()) continue;
     else boxes.push([b]);
   }
   return boxes.map((members) => ({

@@ -191,7 +191,7 @@ for (const phase of ['export-images', 'split', 'merge', 'downsample', 'downsampl
     `${phase} 라우트가 jobId를 받는다 (C1)`);
 }
 assert.match(serverSource, /if \(result\.cancelled\) \{ \/\/ 문서를 바꾸는 작업/, '취소된 용량 줄이기는 스냅샷으로 되돌린다 (C1)');
-assert.match(serverSource, /async function rollback\(entry\)/, '되돌리기는 스냅샷을 pop한다 — 실행 취소 스택에 남기지 않는다 (C1)');
+assert.match(serverSource, /async function restore\(entry, i, before\)/, '실패·취소한 변경은 이전 바이트로 되돌리고 실행 취소 스택에 남기지 않는다 (C1)');
 assert.match(serverSource, /JOB_TTL = 60000/, '끝난 작업은 60초 뒤 지운다 (C1)');
 // C2: 인증 만료 신호
 assert.match(serverSource, /json\(res, 401, \{ error: e\.message, code: 'auth'/, 'JSON 라우트는 401 + code:auth (C2)');
@@ -230,3 +230,17 @@ assert.match(preloadSource, /pathForFile:\s*\(file\)/, '프리로드는 File 하
 }
 
 console.log('OK — P8 끌어다 놓기 단언 통과');
+
+// UI 결함 수정(2026-10): 한글 조합 Enter, 적용 중복/실패 보존, 정렬은 서버에서, 링크·원격 이미지 차단
+const mainSource = fs.readFileSync(path.join(__dirname, 'main.js'), 'utf8');
+assert.match(mainSource, /will-navigate/, 'app window cannot be navigated away by Markdown links');
+assert.match(mainSource, /setWindowOpenHandler/, 'new-window requests are denied and opened externally');
+assert.match(html, /ta\.onkeydown = \(e\) => \{\s*if \(e\.isComposing \|\| e\.keyCode === 229\) return;/, 'inline editor ignores Enter while composing Hangul');
+assert.match(html, /searchInput'\)\.addEventListener\('keydown'[\s\S]{0,120}isComposing/, 'search input ignores Enter while composing Hangul');
+assert.match(html, /let committing = false/, 'inline editor commit has an in-flight guard');
+assert.doesNotMatch(html, /\/api\/pdf\/move', \{ name: cur, i, idxs, dx: /, 'edit commit no longer follows up with a separate move');
+assert.match(html, /align: alignReq/, 'alignment is sent with the edit so one edit is one undo');
+assert.match(html, /refreshSeq\[i\]/, 'refreshPage drops out-of-order responses');
+assert.match(html, /mutationSeq/, 'save only clears dirty if no edit happened during it');
+assert.match(html, /externalChange/, 'external file change is surfaced');
+assert.match(html, /new DOMParser\(\)\.parseFromString\(DOMPurify\.sanitize/, 'Markdown remote images are neutralised before insertion');

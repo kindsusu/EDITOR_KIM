@@ -44,18 +44,41 @@ function defaultWorkspace() {
 }
 let WS = conf.workspace && fs.existsSync(conf.workspace) ? conf.workspace : defaultWorkspace();
 const sessions = {}; // `${provider}\0${문서명}` → { model, id }
-const pdfDocs = {}; // 파일명 → { doc, mtimeMs, dirty }
+const pdfDocs = {}; // docKey(파일) → { doc, mtimeMs, dirty, busy, externalChange, undo, redo, ... }
 const MAX_RENDER_SCALE = 4; // A4 기준 2380×3368px. 그 이상은 WASM 힙만 먹고 화면에서 구분되지 않는다
+// 상태 코드를 실은 오류 — 공통 catch가 e.status로 응답한다
+const httpError = (status, message) => Object.assign(new Error(message), { status });
+// 캐시 키: 상대·절대 표기가 달라도 같은 파일이면 한 항목(Windows는 대소문자 무시)
+const docKey = (name) => { const p = safe(name); return process.platform === 'win32' ? p.toLowerCase() : p; };
 
-// 캐시된 PDF 문서를 반환. 없거나 디스크에서 파일이 바뀌었으면 (다시) 연다 — 미저장 편집은 버려짐.
+// 캐시된 PDF 문서를 반환. 없거나 디스크에서 파일이 바뀌었으면 (다시) 연다.
+// 미저장 편집이 있으면(또는 긴 작업 중이면) 다시 열지 않는다 — 편집과 실행 취소 기록을 지키고
+// externalChange로 "디스크의 파일이 바뀌었다"만 알린다(OneDrive 동기화·백신이 mtime을 바꾸는 경우). 저장하면 풀린다.
 async function getPdfDoc(name) {
-  const p = safe(name);
-  const mtimeMs = fs.statSync(p).mtimeMs;
-  const cached = pdfDocs[name];
+  const p = safe(name), key = docKey(name), cached = pdfDocs[key];
+  let mtimeMs;
+  try { mtimeMs = fs.statSync(p).mtimeMs; } // 미저장 편집 중 파일이 사라져도(동기화가 옮김) 편집은 남겨 저장할 수 있게 한다
+  catch (e) { if (cached?.dirty) { cached.externalChange = true; return cached; } throw e; }
   if (cached && cached.mtimeMs === mtimeMs) return cached;
-  if (cached) cached.doc.close();
+  if (cached && (cached.dirty || cached.busy)) { if (cached.dirty) cached.externalChange = true; return cached; }
+  if (cached) { delete pdfDocs[key]; cached.doc.close(); } // 다시 열기가 실패해도 닫힌 문서가 캐시에 남지 않게 먼저 뺀다
   const doc = await pdfEngine.open(fs.readFileSync(p));
-  return (pdfDocs[name] = { doc, mtimeMs, dirty: false, undo: [], redo: [], undoBytes: 0, undoTrimmed: false });
+  if (pdfDocs[key]) { doc.close(); return pdfDocs[key]; } // 같은 파일을 동시에 연 다른 요청이 먼저 넣었다
+  return (pdfDocs[key] = { doc, mtimeMs, dirty: false, undo: [], redo: [], undoBytes: 0, undoTrimmed: false });
+}
+// 문서를 바꾸는 요청용: 긴 작업이 같은 문서를 쓰는 중이면 409. 끼어들면 작업의 되돌리기·스냅샷이 엉킨다.
+// 긴 작업 라우트는 이것으로 문서를 얻은 뒤 (await 없이) entry.busy = true, finally에서 푼다
+async function getEditableDoc(name) {
+  const entry = await getPdfDoc(name);
+  if (entry.busy) throw httpError(409, '긴 작업이 끝난 뒤 다시 시도하세요.');
+  return entry;
+}
+// 캐시에서 문서를 버린다(다른 파일로 덮어쓴 경우·닫기). 긴 작업이 쓰는 중이면 닫지 않고 409
+function dropDoc(name) {
+  const key = docKey(name), entry = pdfDocs[key];
+  if (!entry) return;
+  if (entry.busy) throw httpError(409, '긴 작업이 끝난 뒤 다시 시도하세요.');
+  delete pdfDocs[key]; entry.doc.close();
 }
 
 // ponytail: undo 스택은 문서당 최대 20개(save() 바이트 통짜) — 600KB 문서 기준 12MB, 개인용 데스크톱 앱이라 넉넉함.
@@ -74,47 +97,64 @@ function trimStacks(entry) { // 합계를 다시 재고(최대 20+20개라 비�
   }
   return entry.undoBytes;
 }
-function snapshot(entry, i) {
-  entry.undo.push({ bytes: entry.doc.save(), page: i });
+function snapshot(entry, i, bytes = entry.doc.save()) {
+  entry.undo.push({ bytes, page: i });
   if (entry.undo.length > UNDO_MAX) entry.undo.shift();
   entry.redo = [];
   trimStacks(entry);
 }
-// All line fragments are edited on a private copy. A failed PDFium operation
-// never changes the live document, dirty bit, or either history stack.
-async function editTransaction(entry, i, edits, options = {}) {
-  const originalDoc = entry.doc, originalUndo = entry.undo, originalRedo = entry.redo;
-  const originalUndoLength = originalUndo.length, originalRedoLength = originalRedo.length, originalDirty = entry.dirty;
-  const before = originalDoc.save();
-  let next = await pdfEngine.open(before);
-  let result;
-  try {
-    result = applyEdits(next, i, edits, options);
-    const persisted = await pdfEngine.open(next.save());
-    try { verifyEdits(persisted, i, edits, result.results); }
-    catch (error) { persisted.close(); throw error; }
-    next.close(); next = persisted;
-    // Opening the copy yields to the event loop; refuse to overwrite a newer edit.
-    if (entry.doc !== originalDoc || entry.undo !== originalUndo || entry.redo !== originalRedo ||
-      entry.undo.length !== originalUndoLength || entry.redo.length !== originalRedoLength || entry.dirty !== originalDirty ||
-      !entry.doc.save().equals(before)) {
-      throw new Error('파일이 변경됐습니다. 다시 편집하세요.');
-    }
-  } catch (error) { next.close(); throw error; }
-  entry.undo.push({ bytes: before, page: i });
-  if (entry.undo.length > UNDO_MAX) entry.undo.shift();
-  entry.redo = [];
-  trimStacks(entry);
-  entry.doc = next;
+// 엔진이 doc.batch를 지원하면 fn 동안 콘텐츠 재생성을 미뤄 쪽마다 한 번만 만든다(조각마다 쪽 전체를 다시 쓰면
+// 옛 스트림이 파일에 쌓인다). 지원하지 않는 엔진이면 그냥 실행한다. 반환값은 fn의 것
+function batch(doc, fn) {
+  let r;
+  if (typeof doc.batch === 'function') doc.batch(() => { r = fn(); }); else r = fn();
+  return r;
+}
+// 실패한 변경을 되돌린다: 변경 전 바이트로 문서를 다시 연다. 다시 열지도 못하면(힙 부족 등) 바뀐 문서를 그대로 두되
+// 변경 전 바이트를 실행 취소 스택에 넣고 미저장으로 표시한다 — 적어도 Ctrl+Z로 돌아갈 수 있다
+async function restore(entry, i, before) {
+  try { await swapDoc(entry, before); } catch { snapshot(entry, i, before); entry.dirty = true; }
+}
+// 스냅샷을 찍고 fn(동기 엔진 호출)으로 문서를 바꾼다. fn이 던지거나 { ok:false }를 주면 문서를 되돌리고
+// 실행 취소 스택·redo·dirty는 손대지 않는다(하지 않은 일은 되돌릴 것도 없다). 성공하면 스냅샷을 쌓고 dirty.
+async function mutate(entry, i, fn) {
+  const before = entry.doc.save();
+  let r;
+  try { r = batch(entry.doc, fn); } catch (error) { await restore(entry, i, before); throw error; }
+  if (r?.ok === false) { await restore(entry, i, before); return r; }
+  snapshot(entry, i, before);
   entry.dirty = true;
-  originalDoc.close();
+  return r;
+}
+// 줄 편집 트랜잭션: 살아 있는 문서를 직접 고친 뒤 저장 바이트로 다시 열어 검증하고, 그 재열기 문서를 새 정본으로 쓴다
+// (재열기는 고아 스트림도 떨군다). 실패하면 변경 전 바이트로 되돌리고 스택·dirty는 그대로 둔다.
+// 비용: 저장 2회 + 열기 1회. 예전(사본 열기 + 저장 3회 + 열기 2회)은 290MB 문서에서 WASM 힙(2GB)을 넘겨 엔진이 죽었다.
+async function editTransaction(entry, i, edits, options = {}) {
+  const doc = entry.doc, before = doc.save(); // before = 실행 취소 스냅샷
+  let persisted = null, result;
+  try {
+    result = batch(doc, () => applyEdits(doc, i, edits, options));
+    persisted = await pdfEngine.open(doc.save());
+    // 열기는 await라 이론상 다른 요청이 끼어들 수 있다 — 그새 문서가 바뀌었으면(실행 취소 등) 덮어쓰지 않는다
+    if (entry.doc !== doc) throw new Error('파일이 변경됐습니다. 다시 편집하세요.');
+    batch(persisted, () => verifyEdits(persisted, i, edits, result.results, options)); // 지운 곁가지 조각만큼 인덱스를 고쳐 둔다
+  } catch (error) {
+    if (persisted) persisted.close();
+    if (entry.doc === doc) await restore(entry, i, before);
+    throw error;
+  }
+  snapshot(entry, i, before);
+  entry.doc = persisted;
+  entry.dirty = true;
+  doc.close();
   return result;
 }
 // undoTrimmed는 1회성: 한 번 실어 보낸 뒤 되돌린다(UI가 "오래된 실행 취소 기록을 버렸습니다"를 한 번만 알리게)
 const stacks = (entry) => {
   const trimmed = !!entry.undoTrimmed;
   entry.undoTrimmed = false;
-  return { undoLeft: entry.undo.length, redoLeft: entry.redo.length, undoBytes: entry.undoBytes || 0, ...(trimmed ? { undoTrimmed: true } : {}) };
+  return { undoLeft: entry.undo.length, redoLeft: entry.redo.length, undoBytes: entry.undoBytes || 0, ...(trimmed ? { undoTrimmed: true } : {}),
+    ...(entry.externalChange ? { externalChange: true } : {}) }; // 미저장 편집 중 디스크 파일이 바뀌었다(getPdfDoc) — 저장하면 덮어쓴다
 };
 // 바이트를 다른 문서 객체로 바꿔 끼운다. 새 문서를 먼저 열고 나서 옛 것을 닫아, 열기에 실패해도 닫힌 핸들이 남지 않게 한다
 async function swapDoc(entry, bytes) { const doc = await pdfEngine.open(bytes); entry.doc.close(); entry.doc = doc; }
@@ -126,11 +166,14 @@ async function swapDoc(entry, bytes) { const doc = await pdfEngine.open(bytes); 
 // 한 장을 렌더하거나 한 번 downsample하는 중에는 이벤트 루프가 돌지 않아 끼어들 수 없다.
 const JOB_TTL = 60000; // 끝난 작업은 60초 뒤 지운다(UI가 마지막 폴링으로 결과를 받을 시간)
 const jobs = new Map();
+// 등록 전에 온 취소(요청 본문을 읽거나 문서를 여는 사이 [취소]를 누른 경우): id를 기억했다가 startJob이 곧바로 취소 상태로 시작한다
+const earlyCancels = new Map(); // id → 정리 타이머
 function startJob(id, phase, total = 0) {
   const job = { id: id || null, phase, done: 0, total, message: '', cancelled: false, finished: false, error: null, timer: null };
   if (!id) return job; // 추적 안 함
   const old = jobs.get(id);
   if (old?.timer) clearTimeout(old.timer);
+  if (earlyCancels.has(id)) { clearTimeout(earlyCancels.get(id)); earlyCancels.delete(id); job.cancelled = true; }
   jobs.set(id, job);
   return job;
 }
@@ -147,12 +190,6 @@ const jobView = (job) => ({ id: job.id, phase: job.phase, done: job.done, total:
 // await는 이미 이룬 프로미스에 대해 마이크로태스크만 돌리므로 HTTP 요청(폴링·취소)이 처리되지 않는다
 // (실측 2026-09-10: setImmediate 없이 100쪽 용량 줄이기를 돌리니 127초 동안 /api/jobs 응답이 한 번도 오지 않았다).
 const tick = () => new Promise((resolve) => setImmediate(resolve));
-// 취소된 문서 편집 작업을 스냅샷으로 되돌린다: 스냅샷을 pop해 실행 취소 스택에 남기지 않는다(하지 않은 일은 되돌릴 것도 없다)
-async function rollback(entry) {
-  const last = entry.undo.pop();
-  if (last) { await swapDoc(entry, last.bytes); trimStacks(entry); }
-  return last;
-}
 
 // P5 WP-B2: 용량 줄이기의 "목표 용량까지 반복" 로직을 공유 함수로 뽑는다 — /api/pdf/downsample(열린 문서)와
 // /api/pdf/downsample-files(파일 여러 개, 열지 않고 처리)가 함께 쓴다. entry는 { doc } 모양이면 충분(undo/redo는 호출자 몫).
@@ -275,7 +312,27 @@ function jpegSize(buf) {
   return null;
 }
 const json = (res, code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(obj)); };
-const body = (req) => new Promise((r) => { let b = ''; req.on('data', (c) => (b += c)); req.on('end', () => r(b)); });
+// 요청 본문을 Buffer로 모은다. 조각마다 따로 UTF-8로 풀면 조각 경계에 걸린 한글이 깨진다(U+FFFD) → 다 모아 한 번에 푼다.
+// 상한을 넘으면 413, 연결이 끊기면 거절해 라우트가 멈춰 있지 않게 한다
+const BODY_MAX = 64 * 1024 * 1024;
+const body = (req) => new Promise((resolve, reject) => {
+  const chunks = []; let size = 0;
+  req.on('data', (c) => {
+    size += c.length;
+    if (size > BODY_MAX) return reject(httpError(413, '요청이 너무 큽니다 (최대 64MB)')); // 나머지는 읽어 버린다
+    chunks.push(c);
+  });
+  req.on('end', () => resolve(Buffer.concat(chunks)));
+  req.on('error', reject);
+  req.on('close', () => { if (!req.complete) reject(httpError(400, '요청이 중간에 끊겼습니다')); });
+});
+// JSON 본문 → 객체. 깨진 JSON은 500이 아니라 400
+async function readJson(req) {
+  const text = (await body(req)).toString('utf8');
+  let q; try { q = JSON.parse(text); } catch { throw httpError(400, '요청 형식이 잘못됐습니다 (JSON)'); }
+  if (!q || typeof q !== 'object') throw httpError(400, '요청 형식이 잘못됐습니다 (JSON)');
+  return q;
+}
 // 로컬 요청만 받는다. Host 검사는 DNS 리바인딩(외부 도메인을 127.0.0.1로 돌려 같은 출처처럼 요청) 방지, Origin 검사는 다른 사이트의 교차 출처 요청 방지
 let port = PORT; // 실제로 연 포트 — 기본 포트가 다른 프로그램에 잡혀 있으면 아래 listen이 다음 포트로 옮긴다
 const localHosts = () => [`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`];
@@ -290,7 +347,10 @@ const PROMPTS = {
 };
 
 const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url, 'http://x');
+  let url;
+  try {
+    url = new URL(req.url, 'http://x'); // '//' 같은 경로는 여기서 던진다 — 잡지 않으면 처리되지 않은 거절로 프로세스가 죽었다
+  } catch { return json(res, 400, { error: '잘못된 요청 주소' }); }
   try {
     if (!trustedRequest(req)) return json(res, 403, { error: '허용되지 않은 요청 출처' });
     if (url.pathname === '/') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); return fs.createReadStream(path.join(ROOT, 'index.html')).pipe(res); }
@@ -309,20 +369,26 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, jobView(job));
     }
     if (url.pathname === '/api/jobs/cancel' && req.method === 'POST') {
-      const { id } = JSON.parse(await body(req));
-      const job = jobs.get(id || '');
-      if (!job) return json(res, 404, { error: '작업을 찾을 수 없습니다' });
+      const { id } = await readJson(req);
+      if (!id) return json(res, 400, { error: '작업 id가 없습니다' });
+      const job = jobs.get(id);
+      if (!job) { // 아직 등록 전 — 기억해 두면 startJob이 취소 상태로 시작한다(끝난 지 오래된 id면 JOB_TTL 뒤 잊는다)
+        clearTimeout(earlyCancels.get(id));
+        const timer = setTimeout(() => earlyCancels.delete(id), JOB_TTL); timer.unref();
+        earlyCancels.set(id, timer);
+        return json(res, 200, { ok: true, pending: true });
+      }
       job.cancelled = true; // 실제 중단은 라우트가 다음 단위 작업 사이에서 확인한다
       return json(res, 200, { ok: true });
     }
     if (url.pathname === '/api/setup' && req.method === 'POST') {
-      const { provider, action } = JSON.parse(await body(req));
+      const { provider, action } = await readJson(req);
       if (!['claude', 'codex'].includes(provider) || !['install', 'login'].includes(action)) return json(res, 400, { error: '잘못된 AI 설정 요청' });
       return json(res, 200, action === 'install' ? await ai.install(provider) : await ai.login(provider));
     }
     if (url.pathname === '/api/workspace' && req.method === 'GET') return json(res, 200, { path: WS });
     if (url.pathname === '/api/workspace' && req.method === 'POST') {
-      const { path: p } = JSON.parse(await body(req));
+      const { path: p } = await readJson(req);
       if (!fs.existsSync(p)) return json(res, 400, { error: '폴더 없음' });
       WS = path.resolve(p); fs.writeFileSync(CONF, JSON.stringify({ ...conf, workspace: WS })); return json(res, 200, { path: WS });
     }
@@ -344,7 +410,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/file' && req.method === 'PUT') { writeAtomic(safe(url.searchParams.get('name')), await body(req)); return json(res, 200, { ok: true }); }
     if (url.pathname === '/api/session/reset' && req.method === 'POST') {
-      const { name, provider } = JSON.parse(await body(req));
+      const { name, provider } = await readJson(req);
       if (provider) delete sessions[`${provider}\0${name}`];
       else for (const key of Object.keys(sessions)) if (key.endsWith(`\0${name}`)) delete sessions[key];
       return json(res, 200, { ok: true });
@@ -370,14 +436,15 @@ const server = http.createServer(async (req, res) => {
     }
     // ── P4 WP-B2: 이미지 변환·페이지 추출·병합·이미지 삽입·용량 압축 ────────────
     if (url.pathname === '/api/pdf/export-images' && req.method === 'POST') { // 문서 상태는 바꾸지 않으므로 snapshot 없음
-      const { name, pages, format, dpi, dir, jobId } = JSON.parse(await body(req));
-      const { doc } = await getPdfDoc(name);
+      const { name, pages, format, dpi, dir, jobId } = await readJson(req);
+      const entry = await getEditableDoc(name), { doc } = entry; // 내보내는 동안 실행 취소 등이 doc을 닫지 못하게 잡는다
       if (!dir || !fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) return json(res, 400, { error: '저장할 폴더를 찾을 수 없습니다' });
       const scale = Math.max(36, Math.min(600, Number(dpi) || 150)) / 72;
       const base = path.basename(name).replace(/\.pdf$/i, '');
       const list = Array.isArray(pages) && pages.length ? pages.map(Number) : Array.from({ length: doc.pageCount }, (_, i) => i);
       const files = [];
       const job = startJob(jobId, 'export-images', list.length); // 진행 단위: 페이지 1장
+      entry.busy = true;
       try {
         for (const i of list) {
           await tick(); // 이벤트 루프로 한 번 돌아가 취소·폴링을 받는다
@@ -396,56 +463,51 @@ const server = http.createServer(async (req, res) => {
         }
         return json(res, 200, { files });
       } catch (e) { job.error = e.message; throw e; }
-      finally { endJob(job); }
+      finally { entry.busy = false; endJob(job); }
     }
     if (url.pathname === '/api/pdf/pages/delete' && req.method === 'POST') { // page:null 스냅샷 → undo/redo가 reloadAll을 준다
-      const { name, indices, jobId } = JSON.parse(await body(req));
-      const entry = await getPdfDoc(name);
-      // 진행 단위: 스냅샷 → 삭제(한 번의 WASM 호출이라 그 사이에서만 취소를 본다. 빠르지만 다른 긴 작업과 형식을 맞춘다)
+      const { name, indices, jobId } = await readJson(req);
+      const entry = await getEditableDoc(name);
+      // 진행 단위: 삭제 1회(한 번의 WASM 호출이라 그 앞에서만 취소를 본다. 빠르지만 다른 긴 작업과 형식을 맞춘다)
       const job = startJob(jobId, 'pages-delete', 1);
+      entry.busy = true;
       try {
-        snapshot(entry, null);
         await tick();
-        if (!progress(job, { message: '페이지 삭제 중' })) { await rollback(entry); return json(res, 200, { cancelled: true, ...stacks(entry) }); }
-        const r = entry.doc.deletePages(indices);
-        entry.dirty = true;
+        if (!progress(job, { message: '페이지 삭제 중' })) return json(res, 200, { cancelled: true, ...stacks(entry) }); // 아직 아무것도 바꾸지 않았다
+        const r = await mutate(entry, null, () => entry.doc.deletePages(indices));
         progress(job, { done: 1 });
         return json(res, 200, { ...r, ...stacks(entry) });
       } catch (e) { job.error = e.message; throw e; }
-      finally { endJob(job); }
+      finally { entry.busy = false; endJob(job); }
     }
     // ── P5 WP-B2: 회전·순서 변경·추출·분할·검색 ──────────────────────────────
     if (url.pathname === '/api/pdf/pages/rotate' && req.method === 'POST') { // page:null 스냅샷 → 회전은 쪽 크기(가로/세로)가 뒤바뀌어 문서 전체를 다시 그린다
-      const { name, indices, delta } = JSON.parse(await body(req));
-      const entry = await getPdfDoc(name);
-      snapshot(entry, null);
-      const r = entry.doc.rotatePages(indices, delta);
-      entry.dirty = true;
+      const { name, indices, delta } = await readJson(req);
+      const entry = await getEditableDoc(name);
+      const r = await mutate(entry, null, () => entry.doc.rotatePages(indices, delta));
       return json(res, 200, { ...r, reloadAll: true, ...stacks(entry) });
     }
     if (url.pathname === '/api/pdf/pages/reorder' && req.method === 'POST') { // FPDF_MovePages가 페이지 캐시를 비우므로 문서 전체를 다시 그린다(swapDoc은 불필요)
-      const { name, order } = JSON.parse(await body(req));
-      const entry = await getPdfDoc(name);
-      snapshot(entry, null);
-      const r = entry.doc.reorderPages(order);
-      entry.dirty = true;
+      const { name, order } = await readJson(req);
+      const entry = await getEditableDoc(name);
+      const r = await mutate(entry, null, () => entry.doc.reorderPages(order));
       return json(res, 200, { ...r, reloadAll: true, ...stacks(entry) });
     }
     if (url.pathname === '/api/pdf/pages/extract' && req.method === 'POST') { // 새 문서를 만드는 동작이라 실행취소 스택에는 넣지 않는다(병합과 같은 이유)
-      const { name, indices, out } = JSON.parse(await body(req));
+      const { name, indices, out } = await readJson(req);
       const { doc } = await getPdfDoc(name);
       const bytes = doc.extractPages(indices);
       const outPath = safe(out);
+      dropDoc(out); // 같은 이름으로 이미 열려 있었으면 캐시를 버려 새 내용을 읽게 한다(긴 작업 중이면 409)
       writeAtomic(outPath, bytes);
-      if (pdfDocs[out]) { pdfDocs[out].doc.close(); delete pdfDocs[out]; } // 같은 이름으로 이미 열려 있었으면 캐시를 버려 새 내용을 읽게 한다
       const check = await pdfEngine.open(bytes);
       const pageCount = check.pageCount;
       check.close();
       return json(res, 200, { path: out, pageCount });
     }
     if (url.pathname === '/api/pdf/split' && req.method === 'POST') { // N쪽씩 잘라 <이름>-1.pdf, -2.pdf … 로 폴더에 저장 (extractPages 반복 호출, 원본 불변)
-      const { name, every, outDir, jobId } = JSON.parse(await body(req));
-      const { doc } = await getPdfDoc(name);
+      const { name, every, outDir, jobId } = await readJson(req);
+      const entry = await getEditableDoc(name), { doc } = entry; // 자르는 동안 doc을 잡아 둔다
       const n = Number(every);
       if (!Number.isInteger(n) || n < 1) return json(res, 400, { error: '쪽 수는 1 이상의 정수로 입력하세요' });
       const dir = safe(outDir);
@@ -453,6 +515,7 @@ const server = http.createServer(async (req, res) => {
       const base = path.basename(name).replace(/\.pdf$/i, '');
       const files = [];
       const job = startJob(jobId, 'split', Math.ceil(doc.pageCount / n)); // 진행 단위: 조각 파일 1개
+      entry.busy = true;
       try {
         for (let start = 0, part = 1; start < doc.pageCount; start += n, part++) {
           await tick();
@@ -466,11 +529,11 @@ const server = http.createServer(async (req, res) => {
         }
         return json(res, 200, { files });
       } catch (e) { job.error = e.message; throw e; }
-      finally { endJob(job); }
+      finally { entry.busy = false; endJob(job); }
     }
     // 빈 질의는 PDFium FindNext가 영영 돌아오지 않는다(엔진 주석 참고) → 라우트 입구에서 바로 거절한다. 문서를 열기 전에 검사해 헛되이 열지 않는다.
     if (url.pathname === '/api/pdf/find' && req.method === 'POST') {
-      const { name, query, matchCase } = JSON.parse(await body(req));
+      const { name, query, matchCase } = await readJson(req);
       if (!query) return json(res, 400, { error: '검색어를 입력하세요' });
       const { doc } = await getPdfDoc(name);
       const LIMIT = 500;
@@ -484,7 +547,7 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { hits, total: hits.length, truncated });
     }
     if (url.pathname === '/api/pdf/merge' && req.method === 'POST') { // 새 파일을 만드는 동작이라 실행취소 스택에는 넣지 않는다(대상이 열려 있던 문서면 캐시만 닫는다)
-      const { paths, out, jobId } = JSON.parse(await body(req));
+      const { paths, out, jobId } = await readJson(req);
       const list = [].concat(paths || []);
       if (!list.length) return json(res, 400, { error: '병합할 파일이 없습니다' });
       // 진행 단위: 읽는 파일 1개 + 마지막 병합 1단계(merge 자체는 한 번의 WASM 호출이라 중간에 멈출 수 없다)
@@ -500,8 +563,8 @@ const server = http.createServer(async (req, res) => {
         await tick();
         if (!progress(job, { message: '병합하는 중' })) return json(res, 200, { cancelled: true, files: [] });
         const merged = await pdfEngine.merge(buffers);
+        dropDoc(out);
         writeAtomic(safe(out), merged);
-        if (pdfDocs[out]) { pdfDocs[out].doc.close(); delete pdfDocs[out]; }
         const check = await pdfEngine.open(merged);
         const pageCount = check.pageCount;
         check.close();
@@ -511,8 +574,8 @@ const server = http.createServer(async (req, res) => {
       finally { endJob(job); }
     }
     if (url.pathname === '/api/pdf/image' && req.method === 'POST') {
-      const { name, i, path: imgPath, box } = JSON.parse(await body(req));
-      const entry = await getPdfDoc(name);
+      const { name, i, path: imgPath, box } = await readJson(req);
+      const entry = await getEditableDoc(name);
       const imgFile = safe(imgPath || ''); // 다른 파일 경로와 같은 규칙(절대경로 그대로, 상대경로는 작업 폴더 안)
       const ext = path.extname(imgFile).toLowerCase();
       let image, imgW, imgH;
@@ -538,21 +601,17 @@ const server = http.createServer(async (req, res) => {
         const boxW = pw * 0.4, boxH = boxW * (imgH / imgW);
         finalBox = { x: (pw - boxW) / 2, y: (ph - boxH) / 2, w: boxW, h: boxH };
       }
-      snapshot(entry, i);
-      const r = entry.doc.insertImage(i, image, finalBox);
-      entry.dirty = true;
+      const r = await mutate(entry, i, () => entry.doc.insertImage(i, image, finalBox));
       return json(res, 200, { ...r, ...stacks(entry) });
     }
     if (url.pathname === '/api/pdf/object/resize' && req.method === 'POST') {
-      const { name, i, idx, box } = JSON.parse(await body(req));
-      const entry = await getPdfDoc(name);
-      snapshot(entry, i);
-      const r = entry.doc.resizeObject(i, idx, box);
-      entry.dirty = true;
+      const { name, i, idx, box } = await readJson(req);
+      const entry = await getEditableDoc(name);
+      const r = await mutate(entry, i, () => entry.doc.resizeObject(i, idx, box));
       return json(res, 200, { ...r, ...stacks(entry) });
     }
     if (url.pathname === '/api/pdf/images' && req.method === 'POST') {
-      const { name } = JSON.parse(await body(req));
+      const { name } = await readJson(req);
       const entry = await getPdfDoc(name);
       const images = []; let totalBytes = 0;
       for (let i = 0; i < entry.doc.pageCount; i++) {
@@ -562,32 +621,36 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { images, totalBytes, fileBytes });
     }
     if (url.pathname === '/api/pdf/downsample' && req.method === 'POST') {
-      const q = JSON.parse(await body(req));
+      const q = await readJson(req);
       const { name, targetBytes } = q;
       const maxDpi = Number(q.maxDpi) > 0 ? Number(q.maxDpi) : 150;
       const quality = Number(q.quality) > 0 ? Number(q.quality) : 75;
-      const entry = await getPdfDoc(name);
-      snapshot(entry, null); // 문서 전체 스냅샷 — undo/redo가 reloadAll을 준다
-      const originalBytes = entry.undo[entry.undo.length - 1].bytes;
+      const entry = await getEditableDoc(name);
+      const originalBytes = entry.doc.save(); // 문서 전체 스냅샷(undo/redo가 reloadAll을 준다) — 성공했을 때만 실행 취소 스택에 쌓는다
       // 진행 단위: 시도 1회(dpi×품질 조합). 목표 용량이 없으면 한 번만 돈다
       const maxAttempts = targetBytes ? new Set([maxDpi, 120, 96, 72]).size * new Set([quality, 60, 45]).size : 1;
       const job = startJob(q.jobId, 'downsample', maxAttempts);
+      entry.busy = true;
       try {
-        const result = await downsampleToTarget(entry, originalBytes, { maxDpi, quality, targetBytes,
-          report: ({ message, attempt }) => progress(job, { message, done: Math.max(0, attempt - 1) }) });
-        if (result.cancelled) { // 문서를 바꾸는 작업 → 스냅샷으로 원상 복구하고 실행 취소 스택에서도 뺀다
-          await rollback(entry);
+        let result;
+        try {
+          result = await downsampleToTarget(entry, originalBytes, { maxDpi, quality, targetBytes,
+            report: ({ message, attempt }) => progress(job, { message, done: Math.max(0, attempt - 1) }) });
+        } catch (e) { await restore(entry, null, originalBytes); throw e; } // 도중 실패 → 원본으로(스택·dirty는 그대로)
+        if (result.cancelled) { // 문서를 바꾸는 작업 → 원본으로 되돌린다. 하지 않은 일이라 실행 취소 스택에도 넣지 않는다
+          await restore(entry, null, originalBytes);
           return json(res, 200, { cancelled: true, attempts: result.attempts, ...stacks(entry) });
         }
+        snapshot(entry, null, originalBytes);
         entry.dirty = true;
         return json(res, 200, { ...result, ...downsampleHint(result.skipped), ...stacks(entry) });
       } catch (e) { job.error = e.message; throw e; }
-      finally { endJob(job); }
+      finally { entry.busy = false; endJob(job); }
     }
     // P5 WP-B2: 빈 상태 빠른 도구 "여러 파일 용량 줄이기" — 문서를 열어 두지 않고 파일 경로 여러 개를 바로 처리한다.
     // 각 파일을 열어 downsampleToTarget을 돌리고 "<이름>-축소.pdf"로 저장한다(원본은 건드리지 않음, 실행취소 스택도 없음).
     if (url.pathname === '/api/pdf/downsample-files' && req.method === 'POST') {
-      const q = JSON.parse(await body(req));
+      const q = await readJson(req);
       const paths = [].concat(q.paths || []);
       if (!paths.length) return json(res, 400, { error: '파일을 선택하세요' });
       const maxDpi = Number(q.maxDpi) > 0 ? Number(q.maxDpi) : 150;
@@ -624,21 +687,21 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/fonts' && req.method === 'GET') return json(res, 200, pdfFonts.list(url.searchParams.get('text') || ''));
     if (url.pathname === '/api/fonts/add' && req.method === 'POST') {
-      const { path: file } = JSON.parse(await body(req));
+      const { path: file } = await readJson(req);
       return json(res, 200, pdfFonts.publicInfo(pdfFonts.register(file)));
     }
     if (url.pathname === '/api/pdf/font-context' && req.method === 'POST') {
-      const q = JSON.parse(await body(req)), { doc } = await getPdfDoc(q.name);
+      const q = await readJson(req), { doc } = await getPdfDoc(q.name);
       const ctx = fontService.context(doc, q.i, q.idx, q.text, q.token), fonts = pdfFonts.list(q.text);
       return json(res, 200, { ...ctx, ...doc.fontStatus(q.i, q.idx, q.text), fonts, suggestedFontId: pdfFonts.suggest(ctx.object.font, fonts), image: doc.renderRegion(q.i, ctx.object.bounds).toString('base64') });
     }
     if (url.pathname === '/api/pdf/font-status' && req.method === 'POST') {
-      const q = JSON.parse(await body(req)), { doc } = await getPdfDoc(q.name);
+      const q = await readJson(req), { doc } = await getPdfDoc(q.name);
       fontService.context(doc, q.i, q.idx, q.text);
       return json(res, 200, doc.fontStatus(q.i, q.idx, q.text));
     }
     if (url.pathname === '/api/pdf/font-recommend' && req.method === 'POST') {
-      const q = JSON.parse(await body(req)), { doc } = await getPdfDoc(q.name);
+      const q = await readJson(req), { doc } = await getPdfDoc(q.name);
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 120000);
       res.on('close', () => { if (!res.writableFinished) controller.abort(); });
@@ -647,7 +710,7 @@ const server = http.createServer(async (req, res) => {
       finally { clearTimeout(timer); }
     }
     if (['/api/pdf/font-preview', '/api/pdf/font-apply'].includes(url.pathname) && req.method === 'POST') {
-      const q = JSON.parse(await body(req)), entry = await getPdfDoc(q.name);
+      const q = await readJson(req), entry = await getEditableDoc(q.name);
       const prepared = await fontService.prepare(entry.doc, q);
       if (await getPdfDoc(q.name) !== entry) throw new Error('파일이 변경됐습니다. 다시 선택하세요.');
       fontService.context(entry.doc, q.i, q.idx, q.text, q.token);
@@ -662,34 +725,33 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ...prepared.result, image: prepared.image, ...stacks(entry) });
     }
     if (url.pathname === '/api/pdf/edit' && req.method === 'POST') {
-      const { name, i, idx, text } = JSON.parse(await body(req));
-      const entry = await getPdfDoc(name);
+      const { name, i, idx, text } = await readJson(req);
+      const entry = await getEditableDoc(name);
       const { primaryResult: r } = await editTransaction(entry, i, [{ idx, text }], { primary: idx });
       return json(res, 200, { ...r, ...stacks(entry) });
     }
     if (url.pathname === '/api/pdf/edits' && req.method === 'POST') {
-      const { name, i, edits, remove } = JSON.parse(await body(req));
-      const entry = await getPdfDoc(name);
-      const result = await editTransaction(entry, i, edits, { primary: edits?.at(-1)?.idx, remove: [].concat(remove || []) });
+      // remove: 지울 곁가지 조각(보이는 조각), align: { mode:'center'|'right', oldBounds } — 정렬까지 한 트랜잭션(실행 취소 한 번)
+      const { name, i, edits, remove, align } = await readJson(req);
+      const entry = await getEditableDoc(name);
+      const result = await editTransaction(entry, i, edits, { primary: edits?.at(-1)?.idx, remove: [].concat(remove || []), align });
       return json(res, 200, { ...result, lineIdxs: result.primaryResult.lineIdxs || [result.primaryResult.idx], ...stacks(entry) });
     }
     if (url.pathname === '/api/pdf/group' && req.method === 'POST') { // 상자 묶기(id 생략→새 그룹) / 풀기(id:null)
-      const { name, i, idxs, id } = JSON.parse(await body(req));
-      const entry = await getPdfDoc(name);
-      snapshot(entry, i);
-      const r = entry.doc.setGroup(i, idxs, id === undefined ? undefined : id);
-      entry.dirty = true;
+      const { name, i, idxs, id } = await readJson(req);
+      const entry = await getEditableDoc(name);
+      const r = await mutate(entry, i, () => entry.doc.setGroup(i, idxs, id === undefined ? undefined : id));
       return json(res, 200, { ...r, ...stacks(entry) });
     }
     if (url.pathname === '/api/pdf/fit' && req.method === 'POST') { // 폭 맞춤 편집: wrap(줄바꿈) / shrink(축소) / none
       // blank: 같은 줄의 나머지 조각 idx들 — 여기서 함께 비운다. 편집 한 번은 실행 취소 한 번이어야 하는데,
       // 예전에는 UI가 /api/pdf/edits로 먼저 비우고 /api/pdf/fit을 또 불러 스냅샷이 두 개 쌓였다(Ctrl+Z 두 번 필요).
-      const { name, i, idx, text, maxWidth, mode, blank, remove } = JSON.parse(await body(req));
-      const entry = await getPdfDoc(name);
+      const { name, i, idx, text, maxWidth, mode, blank, remove, align } = await readJson(req);
+      const entry = await getEditableDoc(name);
       const result = await editTransaction(entry, i, [
         ...[].concat(blank || []).map((b) => ({ idx: b, text: ' ' })),
         { idx, text },
-      ], { primary: idx, fit: { maxWidth: +maxWidth, mode }, remove: [].concat(remove || []) });
+      ], { primary: idx, fit: { maxWidth: +maxWidth, mode }, remove: [].concat(remove || []), align });
       const r = result.primaryResult;
       return json(res, 200, { ...r, lineIdxs: r.lineIdxs || [r.idx], ...stacks(entry) });
     }
@@ -698,80 +760,84 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, doc.charBoxes(+url.searchParams.get('i'), +url.searchParams.get('idx')));
     }
     if (url.pathname === '/api/pdf/move' && req.method === 'POST') {
-      const { name, i, idxs, dx, dy } = JSON.parse(await body(req));
-      const entry = await getPdfDoc(name);
-      snapshot(entry, i);
-      const r = entry.doc.move(i, idxs, dx, dy);
-      entry.dirty = true;
+      const { name, i, idxs, dx, dy } = await readJson(req);
+      const entry = await getEditableDoc(name);
+      const r = await mutate(entry, i, () => entry.doc.move(i, idxs, dx, dy));
       return json(res, 200, { ...r, ...stacks(entry) });
     }
     if (url.pathname === '/api/pdf/rect' && req.method === 'POST') {
-      const { name, i, bounds, color } = JSON.parse(await body(req));
-      const entry = await getPdfDoc(name);
-      snapshot(entry, i);
+      const { name, i, bounds, color } = await readJson(req);
+      const entry = await getEditableDoc(name);
       const col = color === 'auto' ? entry.doc.sampleColor(i, bounds) : (color || [0, 0, 0, 255]); // 'auto' = 그 자리 배경색
-      const r = entry.doc.addRect(i, bounds, col);
-      entry.dirty = true;
+      const r = await mutate(entry, i, () => { const a = entry.doc.addRect(i, bounds, col); return a.idx < 0 ? { ...a, ok: false } : a; });
       return json(res, 200, { ...r, color: col, ...stacks(entry) });
     }
     if (url.pathname === '/api/pdf/remove' && req.method === 'POST') {
-      const { name, i, idx } = JSON.parse(await body(req));
-      const entry = await getPdfDoc(name);
-      snapshot(entry, i);
-      const r = entry.doc.removeObject(i, idx);
-      entry.dirty = true;
+      const { name, i, idx } = await readJson(req);
+      const entry = await getEditableDoc(name);
+      const r = await mutate(entry, i, () => entry.doc.removeObject(i, idx));
       return json(res, 200, { ...r, ...stacks(entry) });
     }
     if (url.pathname === '/api/pdf/redact' && req.method === 'POST') {
-      const { name, i, idx, from, to } = JSON.parse(await body(req));
-      const entry = await getPdfDoc(name);
-      snapshot(entry, i);
-      const r = entry.doc.redact(i, idx, from, to);
-      entry.dirty = true;
+      const { name, i, idx, from, to } = await readJson(req);
+      const entry = await getEditableDoc(name);
+      const r = await mutate(entry, i, () => entry.doc.redact(i, idx, from, to));
       return json(res, 200, { ...r, ...stacks(entry) });
     }
     if (url.pathname === '/api/pdf/mask' && req.method === 'POST') {
-      const { name, i, parts, fallbackRects, color } = JSON.parse(await body(req));
-      const entry = await getPdfDoc(name);
-      snapshot(entry, i);
+      const { name, i, parts, fallbackRects, color } = await readJson(req);
+      if (!Array.isArray(parts)) return json(res, 400, { error: '가릴 글자를 고르세요' });
+      const entry = await getEditableDoc(name);
       const rects = [], skipped = [];
       const colFor = (b) => (color === 'auto' ? entry.doc.sampleColor(i, b) : (color || [0, 0, 0, 255])); // 'auto' = 그 자리 배경색
-      // redact가 idx+1에 새 텍스트 객체를 끼워넣어 뒤 인덱스를 밀어내므로, 앞 인덱스가 안 밀리도록 뒤에서부터 처리
-      const sorted = [...parts].sort((a, b) => b.idx - a.idx);
-      for (const { idx, from, to } of sorted) {
-        const r = entry.doc.redact(i, idx, from, to, color === 'auto' ? 'auto' : (color || undefined));
-        if (r.ok) { rects.push(...r.rects); continue; } // redact가 이미 사각형을 얹었다
-        // 글자 단위로 못 자르는 객체(조각 텍스트 charmap, 회전·기울임 rotated): 객체 전체를 공백으로 지우고 상자를 따로 덮는다
-        if (r.reason === 'charmap' || r.reason === 'rotated') {
-          const obj = entry.doc.objects(i)[idx];
-          const col = obj && obj.bounds ? colFor(obj.bounds) : null; // 글자를 지우기 전에 색을 잰다
-          entry.doc.setText(i, idx, ' ');
-          if (obj && obj.bounds) { entry.doc.addRect(i, obj.bounds, col); rects.push(obj.bounds); }
-        } else skipped.push({ idx, reason: r.reason });
-      }
-      for (const b of (fallbackRects || [])) { entry.doc.addRect(i, b, colFor(b)); rects.push(b); }
-      entry.dirty = true;
-      return json(res, 200, { ok: true, rects, skipped, textLeft: entry.doc.pageText(i), ...stacks(entry) });
+      // 하나라도 가렸으면 성공(건너뛴 조각은 skipped로 알린다). 아무것도 못 가렸으면 ok:false — 문서·스택은 그대로
+      const r = await mutate(entry, i, () => {
+        // redact가 idx+1에 새 텍스트 객체를 끼워넣어 뒤 인덱스를 밀어내므로, 앞 인덱스가 안 밀리도록 뒤에서부터 처리
+        const sorted = [...parts].sort((a, b) => b.idx - a.idx);
+        for (const { idx, from, to } of sorted) {
+          const r = entry.doc.redact(i, idx, from, to, color === 'auto' ? 'auto' : (color || undefined));
+          if (r.ok) { rects.push(...r.rects); continue; } // redact가 이미 사각형을 얹었다
+          // 글자 단위로 못 자르는 객체(조각 텍스트 charmap, 회전·기울임 rotated): 객체 전체를 공백으로 지우고 상자를 따로 덮는다
+          if (r.reason === 'charmap' || r.reason === 'rotated') {
+            const obj = entry.doc.objects(i)[idx];
+            const col = obj && obj.bounds ? colFor(obj.bounds) : null; // 글자를 지우기 전에 색을 잰다
+            const cleared = entry.doc.setText(i, idx, ' ');
+            if (!cleared?.ok) { skipped.push({ idx, reason: cleared?.reason || 'clear' }); continue; } // 글자가 남는데 덮기만 하면 안 된다
+            // 같은 자리에 겹쳐 그린 사본(굵게·그림자용)도 비운다 — 안 비우면 저장 뒤 사본에서 가린 글자가 다시 읽힌다.
+            // _setOneRaw는 객체 자리를 유지한다(setText는 투명 사본을 드러내며 맨 뒤로 옮겨 남은 parts의 인덱스를 민다)
+            for (const j of r.twins || []) {
+              const t = entry.doc._setOneRaw(i, j, ' ');
+              if (!t?.ok) skipped.push({ idx: j, reason: t?.reason || 'twin' });
+            }
+            if (obj && obj.bounds) { entry.doc.addRect(i, obj.bounds, col); rects.push(obj.bounds); }
+          } else skipped.push({ idx, reason: r.reason });
+        }
+        for (const b of (fallbackRects || [])) { entry.doc.addRect(i, b, colFor(b)); rects.push(b); }
+        return { ok: rects.length > 0 };
+      });
+      return json(res, 200, { ok: r.ok, rects: r.ok ? rects : [], skipped, textLeft: entry.doc.pageText(i), ...stacks(entry) });
     }
     if (url.pathname === '/api/pdf/undo' && req.method === 'POST') {
-      const { name } = JSON.parse(await body(req));
-      const entry = await getPdfDoc(name);
+      const { name } = await readJson(req);
+      const entry = await getEditableDoc(name);
       if (!entry.undo.length) return json(res, 200, { ok: false });
-      const { bytes, page } = entry.undo.pop();
-      entry.redo.push({ bytes: entry.doc.save(), page });
+      const { bytes, page } = entry.undo.at(-1), current = entry.doc.save();
+      await swapDoc(entry, bytes); // 먼저 바꿔 끼운다 — 열기에 실패하면 스택은 그대로다
+      entry.undo.pop();
+      entry.redo.push({ bytes: current, page });
       trimStacks(entry); // redo로 옮겨도 합계는 그대로다 → 상한을 다시 확인한다(P6 C3)
-      await swapDoc(entry, bytes);
       entry.dirty = true;
       return json(res, 200, { ok: true, page, reloadAll: page === null, ...stacks(entry) });
     }
     if (url.pathname === '/api/pdf/redo' && req.method === 'POST') {
-      const { name } = JSON.parse(await body(req));
-      const entry = await getPdfDoc(name);
+      const { name } = await readJson(req);
+      const entry = await getEditableDoc(name);
       if (!entry.redo.length) return json(res, 200, { ok: false });
-      const { bytes, page } = entry.redo.pop();
-      entry.undo.push({ bytes: entry.doc.save(), page });
-      trimStacks(entry); // P6 C3
+      const { bytes, page } = entry.redo.at(-1), current = entry.doc.save();
       await swapDoc(entry, bytes);
+      entry.redo.pop();
+      entry.undo.push({ bytes: current, page });
+      trimStacks(entry); // P6 C3
       entry.dirty = true;
       return json(res, 200, { ok: true, page, reloadAll: page === null, ...stacks(entry) });
     }
@@ -780,29 +846,30 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { text: doc.pageText(+url.searchParams.get('i')) });
     }
     if (url.pathname === '/api/pdf/save' && req.method === 'POST') {
-      const { name } = JSON.parse(await body(req));
-      const entry = await getPdfDoc(name);
+      const { name } = await readJson(req);
+      const entry = await getEditableDoc(name);
       const p = safe(name);
       writeAtomic(p, entry.doc.save());
-      entry.mtimeMs = fs.statSync(p).mtimeMs; entry.dirty = false;
+      entry.mtimeMs = fs.statSync(p).mtimeMs; entry.dirty = false; entry.externalChange = false;
       return json(res, 200, { ok: true });
     }
     if (url.pathname === '/api/pdf/saveas' && req.method === 'POST') {
-      const { name, to } = JSON.parse(await body(req));
-      const entry = await getPdfDoc(name);
-      const p = safe(to);
+      const { name, to } = await readJson(req);
+      const entry = await getEditableDoc(name);
+      const p = safe(to), from = docKey(name), key = docKey(to);
+      if (from !== key) dropDoc(to); // 대상이 따로 열려 있었으면 버린다(긴 작업 중이면 409 — 쓰기 전에)
       writeAtomic(p, entry.doc.save());
-      entry.mtimeMs = fs.statSync(p).mtimeMs; entry.dirty = false;
-      if (name !== to) { delete pdfDocs[name]; if (pdfDocs[to]) pdfDocs[to].doc.close(); pdfDocs[to] = entry; }
+      entry.mtimeMs = fs.statSync(p).mtimeMs; entry.dirty = false; entry.externalChange = false;
+      if (from !== key) { delete pdfDocs[from]; pdfDocs[key] = entry; }
       return json(res, 200, { ok: true, path: to });
     }
     if (url.pathname === '/api/pdf/close' && req.method === 'POST') {
-      const { name } = JSON.parse(await body(req));
-      if (pdfDocs[name]) { pdfDocs[name].doc.close(); delete pdfDocs[name]; }
+      const { name } = await readJson(req);
+      dropDoc(name);
       return json(res, 200, { ok: true });
     }
     if (url.pathname === '/api/chat' && req.method === 'POST') {
-      const { mode, doc, name, q, model, provider = 'claude' } = JSON.parse(await body(req));
+      const { mode, doc, name, q, model, provider = 'claude' } = await readJson(req);
       if (!['claude', 'codex'].includes(provider)) return json(res, 400, { error: '지원하지 않는 AI 공급자' });
       if (!PROMPTS[mode]) return json(res, 400, { error: '잘못된 모드' });
       res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache' });
@@ -837,7 +904,7 @@ const server = http.createServer(async (req, res) => {
     if (res.headersSent) return res.end();
     // P6 C2: 인증 만료는 401 + code:'auth'(+provider) — UI가 재로그인 배너를 띄우고 그 공급자만 다시 확인한다
     if (e.code === 'auth') return json(res, 401, { error: e.message, code: 'auth', ...(e.provider ? { provider: e.provider } : {}) });
-    json(res, 500, { error: e.message });
+    json(res, e.status || 500, { error: e.message });
   }
 });
 // 기본 포트가 사용 중이면(다른 프로그램, 개발용 서버) 다음 포트를 차례로 시도한다. ready는 실제로 연 포트로 resolve — Electron 창은 이 포트로 접속
@@ -862,5 +929,5 @@ const ready = process.env.EDITORKIM_NO_LISTEN === '1' ? Promise.resolve(0) : new
 ready.catch((e) => console.error('server:', e.message));
 process.once('exit', () => ai.close());
 module.exports = { PORT, ready, port: () => port,
-  // 자체 검사용(server.test.js): 라우트를 거치지 않고 P6 C1·C3·C4 로직만 직접 부른다
-  _test: { jobs, startJob, progress, endJob, jobView, snapshot, stacks, trimStacks, downsampleToTarget, rollback, UNDO_MAX, UNDO_MAX_BYTES } };
+  // 자체 검사용(server.test.js): P6 C1·C3·C4 로직을 직접 부르고, server를 4848에 직접 listen해 라우트를 가짜 엔진으로 검사한다
+  _test: { server, pdfDocs, jobs, startJob, progress, endJob, jobView, snapshot, stacks, trimStacks, downsampleToTarget, UNDO_MAX, UNDO_MAX_BYTES } };

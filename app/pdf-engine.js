@@ -103,16 +103,20 @@ function addTable(ttf, tag, data) {
   return Buffer.concat(parts);
 }
 
+// 초기화 Promise를 기억한다 — 초기화가 끝나기 전에 두 호출자가 들어와도 WASM 모듈은 하나만 만든다. 실패하면 다음 호출이 다시 시도한다
 let _P = null;
-async function pdfium() {
-  if (!_P) {
+function pdfium() {
+  return _P ||= (async () => {
     const wasmBinary = fs.readFileSync(require.resolve('@embedpdf/pdfium/pdfium.wasm'));
-    _P = await require('@embedpdf/pdfium').init({ wasmBinary });
-    _P.PDFiumExt_Init();
-    require('./pdf-system-fonts').install(_P);
-  }
-  return _P;
+    const P = await require('@embedpdf/pdfium').init({ wasmBinary });
+    P.PDFiumExt_Init();
+    require('./pdf-system-fonts').install(P);
+    return P;
+  })().catch((e) => { _P = null; throw e; });
 }
+
+// FPDF_LoadMemDocument 실패 이유. FPDF_GetLastError 4 = FPDF_ERR_PASSWORD
+const isPasswordError = (P) => P.FPDF_GetLastError() === 4;
 
 // 저장 루틴 — api.save()와 모듈 함수 merge()가 함께 쓴다 (FPDF_SaveAsCopy + 파일 라이터 콜백)
 function saveDoc(P, doc) {
@@ -148,7 +152,7 @@ async function merge(buffers) {
       M.HEAPU8.set(b, ptr);
       ptrs.push(ptr);
       const src = P.FPDF_LoadMemDocument(ptr, b.length, 0);
-      if (!src) throw new Error(`${n + 1}번째 파일을 열 수 없습니다: 손상 또는 암호화`);
+      if (!src) throw new Error(`${n + 1}번째 파일을 열 수 없습니다: ${isPasswordError(P) ? '암호가 걸린 PDF입니다. 암호를 푼 뒤 다시 넣으세요.' : '손상된 파일입니다'}`);
       docs.push(src);
       if (!P.FPDF_ImportPages(dest, src, null, P.FPDF_GetPageCount(dest))) {
         throw new Error(`${n + 1}번째 파일의 페이지를 가져올 수 없습니다`);
@@ -215,7 +219,7 @@ async function open(buffer) {
   const srcPtr = mal(buffer.length);
   heap().set(buffer, srcPtr);
   const doc = P.FPDF_LoadMemDocument(srcPtr, buffer.length, 0);
-  if (!doc) { free(srcPtr); throw new Error('PDF를 열 수 없습니다 (손상 또는 암호화)'); }
+  if (!doc) { const pw = isPasswordError(P); free(srcPtr); throw new Error(pw ? '암호가 걸린 PDF는 열 수 없습니다. 암호를 푼 뒤 다시 여세요.' : 'PDF를 열 수 없습니다 (손상된 파일)'); }
 
   const pages = new Map();
   const page = (i) => {
@@ -226,6 +230,17 @@ async function open(buffer) {
     }
     return pages.get(i);
   };
+
+  // 콘텐츠 스트림 다시 쓰기. PDFium은 한 세션에서 같은 페이지에 FPDFPage_GenerateContent를 두 번째 부를 때부터
+  // 페이지 전체를 새 스트림으로 쓰고 옛 스트림을 고아로 남긴다(SaveAsCopy가 고아도 저장한다).
+  // 실측: 48조각 한 줄 편집이 48번 불러 1.4MB 벡터 PDF가 27MB, 편집 6–9초. 페이지당 한 번이면 저장·재열기 5회에도 1.31MB 그대로.
+  // → batch() 안에서는 페이지만 기록해 두고 가장 바깥 batch가 끝날 때 페이지당 한 번만 부른다.
+  //   렌더·텍스트 페이지·객체 목록은 메모리의 페이지 객체로 동작하므로 batch 중에 다시 쓴 스트림이 필요 없다.
+  //   저장·페이지 가져오기(추출)는 스트림을 읽으므로 그 전에 flush한다. 페이지 핸들을 닫기 전(삭제·순서 변경)에도 flush한다.
+  let batchDepth = 0;
+  const pending = new Set(); // 다시 써야 할 페이지 핸들
+  const regen = (p) => { if (batchDepth) pending.add(p); else P.FPDFPage_GenerateContent(p); };
+  const flush = () => { for (const p of pending) P.FPDFPage_GenerateContent(p); pending.clear(); };
 
   // 폴백 폰트: 굵기별로 "지금까지 쓴 글자" 서브셋 하나를 유지한다.
   // 이미 올린 서브셋이 새 텍스트를 다 덮으면 그대로 재사용, 아니면 (기존 ∪ 새 글자)로 다시 서브셋해 새로 올린다.
@@ -301,6 +316,13 @@ async function open(buffer) {
     return true;
   };
 
+  // 원본·대체 글꼴 어디에도 없는 글자가 있어 고칠 수 없을 때의 안내 — 어떤 글자인지 몇 개 보여 준다
+  const noGlyphReason = (font, text, size) => {
+    if (!font) return '이 글자를 그릴 대체 글꼴(맑은 고딕)을 찾지 못해 고칠 수 없습니다.';
+    const miss = [...new Set([...text].filter((ch) => !canRender(font, ch, size)))].slice(0, 8);
+    return `이 줄의 일부 글자(수식 기호·이모지 등)는 대체 글꼴에도 없어 고칠 수 없습니다${miss.length ? ': ' + miss.join(' ') : '.'}`;
+  };
+
   // 굵기 판정: 우리가 올린 대체 폰트는 이름이 "Untitled"라 이름으로 알 수 없다 → 올릴 때 기억한 굵기(fbBold)를 쓴다.
   // 그 외에는 이름(Bold/Black/Heavy) 또는 PDFium이 읽은 weight(≥600). 이 판정이 틀리면 폭 맞춤의 두 번째 SetText에서 굵은 글자가 보통 굵기로 떨어진다(사용자 보고).
   const fbBold = new Map(); // 폰트 핸들 → bold
@@ -324,6 +346,22 @@ async function open(buffer) {
       if (P.FPDFPageObj_GetStrokeColor(src, buf, buf + 4, buf + 8, buf + 12)) P.FPDFPageObj_SetStrokeColor(dst, i32(buf), i32(buf + 4), i32(buf + 8), i32(buf + 12));
       if (P.FPDFPageObj_GetStrokeWidth(src, buf)) P.FPDFPageObj_SetStrokeWidth(dst, f32(buf));
     } finally { free(buf); }
+  };
+
+  // 페이지 좌표 → withBitmap(i, scale) 비트맵 픽셀. /Rotate·CropBox 원점까지 렌더와 같은 행렬로 옮긴다(FPDF_PageToDevice).
+  // `ph − y`로 계산하면 회전 페이지·원점이 (0,0)이 아닌 CropBox에서 엉뚱한 픽셀을 읽는다
+  const toDevice = (i, x, y, scale) => {
+    const { w, h } = api.pageSize(i), out = mal(8);
+    try {
+      P.FPDF_PageToDevice(page(i), 0, 0, Math.max(1, Math.round(w * scale)), Math.max(1, Math.round(h * scale)), 0, x, y, out, out + 4);
+      return [i32(out), i32(out + 4)];
+    } finally { free(out); }
+  };
+  // 페이지 좌표 사각형 → 비트맵 픽셀 사각형 (양 끝 포함, 비트맵 안으로 자름. 90° 단위 회전이라 두 모서리로 충분)
+  const deviceRect = (i, b, scale) => {
+    const { w, h } = api.pageSize(i), pw = Math.max(1, Math.round(w * scale)), ph = Math.max(1, Math.round(h * scale));
+    const [ax, ay] = toDevice(i, b.x0, b.y0, scale), [bx, by] = toDevice(i, b.x1, b.y1, scale);
+    return { x0: Math.max(0, Math.min(ax, bx)), x1: Math.min(pw - 1, Math.max(ax, bx)), y0: Math.max(0, Math.min(ay, by)), y1: Math.min(ph - 1, Math.max(ay, by)) };
   };
 
   const withBitmap = (i, scale, fn) => {
@@ -454,12 +492,18 @@ async function open(buffer) {
   const api = {
     get pageCount() { return P.FPDF_GetPageCount(doc); },
 
+    // fn() 안의 편집이 부르는 GenerateContent를 모아 가장 바깥 batch가 끝날 때(정상·예외 모두) 페이지당 한 번만 부른다. 중첩 가능. fn의 반환값을 돌려준다
+    batch(fn) {
+      batchDepth++;
+      try { return fn(); } finally { if (--batchDepth === 0) flush(); }
+    },
+
     // 상자 묶기/풀기. idxs의 객체에 같은 그룹 id를 붙인다 (id 생략 시 새로 발급, null이면 해제)
     setGroup(i, idxs, id) {
       const p = page(i), gid = id === null ? null : id || newGroupId();
       let n = 0;
       for (const ix of [].concat(idxs)) { const o = P.FPDFPage_GetObject(p, ix); if (!o) continue; tagGroup(o, gid); n++; }
-      P.FPDFPage_GenerateContent(p);
+      regen(p);
       return { ok: n > 0, id: gid, count: n };
     },
 
@@ -505,9 +549,9 @@ async function open(buffer) {
     renderRegion(i, bounds, scale = 2) {
       const size = api.pageSize(i);
       if (!bounds || !Object.values(bounds).every(Number.isFinite)) throw new Error('잘못된 미리보기 범위');
-      const x = Math.max(0, bounds.x0 - 8), top = Math.max(0, size.h - bounds.y1 - 8);
-      const w = Math.min(size.w - x, bounds.x1 + 8 - x), h = Math.min(size.h - top, size.h - bounds.y0 + 8 - top);
-      if (!(w > 0 && h > 0)) throw new Error('선택 영역이 페이지 밖에 있습니다.');
+      const d = deviceRect(i, { x0: bounds.x0 - 8, y0: bounds.y0 - 8, x1: bounds.x1 + 8, y1: bounds.y1 + 8 }, 1); // 회전·CropBox 반영
+      const x = d.x0, top = d.y0, w = d.x1 - d.x0 + 1, h = d.y1 - d.y0 + 1;
+      if (!(w > 1 && h > 1)) throw new Error('선택 영역이 페이지 밖에 있습니다.');
       const s = Math.min(scale, 1600 / w, 600 / h), pw = Math.max(1, Math.ceil(w * s)), ph = Math.max(1, Math.ceil(h * s));
       const bmp = P.FPDFBitmap_Create(pw, ph, 0), outPP = mal(4);
       if (!bmp) { free(outPP); throw new Error('미리보기 생성 실패'); }
@@ -547,7 +591,7 @@ async function open(buffer) {
             }
           } finally { free(m); }
         }
-        P.FPDFPage_GenerateContent(page(i));
+        regen(page(i));
         return { ...r, idx: index, fontId, fontLabel: entry.label };
       } finally { selectedFont = previous; }
     },
@@ -655,7 +699,7 @@ async function open(buffer) {
       if (r.idx != null) idx = r.idx; // 투명 글자를 드러내면 객체가 맨 뒤로 간다
       if (lines.length < 2) { // 한 줄로 돌아오면 줄바꿈 그룹 표시는 뗀다
         const o1 = P.FPDFPage_GetObject(p, idx);
-        if (o1 && findMark(o1, MARK_GROUP)) { tagGroup(o1, null); P.FPDFPage_GenerateContent(p); }
+        if (o1 && findMark(o1, MARK_GROUP)) { tagGroup(o1, null); regen(p); }
         return r;
       }
       const o = P.FPDFPage_GetObject(p, idx), gid = newGroupId();
@@ -674,7 +718,7 @@ async function open(buffer) {
           const text = lines[k] || ' ';
           const entry = chosenFont(o);
           let font = entry ? customFont(entry, text) : P.FPDFTextObj_GetFont(o), fb = false;
-          if (!canRender(font, text, size)) { font = fallbackFont(bold, text); fb = true; if (!font || !canRender(font, text, size)) return { ok: false, reason: '입력한 글자를 표시할 폰트가 없습니다.' }; }
+          if (!canRender(font, text, size)) { font = fallbackFont(bold, text); fb = true; if (!font || !canRender(font, text, size)) return { ok: false, reason: noGlyphReason(font, text, size) }; }
           const neo = P.FPDFPageObj_CreateTextObj(doc, font, size);
           const u = utf16(text); const ok = neo && P.FPDFText_SetText(neo, u); free(u);
           if (!ok) { if (neo) P.FPDFPageObj_Destroy(neo); return { ok: false, reason: '새 줄을 만들지 못했습니다.' }; }
@@ -687,20 +731,25 @@ async function open(buffer) {
           P.FPDFPage_InsertObject(p, neo);
           lineIdxs.push(P.FPDFPage_CountObjects(p) - 1); fallback = fallback || fb;
         }
-        P.FPDFPage_GenerateContent(p);
+        regen(p);
         return { ok: true, fallbackFont: fallback, inserted: lineIdxs.length - 1, lineIdxs, group: gid, ...(r.revealed ? { revealed: true } : {}) };
       } finally { free(m); free(c); }
     },
     // 폭 맞춤. 긴 글을 넣어도 옆 글자와 겹치지 않게:
     //   'wrap'   사용 가능한 폭(maxWidth)에 맞춰 단어 단위 줄바꿈 → setText의 여러 줄 배치. 폭 측정은 실제로 SetText 해보고 bounds를 읽는다(폰트 메트릭 추정 없음)
-    //   'shrink' 첫 줄 폭이 넘치면 행렬(a,d)을 같은 비율로 줄여 글자를 축소 (표 셀처럼 줄을 늘릴 수 없을 때)
+    //   'shrink' 첫 줄 폭이 넘치면 행렬(a,b,c,d)을 같은 비율로 줄여 글자를 축소 (표 셀처럼 줄을 늘릴 수 없을 때)
     //   'none'   그대로 (setText)
-    fitText(i, idx, text, maxWidth, mode = 'wrap') {
+    // 폭을 재느라 _setOne을 여러 번 부르므로 batch로 묶어 콘텐츠 재생성을 한 번만 한다
+    fitText(i, idx, text, maxWidth, mode = 'wrap') { return api.batch(() => api._fitText(i, idx, text, maxWidth, mode)); },
+    _fitText(i, idx, text, maxWidth, mode) {
       if (!(maxWidth > 0) || mode === 'none') return api.setText(i, idx, text);
       let revealed = false, measurementFailure = null;
       const width = (s) => { const r = api._setOne(i, idx, s); if (!r.ok) { measurementFailure = r; return -1; } if (r.idx != null) idx = r.idx; revealed ||= !!r.revealed; const b = api.objects(i)[idx].bounds; return b.x1 - b.x0; };
       const result = (r) => revealed ? { ...r, revealed: true, ...(r.lineIdxs ? {} : { idx: r.idx ?? idx }) } : r;
       const lines = String(text ?? '').split(/\r?\n/);
+      // 줄이 여럿이면 먼저 전부 한 번 재 둔다: 뒤 줄 때문에 대체 글꼴로 바뀌면(한 번 바뀌면 계속 대체 글꼴) 앞서 원래 글꼴로 잰 폭이
+      // 최종 그림(첫 줄도 대체 글꼴)과 달라진다. 이 한 번으로 이후 측정이 모두 최종과 같은 글꼴이 된다
+      if (lines.length > 1) { lines.forEach(width); if (measurementFailure) return measurementFailure; }
       if (mode === 'shrink') {
         const w = Math.max(...lines.map(width));
         if (measurementFailure) return measurementFailure;
@@ -711,10 +760,10 @@ async function open(buffer) {
             for (const li of r.lineIdxs || [idx]) {
               const o = P.FPDFPage_GetObject(p, li);
               if (!P.FPDFPageObj_GetMatrix(o, m)) continue;
-              M.setValue(m, f32(m) * s, 'float'); M.setValue(m + 12, f32(m + 12) * s, 'float'); // a, d만 축소 (원점 e,f 유지)
+              for (const k of [0, 4, 8, 12]) M.setValue(m + k, f32(m + k) * s, 'float'); // a b c d 축소 (원점 e,f 유지) — 회전·기울임 글자도 모양 그대로
               P.FPDFPageObj_SetMatrix(o, m);
             }
-            P.FPDFPage_GenerateContent(p);
+            regen(p);
           } finally { free(m); }
           r.scaled = s;
         }
@@ -722,12 +771,23 @@ async function open(buffer) {
       }
       const out = [];
       for (let line of lines) {
-        for (let guard = 0; guard < 50 && line !== null; guard++) {
+        for (let guard = 0; line !== null; guard++) {
           const w = width(line);
           if (measurementFailure) return measurementFailure;
-          if (w < 0 || w <= maxWidth || line.trim().length < 2) { out.push(line); break; }
-          let cut = Math.max(1, Math.floor(line.length * maxWidth / w)); // 폭 비례로 자르고, 그 앞의 공백이 있으면 단어 경계로
-          const sp = line.lastIndexOf(' ', cut); if (sp > 0) cut = sp;
+          // 50번을 넘기면 남은 글을 한 줄로 둔다 — 글자를 버리지 않는다
+          if (guard >= 50 || w <= maxWidth || line.trim().length < 2) { out.push(line); break; }
+          // 폭 비례로 자르고, 그 앞의 공백이 있으면 단어 경계로. 비례 추정은 넓은 글자(한글)와 좁은 글자(라틴·공백)가 섞이면
+          // 틀린다(실측: 줄이 maxWidth보다 최대 28% 넓었다) → 자른 앞부분을 실제로 재 보고 넘치면 더 줄인다
+          let cut = Math.floor(line.length * maxWidth / w);
+          for (;;) {
+            const sp = line.lastIndexOf(' ', cut);
+            let c = sp > 0 ? sp : Math.max(1, cut);
+            if (/[\uD800-\uDBFF]/.test(line[c - 1])) c += c > 1 ? -1 : 1; // 서로게이트 쌍을 가르지 않는다
+            const hw = [...line.slice(0, c)].length < 2 ? 0 : width(line.slice(0, c).trimEnd()); // 한 글자는 더 못 자른다
+            if (measurementFailure) return measurementFailure;
+            if (hw <= maxWidth) { cut = c; break; }
+            cut = Math.min(c - 1, Math.floor(c * maxWidth / hw));
+          }
           out.push(line.slice(0, cut).trimEnd()); line = line.slice(cut).trimStart();
           if (!line) line = null;
         }
@@ -743,7 +803,7 @@ async function open(buffer) {
     // 객체가 맨 뒤로 가므로 idx가 바뀐다 → {idx}로 돌려준다.
     _setOne(i, idx, newText) {
       const p = page(i), o0 = P.FPDFPage_GetObject(p, idx);
-      if (!o0 || P.FPDFPageObj_GetType(o0) !== OBJ_TEXT) return { ok: false, fallbackFont: false };
+      if (!o0 || P.FPDFPageObj_GetType(o0) !== OBJ_TEXT) return { ok: false, fallbackFont: false, reason: '텍스트 상자를 다시 선택하세요.' };
       const hidden = !!(o0 && P.FPDFPageObj_GetType(o0) === OBJ_TEXT && [3, 7].includes(P.FPDFTextObj_GetTextRenderMode(o0)) || (o0 && (() => { const c = mal(16); try { return P.FPDFPageObj_GetFillColor(o0, c, c + 4, c + 8, c + 12) && i32(c + 12) === 0; } finally { free(c); } })()));
       let cover = null, ink = null, background = null;
       if (hidden) { // 편집 전에 재야 한다: 그림(보이는 글자)이 아직 있을 때 배경색·글자색을 뽑는다
@@ -776,7 +836,7 @@ async function open(buffer) {
       // 폰트/글리프 검사에 실패하면 원본 화면을 그대로 둔다. 배경은 교체 전에 측정하되 덮개는 성공 후에만 추가한다.
       api.addRect(i, cover, background);
       P.FPDFPage_RemoveObject(p, o); P.FPDFPage_InsertObject(p, o); // 맨 위(z-순서)로
-      P.FPDFPage_GenerateContent(p);
+      regen(p);
       return { ...r, idx: P.FPDFPage_CountObjects(p) - 1, revealed: true, ink };
     },
 
@@ -784,7 +844,7 @@ async function open(buffer) {
       if (!newText) newText = ' '; // 빈 문자열로 SetText하면 PDFium(WASM)이 unreachable 트랩으로 죽는다
       const p = page(i);
       const o = P.FPDFPage_GetObject(p, idx);
-      if (!o || P.FPDFPageObj_GetType(o) !== OBJ_TEXT) return { ok: false, fallbackFont: false };
+      if (!o || P.FPDFPageObj_GetType(o) !== OBJ_TEXT) return { ok: false, fallbackFont: false, reason: '텍스트 상자를 다시 선택하세요.' };
 
       const scratch = mal(24); // FS_MATRIX(6 float) 겸 float/색 버퍼
       const u16 = utf16(newText);
@@ -798,7 +858,7 @@ async function open(buffer) {
         const origOk = !entry && fname !== 'Untitled' && canRender(P.FPDFTextObj_GetFont(o), newText, size);
         if (origOk && !forceNew) {
           const ok = !!P.FPDFText_SetText(o, u16);
-          if (ok) P.FPDFPage_GenerateContent(p);
+          if (ok) regen(p);
           return { ok, fallbackFont: false };
         }
 
@@ -807,12 +867,12 @@ async function open(buffer) {
         const usingOrig = origOk && forceNew;
         const font = entry ? customFont(entry, newText) : usingOrig ? P.FPDFTextObj_GetFont(o) : fallbackFont(bold, newText);
         // 시스템 한글 폰트가 없거나, 서브셋에도 없는 글자(폰트 자체에 글리프 없음)면 두부(□)로 그려질 테니 거절
-        if (!font || !canRender(font, newText, size)) return { ok: false, fallbackFont: false };
+        if (!font || !canRender(font, newText, size)) return { ok: false, fallbackFont: false, reason: noGlyphReason(font, newText, size) };
 
         const neo = P.FPDFPageObj_CreateTextObj(doc, font, size);
         if (!neo || !P.FPDFText_SetText(neo, u16)) {
           if (neo) P.FPDFPageObj_Destroy(neo);
-          return { ok: false, fallbackFont: false };
+          return { ok: false, fallbackFont: false, reason: '새 텍스트 객체를 만들지 못했습니다.' };
         }
         if (P.FPDFPageObj_GetMatrix(o, scratch)) P.FPDFPageObj_SetMatrix(neo, scratch);
         if (P.FPDFPageObj_GetFillColor(o, scratch, scratch + 4, scratch + 8, scratch + 12)) {
@@ -827,7 +887,7 @@ async function open(buffer) {
         P.FPDFPageObj_Destroy(o); // 페이지에서 뗀 객체는 직접 해제해야 샘 안 남
         // 투명 글자 교체는 _setOne에서 색/알파를 확정한 뒤 콘텐츠를 만든다.
         // ca=0인 중간 객체를 먼저 기록하면 PDFium의 ExtGState 리소스가 재사용돼 저장 후 다시 투명해질 수 있다.
-        if (!forceNew) P.FPDFPage_GenerateContent(p);
+        if (!forceNew) regen(p);
         return { ok: true, fallbackFont: !usingOrig && !entry };
       } finally { free(u16); free(scratch); }
     },
@@ -847,7 +907,7 @@ async function open(buffer) {
         const out = [];
         for (let c = 0, n = P.FPDFText_CountChars(tp); c < n; c++) {
           if (P.FPDFText_GetTextObject(tp, c) !== o) continue;
-          const ch = String.fromCharCode(P.FPDFText_GetUnicode(tp, c));
+          const u = P.FPDFText_GetUnicode(tp, c), ch = u <= 0x10ffff ? String.fromCodePoint(u) : '\ufffd'; // BMP 밖 글자는 UTF-16 두 칸
           // 공백은 PDFium이 빈 상자(0,0,0,0)를 줄 수 있다. 문자열과 길이를 맞춰야 하므로 그대로 담는다.
           const ok = P.FPDFText_GetCharBox(tp, c, s, s + 8, s + 16, s + 24);
           out.push(ok
@@ -863,7 +923,12 @@ async function open(buffer) {
         const aligned = []; let j = 0;
         for (let k = 0; k < text.length; k++) {
           const ch = text[k];
-          if (j < out.length && out[j].ch === ch) { aligned.push(out[j++]); continue; }
+          if (j < out.length && out[j].ch && text.startsWith(out[j].ch, k)) {
+            const b = out[j++]; aligned.push(b);
+            // BMP 밖 글자 하나가 문자열에서는 두 칸(서로게이트 쌍) → 0폭 빈 상자를 하나 더 넣어 인덱스를 objects()의 text(UTF-16)와 맞춘다
+            if (b.ch.length === 2) { aligned.push({ ch: '', x0: b.x1, y0: b.y0, x1: b.x1, y1: b.y1 }); k++; }
+            continue;
+          }
           if (!/\s/.test(ch)) return out;
           const prev = aligned[aligned.length - 1], next = out[j];
           const x = prev ? prev.x1 : next ? next.x0 : 0, ref = prev || next || { y0: 0, y1: 0 };
@@ -883,7 +948,7 @@ async function open(buffer) {
         P.FPDFPageObj_Transform(o, 1, 0, 0, 1, dx, dy);
         moved++;
       }
-      if (moved) P.FPDFPage_GenerateContent(p);
+      if (moved) regen(p);
       return { ok: moved > 0, moved };
     },
 
@@ -896,7 +961,7 @@ async function open(buffer) {
       P.FPDFPath_SetDrawMode(o, 1, false); // FPDF_FILLMODE_WINDING, stroke=false
       P.FPDFPageObj_AddMark(o, MARK_MASK); // 콘텐츠 마크: 저장·재열기 후에도 "이게 우리가 만든 가림 상자"임을 식별
       P.FPDFPage_InsertObject(p, o);       // 맨 위에 얹는다
-      P.FPDFPage_GenerateContent(p);
+      regen(p);
       return { idx: P.FPDFPage_CountObjects(p) - 1 };
     },
 
@@ -915,7 +980,7 @@ async function open(buffer) {
       const o = P.FPDFPage_GetObject(p, idx);
       if (!o) return { ok: false };
       const ok = !!P.FPDFPage_RemoveObject(p, o);
-      if (ok) { P.FPDFPageObj_Destroy(o); P.FPDFPage_GenerateContent(p); }
+      if (ok) { P.FPDFPageObj_Destroy(o); regen(p); }
       return { ok };
     },
 
@@ -924,10 +989,8 @@ async function open(buffer) {
     // 영역의 배경색 추출: 페이지를 1배로 렌더해 영역 픽셀을 32단계로 양자화, 가장 많은 색 묶음의 평균 → [r,g,b,255]
     // 글자·선은 소수라 최빈색은 배경(흰색, 셀 색, 슬라이드 배경)이 된다. 영역이 이미지 한가운데면 이미지의 주 색이 나온다.
     sampleColor(i, b) {
-      const { w: pw, h: ph } = api.pageSize(i);
       const raw = api._renderRaw(i, 1);
-      const x0 = Math.max(0, Math.floor(Math.min(b.x0, b.x1))), x1 = Math.min(raw.w - 1, Math.ceil(Math.max(b.x0, b.x1)));
-      const y0 = Math.max(0, Math.floor(ph - Math.max(b.y0, b.y1))), y1 = Math.min(raw.h - 1, Math.ceil(ph - Math.min(b.y0, b.y1)));
+      const { x0, x1, y0, y1 } = deviceRect(i, b, 1);
       const buckets = new Map();
       for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
         const p = y * raw.stride + x * 4, r = raw.data[p], g = raw.data[p + 1], bl = raw.data[p + 2];
@@ -940,30 +1003,34 @@ async function open(buffer) {
     },
 
     // region 안에서 seed(텍스트 상자) 가운데를 기준으로 잉크가 이어지는 가로 구간을 찾는다 (2배 렌더, 배경과 다른 픽셀 = 잉크)
+    // 페이지 x축은 회전 0·2에서 비트맵 가로, 1·3에서 세로다 → 그 축(t)을 따라 훑고, 찾은 끝을 선형으로 페이지 x로 되돌린다
     _inkExtent(i, region, seed) {
-      const s = 2, { h: ph } = api.pageSize(i), raw = api._renderRaw(i, s), bg = api.sampleColor(i, region);
-      const x0 = Math.max(0, Math.floor(region.x0 * s)), x1 = Math.min(raw.w - 1, Math.ceil(region.x1 * s));
-      const y0 = Math.max(0, Math.floor((ph - region.y1) * s)), y1 = Math.min(raw.h - 1, Math.ceil((ph - region.y0) * s));
-      const inkCol = (x) => { for (let y = y0; y <= y1; y++) { const p = y * raw.stride + x * 4; if (Math.abs(raw.data[p] - bg[0]) + Math.abs(raw.data[p + 1] - bg[1]) + Math.abs(raw.data[p + 2] - bg[2]) >= 120) return true; } return false; };
+      const s = 2, raw = api._renderRaw(i, s), bg = api.sampleColor(i, region);
+      const d = deviceRect(i, region, s), vert = api.pageSize(i).rotation % 2 === 1;
+      const [t0, t1, c0, c1] = vert ? [d.y0, d.y1, d.x0, d.x1] : [d.x0, d.x1, d.y0, d.y1];
+      const inkCol = (t) => { for (let c = c0; c <= c1; c++) { const p = vert ? t * raw.stride + c * 4 : c * raw.stride + t * 4; if (Math.abs(raw.data[p] - bg[0]) + Math.abs(raw.data[p + 1] - bg[1]) + Math.abs(raw.data[p + 2] - bg[2]) >= 120) return true; } return false; };
       const gap = Math.max(3, Math.round(0.25 * (seed.y1 - seed.y0) * s));
-      const cx = Math.round((seed.x0 + seed.x1) / 2 * s);
+      const ym = (region.y0 + region.y1) / 2, axis = (x) => toDevice(i, x, ym, s)[vert ? 1 : 0];
+      const tA = axis(region.x0), tB = axis(region.x1);
+      if (tA === tB) return region;
+      const cx = axis((seed.x0 + seed.x1) / 2);
       let L = cx, R = cx;
-      for (let x = cx, blank = 0; x >= x0; x--) { if (inkCol(x)) { blank = 0; L = x; } else if (++blank >= gap) break; }
-      for (let x = cx, blank = 0; x <= x1; x++) { if (inkCol(x)) { blank = 0; R = x; } else if (++blank >= gap) break; }
+      for (let t = cx, blank = 0; t >= t0; t--) { if (inkCol(t)) { blank = 0; L = t; } else if (++blank >= gap) break; }
+      for (let t = cx, blank = 0; t <= t1; t++) { if (inkCol(t)) { blank = 0; R = t; } else if (++blank >= gap) break; }
       if (R - L < 4) return region; // 잉크를 못 찾으면(이미 덮였거나 비어 있음) 그대로
+      const toX = (t) => region.x0 + (t - tA) / (tB - tA) * (region.x1 - region.x0), xa = toX(L), xb = toX(R);
       const pad = 1.5;
-      return { x0: Math.max(region.x0, L / s - pad), x1: Math.min(region.x1, R / s + pad), y0: region.y0, y1: region.y1 };
+      return { x0: Math.max(region.x0, Math.min(xa, xb) - pad), x1: Math.min(region.x1, Math.max(xa, xb) + pad), y0: region.y0, y1: region.y1 };
     },
 
     // 시험용: 객체 채움색 강제 (알파 0 → 투명 글자 재현)
-    _setFillColor(i, idx, c) { const o = P.FPDFPage_GetObject(page(i), idx); const ok = !!(o && P.FPDFPageObj_SetFillColor(o, c[0], c[1], c[2], c[3])); if (ok) P.FPDFPage_GenerateContent(page(i)); return ok; },
+    _setFillColor(i, idx, c) { const o = P.FPDFPage_GetObject(page(i), idx); const ok = !!(o && P.FPDFPageObj_SetFillColor(o, c[0], c[1], c[2], c[3])); if (ok) regen(page(i)); return ok; },
 
     // 영역의 글자색 추출: 배경색과 충분히 다른 픽셀(글자·선) 중 최빈색. 없으면 검정
     sampleInk(i, b) {
-      const bg = api.sampleColor(i, b), { h: ph } = api.pageSize(i);
+      const bg = api.sampleColor(i, b);
       const raw = api._renderRaw(i, 1);
-      const x0 = Math.max(0, Math.floor(Math.min(b.x0, b.x1))), x1 = Math.min(raw.w - 1, Math.ceil(Math.max(b.x0, b.x1)));
-      const y0 = Math.max(0, Math.floor(ph - Math.max(b.y0, b.y1))), y1 = Math.min(raw.h - 1, Math.ceil(ph - Math.min(b.y0, b.y1)));
+      const { x0, x1, y0, y1 } = deviceRect(i, b, 1);
       const buckets = new Map();
       for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
         const p = y * raw.stride + x * 4, r = raw.data[p], g = raw.data[p + 1], bl = raw.data[p + 2];
@@ -976,72 +1043,103 @@ async function open(buffer) {
     },
 
     // color: [r,g,b,a] | 'auto'(배경색 추출) | 생략(검정)
+    // 겹쳐 그린 사본: InDesign·한글의 가짜 굵게·그림자는 같은 낱말을 같은 자리에 같은 글꼴로 두 번 그린다.
+    // PDFium 텍스트 페이지는 뒤 것을 중복으로 보고 빼므로(objects() 텍스트 '', charBoxes 빈 배열) 화면에 안 잡히지만,
+    // 보이는 것만 지우면 저장 뒤 더는 중복이 아닌 사본에서 지운 글자가 다시 읽힌다(글리프도 덮개 밑에 남는다).
+    // → 같은 글꼴·상자가 큰 쪽의 0.8 이상 겹침·텍스트 ''(또는 같은 텍스트)인 객체를 사본으로 보고,
+    //   대상의 텍스트·글자 상자로 같은 자르기를 한다. 인덱스가 밀리지 않게 큰 인덱스부터 처리한다.
     redact(i, idx, from, to, color) {
-      const p = page(i);
-      const o = P.FPDFPage_GetObject(p, idx);
-      if (!o || P.FPDFPageObj_GetType(o) !== OBJ_TEXT) return { ok: false, reason: 'not-text' };
+      return api.batch(() => {
+        const p = page(i);
+        const o = P.FPDFPage_GetObject(p, idx);
+        if (!o || P.FPDFPageObj_GetType(o) !== OBJ_TEXT) return { ok: false, reason: 'not-text' };
 
-      const item = api.objects(i)[idx];
-      const text = item.text || '';
-      from = Math.max(0, Math.min(from | 0, text.length));
-      to = Math.max(from, Math.min(to | 0, text.length));
-      if (from === to) return { ok: false, reason: 'empty' };
+        const all = api.objects(i), item = all[idx];
+        const text = item.text || '';
+        from = Math.max(0, Math.min(from | 0, text.length));
+        to = Math.max(from, Math.min(to | 0, text.length));
+        if (from === to) return { ok: false, reason: 'empty' };
 
-      const boxes = api.charBoxes(i, idx);
-      if (boxes.length !== text.length) return { ok: false, reason: 'charmap' };
+        const area = (r) => (r.x1 - r.x0) * (r.y1 - r.y0);
+        const overlap = (a, b) => {
+          const w = Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0), h = Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0);
+          return w > 0 && h > 0 ? (w * h) / Math.max(area(a), area(b)) : 0;
+        };
+        const twins = all.filter((t) => t.idx !== idx && t.type === 'text' && t.font === item.font
+          && (t.text === '' || t.text === text) && overlap(t.bounds, item.bounds) >= 0.8).map((t) => t.idx);
 
-      const scratch = mal(24);
-      try {
-        if (!P.FPDFPageObj_GetMatrix(o, scratch)) return { ok: false, reason: 'matrix' };
-        const m = [0, 4, 8, 12, 16, 20].map((k) => f32(scratch + k)); // a b c d e f
-        if (Math.abs(m[1]) > 0.01 || Math.abs(m[2]) > 0.01) return { ok: false, reason: 'rotated' };
+        // 글자 단위로 못 자르면(charmap·rotated) 서버가 객체 전체를 비운다 — 사본도 함께 비우도록 실패 결과에 사본 인덱스를 싣는다
+        const boxes = api.charBoxes(i, idx);
+        if (boxes.length !== text.length) return { ok: false, reason: 'charmap', twins };
 
-        // 가릴 영역: 지워지는 글자 상자들의 합집합 (빈 상자는 무시), 없으면 객체 전체
-        let cover = null;
-        for (let k = from; k < to; k++) {
-          const b = boxes[k];
-          if (b.x1 <= b.x0) continue;
-          cover = cover
-            ? { x0: Math.min(cover.x0, b.x0), y0: Math.min(cover.y0, b.y0), x1: Math.max(cover.x1, b.x1), y1: Math.max(cover.y1, b.y1) }
-            : { ...b };
-        }
-        if (!cover) cover = { ...item.bounds };
-        const PAD = 0.5;
-        cover = { x0: cover.x0 - PAD, y0: cover.y0 - PAD, x1: cover.x1 + PAD, y1: cover.y1 + PAD };
-
-        const prefix = text.slice(0, from), suffix = text.slice(to);
-        let inserted = -1;
-
-        if (suffix) {
-          const font = P.FPDFTextObj_GetFont(o);
-          const neo = font ? P.FPDFPageObj_CreateTextObj(doc, font, item.size || 12) : 0;
-          const u16 = neo ? utf16(suffix) : 0;
-          if (!neo || !P.FPDFText_SetText(neo, u16)) {
-            if (u16) free(u16);
-            if (neo) P.FPDFPageObj_Destroy(neo);
-            return { ok: false, reason: 'suffix-font' };
+        const scratch = mal(24);
+        try {
+          const mats = new Map(); // 객체별 행렬 a b c d e f
+          for (const j of [idx, ...twins]) {
+            if (!P.FPDFPageObj_GetMatrix(P.FPDFPage_GetObject(p, j), scratch)) return { ok: false, reason: 'matrix' };
+            const m = [0, 4, 8, 12, 16, 20].map((k) => f32(scratch + k));
+            if (Math.abs(m[1]) > 0.01 || Math.abs(m[2]) > 0.01) return { ok: false, reason: 'rotated', twins };
+            mats.set(j, m);
           }
-          free(u16);
+
+          // 가릴 영역: 지워지는 글자 상자들의 합집합 (빈 상자는 무시), 없으면 객체 전체
+          let cover = null;
+          for (let k = from; k < to; k++) {
+            const b = boxes[k];
+            if (b.x1 <= b.x0) continue;
+            cover = cover
+              ? { x0: Math.min(cover.x0, b.x0), y0: Math.min(cover.y0, b.y0), x1: Math.max(cover.x1, b.x1), y1: Math.max(cover.y1, b.y1) }
+              : { ...b };
+          }
+          if (!cover) cover = { ...item.bounds };
+          const PAD = 0.5;
+          cover = { x0: cover.x0 - PAD, y0: cover.y0 - PAD, x1: cover.x1 + PAD, y1: cover.y1 + PAD };
+
+          const prefix = text.slice(0, from), suffix = text.slice(to);
           // 상자 기준 상대 이동량. e 는 펜 시작점이라 첫 글자 상자 x0 와 lsb 만큼 어긋나므로
-          // 절대값이 아니라 (지운 뒤 첫 글자 − 원래 첫 글자) 차이를 쓴다.
-          const dx = (boxes[to] && boxes[to].x1 > boxes[to].x0 ? boxes[to].x0 : cover.x1 + PAD) - boxes[0].x0;
-          M.setValue(scratch + 16, m[4] + dx, 'float'); // scratch에는 아직 원본 행렬이 들어 있다
-          P.FPDFPageObj_SetMatrix(neo, scratch);
-          P.FPDFPageObj_SetFillColor(neo, item.color[0], item.color[1], item.color[2], item.color[3]);
-          if (P.FPDFPage_InsertObjectAtIndex(p, neo, idx + 1)) inserted = idx + 1;
-          else { P.FPDFPage_InsertObject(p, neo); inserted = P.FPDFPage_CountObjects(p) - 1; }
-        }
+          // 절대값이 아니라 (지운 뒤 첫 글자 − 원래 첫 글자) 차이를 쓴다. 사본은 같은 글자라 같은 이동량
+          const dx = suffix ? (boxes[to] && boxes[to].x1 > boxes[to].x0 ? boxes[to].x0 : cover.x1 + PAD) - boxes[0].x0 : 0;
+          let inserted = -1;
 
-        // 빈 문자열로 SetText 하면 PDFium이 트랩으로 죽는다 → 공백 하나 (민감한 글자는 남지 않는다)
-        const pre = utf16(prefix || ' ');
-        const okPre = !!P.FPDFText_SetText(o, pre);
-        free(pre);
-        if (!okPre) return { ok: false, reason: 'prefix' };
+          for (const j of [idx, ...twins].sort((a, b) => b - a)) {
+            const obj = P.FPDFPage_GetObject(p, j), it = all[j], m = mats.get(j);
+            // 대상보다 앞(z 아래)의 사본도 뒷부분은 대상 바로 뒤에 넣는다 — idx보다 앞 인덱스가 그대로여야 서버가 뒤에서부터 차례로 처리할 수 있다
+            const at = Math.max(j, idx) + 1;
+            if (suffix) {
+              const font = P.FPDFTextObj_GetFont(obj);
+              const neo = font ? P.FPDFPageObj_CreateTextObj(doc, font, it.size || 12) : 0;
+              const u16 = neo ? utf16(suffix) : 0;
+              if (!neo || !P.FPDFText_SetText(neo, u16)) {
+                if (u16) free(u16);
+                if (neo) P.FPDFPageObj_Destroy(neo);
+                return { ok: false, reason: 'suffix-font' };
+              }
+              free(u16);
+              m.forEach((v, k) => M.setValue(scratch + k * 4, k === 4 ? v + dx : v, 'float'));
+              P.FPDFPageObj_SetMatrix(neo, scratch);
+              P.FPDFPageObj_SetFillColor(neo, it.color[0], it.color[1], it.color[2], it.color[3]);
+              // 그리기 방식·마크도 옮긴다. 렌더 모드는 투명(3·7)까지 그대로 — OCR 투명 글자의 뒷부분이 보이게 되면 안 된다
+              copyTextStyle(obj, neo);
+              P.FPDFTextObj_SetTextRenderMode(neo, P.FPDFTextObj_GetTextRenderMode(obj));
+              const gid = groupOf(obj); if (gid) tagGroup(neo, gid);
+              const fm = findMark(obj, 'EditorKimFont'); if (fm) tagFont(neo, { id: markParam(fm, 'id') || '', label: markParam(fm, 'label') || '' });
+              let k = at;
+              if (!P.FPDFPage_InsertObjectAtIndex(p, neo, at)) { P.FPDFPage_InsertObject(p, neo); k = P.FPDFPage_CountObjects(p) - 1; }
+              if (j === idx) inserted = k;
+              else if (j < idx && inserted >= 0 && k <= inserted) inserted++; // 대상 뒷부분 앞에 끼면 한 칸 밀린다
+            }
+            // 빈 문자열로 SetText 하면 PDFium이 트랩으로 죽는다 → 공백 하나 (민감한 글자는 남지 않는다)
+            const pre = utf16(prefix || ' ');
+            const okPre = !!P.FPDFText_SetText(obj, pre);
+            free(pre);
+            if (!okPre) return { ok: false, reason: 'prefix' };
+          }
 
-        api.addRect(i, cover, color === 'auto' ? api.sampleColor(i, cover) : (color || [0, 0, 0, 255]));
-        P.FPDFPage_GenerateContent(p);
-        return { ok: true, rects: [cover], inserted };
-      } finally { free(scratch); }
+          api.addRect(i, cover, color === 'auto' ? api.sampleColor(i, cover) : (color || [0, 0, 0, 255]));
+          regen(p);
+          return { ok: true, rects: [cover], inserted, ...(twins.length ? { twins: twins.length } : {}) };
+        } finally { free(scratch); }
+      });
     },
 
     // ── 페이지 삭제 ───────────────────────────────────────────────────────
@@ -1053,6 +1151,7 @@ async function open(buffer) {
       if (!targets.length) return { ok: false, removed: 0, pageCount: count };
       if (targets.length >= count) throw new Error('페이지를 최소 한 장은 남겨야 합니다');
       // 삭제하면 뒤쪽 인덱스가 밀린다 → 캐시된 페이지 핸들을 모두 닫고 캐시 전체를 버린다
+      flush();
       for (const h of pages.values()) P.FPDF_ClosePage(h);
       pages.clear();
       targets.sort((a, b) => b - a); // 내림차순이어야 앞 페이지 인덱스가 안 밀린다
@@ -1110,6 +1209,7 @@ async function open(buffer) {
         seen.add(n);
       }
       if (list.every((n, k) => n === k)) return { ok: true, pageCount: count }; // 이미 그 순서
+      flush();
       for (const h of pages.values()) P.FPDF_ClosePage(h);
       pages.clear();
       const arr = mal(count * 4);
@@ -1129,6 +1229,7 @@ async function open(buffer) {
       const list = [].concat(indices ?? []).map(Number)
         .filter((n) => Number.isInteger(n) && n >= 0 && n < count);
       if (!list.length) throw new Error('추출할 페이지를 고르세요.');
+      flush(); // 가져오기는 콘텐츠 스트림을 읽는다
       const dest = P.FPDF_CreateNewDocument();
       if (!dest) throw new Error('새 PDF를 만들지 못했습니다.');
       const arr = mal(list.length * 4);
@@ -1159,7 +1260,7 @@ async function open(buffer) {
         } finally { free(m); }
       } catch (e) { P.FPDFPageObj_Destroy(io); throw e; }
       P.FPDFPage_InsertObject(p, io); // 맨 뒤 = 가장 위 z-순서
-      P.FPDFPage_GenerateContent(p);
+      regen(p);
       const idx = P.FPDFPage_CountObjects(p) - 1;
       return { ok: true, idx, bounds: api.objects(i)[idx].bounds };
     },
@@ -1182,7 +1283,7 @@ async function open(buffer) {
         const sx = box.w / bw, sy = box.h / bh;
         P.FPDFPageObj_Transform(o, sx, 0, 0, sy, box.x - b.x0 * sx, box.y - b.y0 * sy);
       }
-      P.FPDFPage_GenerateContent(p);
+      regen(p);
       return { ok: true, idx, bounds: api.objects(i)[idx].bounds };
     },
 
@@ -1232,6 +1333,7 @@ async function open(buffer) {
       const maxDpi = Number(opts.maxDpi) > 0 ? Number(opts.maxDpi) : 150;
       const quality = Math.max(1, Math.min(100, Math.round(Number(opts.quality) || 75)));
       const minPixels = Number.isFinite(opts.minPixels) ? opts.minPixels : 200 * 200;
+      flush();
       const before = saveDoc(P, doc).length;
       let changed = 0;
       const skipped = [];
@@ -1258,8 +1360,9 @@ async function open(buffer) {
           try { putJpeg(o, data, [p]); } catch (e) { skip(e.message); continue; }
           changed++; dirty = true;
         }
-        if (dirty) P.FPDFPage_GenerateContent(p);
+        if (dirty) regen(p);
       }
+      flush();
       const after = saveDoc(P, doc).length;
       return { ok: true, changed, skipped, before, after };
     },
@@ -1278,7 +1381,7 @@ async function open(buffer) {
     //   · **빈 질의('')를 넘기면 FPDFText_FindNext가 돌아오지 않는다**(100초 무응답으로 강제 종료).
     //     → FindStart를 부르기 전에 걸러낸다. FIND_LIMIT은 그 밖의 폭주에 대한 안전판.
     find(i, query, opts = {}) {
-      const q = String(query ?? '');
+      const q = String(query ?? '').replace(/\0/g, ''); // NUL이 있으면 UTF-16 질의가 빈 문자열이 되어 FindNext가 멈춘다(서버 전체가 굳는다)
       if (!q) return [];
       const limit = Number(opts.limit) > 0 ? Number(opts.limit) : FIND_LIMIT;
       const flags = (opts.matchCase ? FIND_MATCHCASE : 0) | (opts.wholeWord ? FIND_MATCHWHOLEWORD : 0);
@@ -1308,7 +1411,9 @@ async function open(buffer) {
       try {
         const n = P.FPDFText_CountChars(tp);
         if (n <= 0) return '';
-        const buf = mal((n + 1) * 2);
+        // CountChars는 글자 수다. BMP 밖 글자(이모지)는 UTF-16 두 칸으로 나오므로 버퍼를 두 배로 잡는다 — 모자라면 뒷부분이 잘린다
+        const buf = mal((2 * n + 1) * 2);
+        heap().fill(0, buf, buf + (2 * n + 1) * 2);
         P.FPDFText_GetText(tp, 0, n, buf);
         const s = M.UTF16ToString(buf);
         free(buf);
@@ -1316,9 +1421,10 @@ async function open(buffer) {
       } finally { P.FPDFText_ClosePage(tp); }
     },
 
-    save() { return saveDoc(P, doc); },
+    save() { flush(); return saveDoc(P, doc); },
 
     close() {
+      pending.clear();
       for (const h of pages.values()) P.FPDF_ClosePage(h);
       pages.clear();
       P.FPDF_CloseDocument(doc);

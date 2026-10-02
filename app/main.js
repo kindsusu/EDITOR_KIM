@@ -1,5 +1,5 @@
 // Electron 셸: 서버를 같은 프로세스에서 띄우고 창을 연다
-const { app, BrowserWindow, dialog, ipcMain, Menu } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, Menu, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -52,7 +52,13 @@ function main() {
       width: 1400, height: 900, title: `EDITOR_KIM v${require('../package.json').version}`, autoHideMenuBar: true, backgroundColor: '#1b1b1f',
       webPreferences: { preload: path.join(__dirname, 'preload.js') },
     });
-    win.loadURL(`http://localhost:${port}`);
+    const appUrl = `http://localhost:${port}`;
+    win.loadURL(appUrl);
+    // Markdown 링크가 앱 창 자체를 이동시키지 못하게 한다: will-navigate는 loadURL·새로고침에는 발생하지 않으므로 사용자가 누른 링크만 걸린다.
+    // http(s)는 기본 브라우저로 열고, 그 밖의 스킴(file:, javascript: 등)은 그냥 막는다. 새 창 요청도 같은 규칙.
+    const openExternal = (url) => { if (/^https?:\/\//i.test(url)) shell.openExternal(url).catch(() => {}); };
+    win.webContents.on('will-navigate', (e, url) => { e.preventDefault(); openExternal(url); });
+    win.webContents.setWindowOpenHandler(({ url }) => { openExternal(url); return { action: 'deny' }; });
     win.on('page-title-updated', (e) => e.preventDefault());
     win.webContents.on('before-input-event', (e, input) => {
       if (input.type === 'keyDown' && input.key === 'F12') { win.webContents.toggleDevTools(); e.preventDefault(); }
