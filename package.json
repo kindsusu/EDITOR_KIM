@@ -2,7 +2,7 @@
   "name": "editor-kim",
   "productName": "EDITOR_KIM",
   "version": "3.0.0",
-  "description": "Local PDF & Markdown editor with true text editing and redaction — Claude Code or ChatGPT/Codex, no API key",
+  "description": "Local PDF and Markdown editor with true text editing and redaction — Claude Code or ChatGPT/Codex, no API key",
   "main": "app/main.js",
   "scripts": {
     "start": "electron .",
@@ -11,7 +11,9 @@
     "dist": "electron-builder --win",
     "md2pdf": "electron tools/md2pdf.js",
     "assets": "node tools/demo-assets.js",
-    "icon": "electron tools/make-icon.js"
+    "icon": "electron tools/make-icon.js",
+    "dist:store": "node tools/dist-store.js",
+    "appx-assets": "electron tools/make-appx-assets.js"
   },
   "build": {
     "appId": "com.kindsusu.editorkim",
@@ -64,6 +66,19 @@
       "perMachine": false,
       "artifactName": "EDITOR_KIM-${version}-setup.exe",
       "shortcutName": "EDITOR_KIM"
+    },
+    "appx": {
+      "applicationId": "EDITORKIM",
+      "displayName": "EDITOR_KIM",
+      "publisherDisplayName": "kindsusu",
+      "backgroundColor": "#1b1b1f",
+      "languages": [
+        "ko-KR",
+        "en-US"
+      ],
+      "artifactName": "EDITOR_KIM-${version}-store.${ext}",
+      "minVersion": "10.0.17763.0",
+      "maxVersionTested": "10.0.26100.0"
     }
   },
   "repository": {
