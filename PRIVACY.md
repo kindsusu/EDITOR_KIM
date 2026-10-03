@@ -39,7 +39,7 @@ Retext PDF(이하 "앱")은 PC에서 PDF와 Markdown 문서를 편집하는 데�
 
 ### 6. 문의
 
-GitHub Issues: https://github.com/kindsusu/EDITOR_KIM/issues
+GitHub Issues: https://github.com/kindsusu/retext-pdf/issues
 
 ## English
 
@@ -76,4 +76,4 @@ If this policy changes, this document is updated along with the effective date a
 
 ### 6. Contact
 
-GitHub Issues: https://github.com/kindsusu/EDITOR_KIM/issues
+GitHub Issues: https://github.com/kindsusu/retext-pdf/issues

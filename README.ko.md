@@ -1,18 +1,18 @@
 # Retext PDF
 
-> 옛 이름은 EDITOR_KIM입니다(v4.0.0에서 이름을 바꿨습니다). 저장소 주소만 옛 이름 그대로입니다.
+> 옛 이름은 EDITOR_KIM입니다(v4.0.0에서 이름을 바꿨습니다). 저장소도 `kindsusu/retext-pdf`로 옮겼고 옛 주소는 GitHub이 새 주소로 연결합니다.
 
-[![Release](https://img.shields.io/github/v/release/kindsusu/EDITOR_KIM?label=release)](https://github.com/kindsusu/EDITOR_KIM/releases/latest) [![CI](https://github.com/kindsusu/EDITOR_KIM/actions/workflows/ci.yml/badge.svg)](https://github.com/kindsusu/EDITOR_KIM/actions/workflows/ci.yml) ![Windows 10/11 x64](https://img.shields.io/badge/Windows-10%20%7C%2011%20x64-0078D4) [![License](https://img.shields.io/badge/license-personal%20use-lightgrey)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/kindsusu/retext-pdf?label=release)](https://github.com/kindsusu/retext-pdf/releases/latest) [![CI](https://github.com/kindsusu/retext-pdf/actions/workflows/ci.yml/badge.svg)](https://github.com/kindsusu/retext-pdf/actions/workflows/ci.yml) ![Windows 10/11 x64](https://img.shields.io/badge/Windows-10%20%7C%2011%20x64-0078D4) [![License](https://img.shields.io/badge/license-personal%20use-lightgrey)](LICENSE)
 
 ![Retext PDF](assets/hero.png)
 
 PDF의 텍스트를 직접 고치고, 민감한 글자를 실제로 제거하는 Windows용 로컬 편집기입니다. Markdown 편집도 함께 됩니다. 모든 처리는 PC 안에서 이뤄지며 문서는 PC 밖으로 나가지 않습니다.
 
-[English](README.md) · [계획](PLAN.md) · [릴리스](https://github.com/kindsusu/EDITOR_KIM/releases)
+[English](README.md) · [계획](PLAN.md) · [릴리스](https://github.com/kindsusu/retext-pdf/releases)
 
 ## 다운로드
 
-**[Releases](https://github.com/kindsusu/EDITOR_KIM/releases/latest)**에서 최신 빌드를 받습니다.
+**[Releases](https://github.com/kindsusu/retext-pdf/releases/latest)**에서 최신 빌드를 받습니다.
 
 | 파일 | 이럴 때 |
 |---|---|
@@ -31,7 +31,7 @@ PDF의 텍스트를 직접 고치고, 민감한 글자를 실제로 제거하는
 - 전자계약서의 입력 칸(숫자·주소)을 한 글자씩이 아니라 한 상자로 고칩니다.
 - 큰 한글 Markdown 문서가 글자 깨짐 없이 저장되고, Markdown 링크는 앱 창이 아니라 브라우저로 열립니다.
 
-전체 내용: [v3.0.0 릴리스](https://github.com/kindsusu/EDITOR_KIM/releases/tag/v3.0.0)
+전체 내용: [v3.0.0 릴리스](https://github.com/kindsusu/retext-pdf/releases/tag/v3.0.0)
 
 ## 주요 기능
 
@@ -55,8 +55,8 @@ PDF의 텍스트를 직접 고치고, 민감한 글자를 실제로 제거하는
 ## 소스에서 실행
 
 ```bash
-git clone https://github.com/kindsusu/EDITOR_KIM.git
-cd EDITOR_KIM
+git clone https://github.com/kindsusu/retext-pdf.git
+cd retext-pdf
 npm install
 npm start
 ```

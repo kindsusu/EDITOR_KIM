@@ -86,10 +86,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/kindsusu/EDITOR_KIM.git"
+    "url": "https://github.com/kindsusu/retext-pdf.git"
   },
-  "homepage": "https://github.com/kindsusu/EDITOR_KIM",
-  "bugs": "https://github.com/kindsusu/EDITOR_KIM/issues",
+  "homepage": "https://github.com/kindsusu/retext-pdf",
+  "bugs": "https://github.com/kindsusu/retext-pdf/issues",
   "author": "kindsusu",
   "keywords": [
     "pdf",

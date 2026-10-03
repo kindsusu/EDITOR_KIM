@@ -9,9 +9,9 @@
 | 앱 이름(예약) | Retext PDF |
 | 가격 | 무료 |
 | 범주 | 생산성(Productivity) |
-| 개인정보 처리방침 URL | https://github.com/kindsusu/EDITOR_KIM/blob/main/PRIVACY.md |
-| 웹 사이트 | https://github.com/kindsusu/EDITOR_KIM |
-| 지원 연락처 | https://github.com/kindsusu/EDITOR_KIM/issues |
+| 개인정보 처리방침 URL | https://github.com/kindsusu/retext-pdf/blob/main/PRIVACY.md |
+| 웹 사이트 | https://github.com/kindsusu/retext-pdf |
+| 지원 연락처 | https://github.com/kindsusu/retext-pdf/issues |
 | 스크린샷 | `store/screenshot-1-pdf.png`, `-2-edit.png`, `-3-markdown.png` (1366×768, 가상 문서만 표시) |
 | 앱 타일 아이콘 | 패키지에 포함(`build/appx/`). 목록용 300×300 로고가 따로 필요하면 `build/icon.png` 사용 |
 
@@ -37,11 +37,11 @@ Partner Center → 속성 → "추가 라이선스 조항"에 넣는다. 저장�
 
 **한국어**
 
-> 개인이 비상업적 목적으로 사용하는 것은 무료입니다. 회사·기관·단체가 업무에 쓰거나 상업적으로 사용하려면 저작권자(kindsusu)의 사전 서면 승인이 필요합니다. 승인 문의: https://github.com/kindsusu/EDITOR_KIM/issues. 전체 조항: https://github.com/kindsusu/EDITOR_KIM/blob/main/LICENSE. 이 소프트웨어는 "있는 그대로" 제공되며, 중요한 문서는 사본으로 작업하고 결과를 직접 확인하십시오.
+> 개인이 비상업적 목적으로 사용하는 것은 무료입니다. 회사·기관·단체가 업무에 쓰거나 상업적으로 사용하려면 저작권자(kindsusu)의 사전 서면 승인이 필요합니다. 승인 문의: https://github.com/kindsusu/retext-pdf/issues. 전체 조항: https://github.com/kindsusu/retext-pdf/blob/main/LICENSE. 이 소프트웨어는 "있는 그대로" 제공되며, 중요한 문서는 사본으로 작업하고 결과를 직접 확인하십시오.
 
 **English**
 
-> Free for personal, non-commercial use. Use by companies, institutions or organizations for their work, or any commercial use, requires prior written approval from the copyright holder (kindsusu). Requests: https://github.com/kindsusu/EDITOR_KIM/issues. Full terms: https://github.com/kindsusu/EDITOR_KIM/blob/main/LICENSE. Provided "as is"; work on copies of important documents and verify results yourself.
+> Free for personal, non-commercial use. Use by companies, institutions or organizations for their work, or any commercial use, requires prior written approval from the copyright holder (kindsusu). Requests: https://github.com/kindsusu/retext-pdf/issues. Full terms: https://github.com/kindsusu/retext-pdf/blob/main/LICENSE. Provided "as is"; work on copies of important documents and verify results yourself.
 
 ---
 

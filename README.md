@@ -1,18 +1,18 @@
 # Retext PDF
 
-> Formerly named EDITOR_KIM (renamed in v4.0.0). Only the repository URL still uses the old name.
+> Formerly named EDITOR_KIM (renamed in v4.0.0). The repository moved to `kindsusu/retext-pdf`; GitHub redirects the old URL.
 
-[![Release](https://img.shields.io/github/v/release/kindsusu/EDITOR_KIM?label=release)](https://github.com/kindsusu/EDITOR_KIM/releases/latest) [![CI](https://github.com/kindsusu/EDITOR_KIM/actions/workflows/ci.yml/badge.svg)](https://github.com/kindsusu/EDITOR_KIM/actions/workflows/ci.yml) ![Windows 10/11 x64](https://img.shields.io/badge/Windows-10%20%7C%2011%20x64-0078D4) [![License](https://img.shields.io/badge/license-personal%20use-lightgrey)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/kindsusu/retext-pdf?label=release)](https://github.com/kindsusu/retext-pdf/releases/latest) [![CI](https://github.com/kindsusu/retext-pdf/actions/workflows/ci.yml/badge.svg)](https://github.com/kindsusu/retext-pdf/actions/workflows/ci.yml) ![Windows 10/11 x64](https://img.shields.io/badge/Windows-10%20%7C%2011%20x64-0078D4) [![License](https://img.shields.io/badge/license-personal%20use-lightgrey)](LICENSE)
 
 ![Retext PDF](assets/hero.png)
 
 A local Windows editor that changes PDF text objects directly and removes sensitive text for real, with Markdown editing on the side. Everything runs on your PC — your documents never leave it.
 
-[한국어](README.ko.md) · [Plan](PLAN.md) · [Releases](https://github.com/kindsusu/EDITOR_KIM/releases)
+[한국어](README.ko.md) · [Plan](PLAN.md) · [Releases](https://github.com/kindsusu/retext-pdf/releases)
 
 ## Download
 
-Get the latest build from **[Releases](https://github.com/kindsusu/EDITOR_KIM/releases/latest)**.
+Get the latest build from **[Releases](https://github.com/kindsusu/retext-pdf/releases/latest)**.
 
 | File | Use it when |
 |---|---|
@@ -31,7 +31,7 @@ Requirements: Windows 10 or 11 (x64), about 400 MB of disk space. No account or 
 - Filled-in e-contract fields (numbers, addresses) are edited as one box instead of one character at a time.
 - Large Korean Markdown files save without corrupted characters; Markdown links open in your browser instead of replacing the app window.
 
-Full notes: [v3.0.0 release](https://github.com/kindsusu/EDITOR_KIM/releases/tag/v3.0.0).
+Full notes: [v3.0.0 release](https://github.com/kindsusu/retext-pdf/releases/tag/v3.0.0).
 
 ## Features
 
@@ -55,8 +55,8 @@ Full notes: [v3.0.0 release](https://github.com/kindsusu/EDITOR_KIM/releases/tag
 ## Run from source
 
 ```bash
-git clone https://github.com/kindsusu/EDITOR_KIM.git
-cd EDITOR_KIM
+git clone https://github.com/kindsusu/retext-pdf.git
+cd retext-pdf
 npm install
 npm start
 ```
