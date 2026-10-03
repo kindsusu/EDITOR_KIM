@@ -8,6 +8,7 @@
 //
 // Store 식별값(identityName·publisher)은 Partner Center에서 앱 이름을 예약한 뒤 "제품 ID" 화면에 나오는 값을
 // package.json의 build.appx에 넣는다. Store가 제출한 패키지를 다시 서명하므로 우리 쪽 인증서는 필요 없다.
+// identityName은 Partner Center 값(옛 이름 기반)이라 바꾸지 않는다 — 바꾸면 Store 업로드가 거부된다.
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
@@ -28,11 +29,11 @@ const appx = require(path.join(root, 'package.json')).build.appx || {};
       process.exit(1);
     }
     // 시험용 값 — Store에는 올릴 수 없다
-    overrides.push('-c.appx.identityName=TEST.EDITORKIM', '-c.appx.publisher=CN=00000000-0000-0000-0000-000000000000');
+    overrides.push('-c.appx.identityName=TEST.RetextPDF', '-c.appx.publisher=CN=00000000-0000-0000-0000-000000000000');
   }
 
   const bundle = await getWindowsKitsBundle({ winCodeSign: '1.1.0', arch: Arch.x64 }); // 없으면 받아 둔다(체크섬 검증)
-  const kit = path.join(require('os').tmpdir(), 'editor-kim-windows-kit');
+  const kit = path.join(require('os').tmpdir(), 'retext-pdf-windows-kit');
   if (!fs.existsSync(path.join(kit, 'makeappx.exe'))) {
     fs.mkdirSync(kit, { recursive: true });
     fs.cpSync(bundle.kit, kit, { recursive: true });

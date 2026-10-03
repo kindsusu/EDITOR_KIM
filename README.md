@@ -1,6 +1,6 @@
 # Retext PDF
 
-> Formerly named EDITOR_KIM (renamed in v4.0.0). The repository URL, settings and your workspace folder keep the old name so nothing breaks for existing users.
+> Formerly named EDITOR_KIM (renamed in v4.0.0). Only the repository URL still uses the old name.
 
 [![Release](https://img.shields.io/github/v/release/kindsusu/EDITOR_KIM?label=release)](https://github.com/kindsusu/EDITOR_KIM/releases/latest) [![CI](https://github.com/kindsusu/EDITOR_KIM/actions/workflows/ci.yml/badge.svg)](https://github.com/kindsusu/EDITOR_KIM/actions/workflows/ci.yml) ![Windows 10/11 x64](https://img.shields.io/badge/Windows-10%20%7C%2011%20x64-0078D4) [![License](https://img.shields.io/badge/license-personal%20use-lightgrey)](LICENSE)
 
@@ -61,7 +61,7 @@ npm install
 npm start
 ```
 
-Double-clicking `run-editor-kim.bat` runs the same source without opening a terminal. Use `npm run serve` for the browser-only mode at <http://localhost:4747>; native file dialogs and PNG insertion are Electron-only there.
+Double-clicking `run-retext-pdf.bat` runs the same source without opening a terminal. Use `npm run serve` for the browser-only mode at <http://localhost:4747>; native file dialogs and PNG insertion are Electron-only there.
 
 ## PDF editing
 

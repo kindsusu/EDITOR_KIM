@@ -1,5 +1,5 @@
 // Microsoft Store 제출용 스크린샷 → store/screenshot-*.png (1366×768, Store 권장 크기)
-// 저장소의 가상 문서(workspace/회의록_초안.*)만 임시 작업 폴더에 복사해 연다. 사용자의 설정(~/.editor-kim.json)과
+// 저장소의 가상 문서(workspace/회의록_초안.*)만 임시 작업 폴더에 복사해 연다. 사용자의 설정(~/.retext-pdf.json)과
 // 실행 중인 앱(4747)은 건드리지 않도록 임시 홈 폴더·다른 포트(4849)·메모리 전용 세션(localStorage 비어 있음)을 쓴다.
 // 실행: npx electron tools/store-screenshots.js
 const fs = require('fs');
@@ -13,7 +13,7 @@ const home = fs.mkdtempSync(path.join(out, '.home-'));
 const ws = path.join(home, '문서');
 fs.mkdirSync(ws);
 for (const f of ['회의록_초안.pdf', '회의록_초안.md']) fs.copyFileSync(path.join(root, 'workspace', f), path.join(ws, f));
-fs.writeFileSync(path.join(home, '.editor-kim.json'), JSON.stringify({ workspace: ws }));
+fs.writeFileSync(path.join(home, '.retext-pdf.json'), JSON.stringify({ workspace: ws }));
 
 const { app, BrowserWindow } = require('electron');
 const W = 1366, H = 768;
@@ -22,7 +22,7 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 app.whenReady().then(async () => {
   // os.homedir()가 이 값을 쓴다 — 서버를 읽기 직전에 바꾼다(Electron 시작 전에 바꾸면 whenReady가 끝나지 않는다)
   process.env.USERPROFILE = home; process.env.HOME = home;
-  process.env.EDITORKIM_PORT = '4849';
+  process.env.RETEXTPDF_PORT = '4849';
   const port = await require(path.join(root, 'app', 'server.js')).ready;
   // 설치된 앱과 같은 화면이 되도록 preload를 붙인다(없으면 브라우저 모드 화면이 찍힌다). 대화상자용 IPC 처리기는 없지만 찍는 데는 쓰지 않는다
   const win = new BrowserWindow({ width: W, height: H, show: false, backgroundColor: '#1b1b1f',

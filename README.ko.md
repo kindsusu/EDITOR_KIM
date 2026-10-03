@@ -1,6 +1,6 @@
 # Retext PDF
 
-> 옛 이름은 EDITOR_KIM입니다(v4.0.0에서 이름을 바꿨습니다). 저장소 주소·설정·작업 폴더 이름은 기존 사용자에게 문제가 없도록 옛 이름 그대로입니다.
+> 옛 이름은 EDITOR_KIM입니다(v4.0.0에서 이름을 바꿨습니다). 저장소 주소만 옛 이름 그대로입니다.
 
 [![Release](https://img.shields.io/github/v/release/kindsusu/EDITOR_KIM?label=release)](https://github.com/kindsusu/EDITOR_KIM/releases/latest) [![CI](https://github.com/kindsusu/EDITOR_KIM/actions/workflows/ci.yml/badge.svg)](https://github.com/kindsusu/EDITOR_KIM/actions/workflows/ci.yml) ![Windows 10/11 x64](https://img.shields.io/badge/Windows-10%20%7C%2011%20x64-0078D4) [![License](https://img.shields.io/badge/license-personal%20use-lightgrey)](LICENSE)
 
@@ -61,7 +61,7 @@ npm install
 npm start
 ```
 
-터미널 없이 같은 소스를 실행하려면 `run-editor-kim.bat`을 더블클릭합니다. 브라우저 전용 모드는 `npm run serve` 후 <http://localhost:4747>에서 열리며, 이 모드에서는 파일 대화상자와 PNG 삽입을 쓸 수 없습니다(Electron 전용).
+터미널 없이 같은 소스를 실행하려면 `run-retext-pdf.bat`을 더블클릭합니다. 브라우저 전용 모드는 `npm run serve` 후 <http://localhost:4747>에서 열리며, 이 모드에서는 파일 대화상자와 PNG 삽입을 쓸 수 없습니다(Electron 전용).
 
 ## PDF 편집
 

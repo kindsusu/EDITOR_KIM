@@ -1,10 +1,10 @@
 // 자체 검사: node app/server.test.js
 // 서버의 P6 로직(C1 작업 진행·취소, C3 실행 취소 메모리 상한, C4 용량 줄이기 조기 종료)을 라우트 없이 함수 단위로 검사한다.
-// PDFium을 쓰지 않도록 pdf-engine.open을 가짜 문서로 바꿔 둔 뒤 server.js를 읽어 들인다(EDITORKIM_NO_LISTEN=1 → 포트를 열지 않는다).
+// PDFium을 쓰지 않도록 pdf-engine.open을 가짜 문서로 바꿔 둔 뒤 server.js를 읽어 들인다(RETEXTPDF_NO_LISTEN=1 → 포트를 열지 않는다).
 const assert = require('assert');
 
-process.env.EDITORKIM_NO_LISTEN = '1';
-process.env.EDITORKIM_PORT = '4848'; // 라우트 검사는 아래에서 직접 listen한다(사용자 앱의 4747은 쓰지 않는다)
+process.env.RETEXTPDF_NO_LISTEN = '1';
+process.env.RETEXTPDF_PORT = '4848'; // 라우트 검사는 아래에서 직접 listen한다(사용자 앱의 4747은 쓰지 않는다)
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -205,7 +205,7 @@ const { server, pdfDocs, jobs, startJob, progress, endJob, jobView, snapshot, st
 
   // ── 라우트 검사(가짜 엔진, 127.0.0.1:4848) ─────────────────────────────────
   await new Promise((resolve) => server.listen(4848, '127.0.0.1', resolve));
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'editor-kim-server-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'retext-pdf-server-'));
   const raw = (method, route, data, headers = {}) => new Promise((resolve, reject) => {
     const req = http.request({ host: '127.0.0.1', port: 4848, method, path: route, headers }, (res) => {
       const chunks = []; res.on('data', (c) => chunks.push(c));

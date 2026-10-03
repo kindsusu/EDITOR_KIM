@@ -43,7 +43,7 @@
     <rect x="85" y="55" width="70" height="26" fill="#000"/>
     <text x="14" y="116" font-size="11.5" fill="#e8e8ec">A filled path object over the</text>
     <text x="14" y="134" font-size="11.5" fill="#e8e8ec">union of the removed boxes.</text>
-    <text x="14" y="162" font-size="11" fill="#9a9aa6">tagged with content mark EditorKimMask</text>
+    <text x="14" y="162" font-size="11" fill="#9a9aa6">tagged with content mark RetextPdfMask</text>
     <text x="14" y="178" font-size="11" fill="#9a9aa6">→ still selectable after save / reload</text>
   </g>
 

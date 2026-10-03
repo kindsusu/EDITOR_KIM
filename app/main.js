@@ -4,11 +4,6 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 
-// 앱 이름이 EDITOR_KIM에서 Retext PDF로 바뀌었다. Electron의 userData 폴더는 productName을 따라가므로 그대로 두면
-// %APPDATA%\Retext PDF라는 새 폴더가 만들어져 기존 사용자의 최근 파일·설정(localStorage)이 사라진다.
-// 그래서 옛 폴더(%APPDATA%\EDITOR_KIM)를 계속 쓰도록 app ready 전에(단일 실행 잠금도 userData를 쓰므로 그보다 먼저) 고정한다.
-app.setPath('userData', path.join(app.getPath('appData'), 'EDITOR_KIM'));
-
 // 두 번 실행하면 창을 하나만 쓴다. 예전에는 두 번째 실행의 서버가 포트를 못 잡고 창만 첫 서버에 붙었다.
 // 잠금을 얻은 뒤에만 서버 모듈을 읽는다(읽는 순간 listen이 시작되므로)
 if (!app.requestSingleInstanceLock()) app.quit();
@@ -107,11 +102,11 @@ function main() {
     ipcMain.handle('saveAs', async (_e, defaultPath, opts) => {
       const isPdf = /\.pdf$/i.test(defaultPath || '');
       const filters = isPdf ? [{ name: 'PDF', extensions: ['pdf'] }] : [{ name: 'Markdown', extensions: ['md'] }];
-      // 임시·읽기전용 파일의 "다른 이름으로 저장"은 같은 임시 폴더가 아니라 문서 폴더의 EDITOR_KIM(옛 앱 이름 그대로 유지 — 기존 사용자 파일이 있는 곳이라 호환)에 원래 파일명으로 유도한다
+      // 임시·읽기전용 파일의 "다른 이름으로 저장"은 같은 임시 폴더가 아니라 문서 폴더의 Retext PDF에 원래 파일명으로 유도한다
       if (opts && opts.suggestDocFolder && defaultPath) {
         let documents = path.join(os.homedir(), 'Documents');
         try { documents = app.getPath('documents'); } catch {}
-        const dir = path.join(documents, 'EDITOR_KIM');
+        const dir = path.join(documents, 'Retext PDF');
         try { fs.mkdirSync(dir, { recursive: true }); } catch {}
         defaultPath = path.join(dir, path.basename(defaultPath));
       }
@@ -119,7 +114,7 @@ function main() {
       return r.canceled ? null : r.filePath;
     });
 
-    // 닫을 때 미저장이면 네 가지 중 선택. 저장은 렌더러의 window.editorKimSave / editorKimSaveAs가 수행하고 성공 여부(true/false)를 돌려준다
+    // 닫을 때 미저장이면 네 가지 중 선택. 저장은 렌더러의 window.retextPdfSave / retextPdfSaveAs가 수행하고 성공 여부(true/false)를 돌려준다
     let allowClose = false;
     const exec = (js) => win.webContents.executeJavaScript(js).catch(() => false);
     win.on('close', async (e) => {
@@ -132,8 +127,8 @@ function main() {
           buttons: ['이 문서에 덮어쓰기', '다른 이름으로 저장', '저장하지 않고 닫기', '취소'], defaultId: 0, cancelId: 3, noLink: true,
         });
         if (r === 3) return;
-        if (r === 0 && !(await exec('window.editorKimSave ? window.editorKimSave() : false'))) return;
-        if (r === 1 && !(await exec('window.editorKimSaveAs ? window.editorKimSaveAs() : false'))) return; // 저장 대화상자에서 취소하면 닫지 않음
+        if (r === 0 && !(await exec('window.retextPdfSave ? window.retextPdfSave() : false'))) return;
+        if (r === 1 && !(await exec('window.retextPdfSaveAs ? window.retextPdfSaveAs() : false'))) return; // 저장 대화상자에서 취소하면 닫지 않음
       }
       allowClose = true; win.close();
     });

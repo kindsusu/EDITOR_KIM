@@ -23,7 +23,7 @@ Retext PDF(이하 "앱")은 PC에서 PDF와 Markdown 문서를 편집하는 데�
 
 다음 정보는 사용자의 PC에만 저장됩니다. 외부로 전송되지 않습니다.
 
-- `~/.editor-kim.json` — 작업 폴더 경로
+- `~/.retext-pdf.json` — 작업 폴더 경로
 - 앱 저장소 — 최근에 연 파일 목록, 정렬·폭 맞춤·확대 설정, 안내 표시 여부
 - 열어 둔 파일 목록은 앱이 실행 중일 때만 유지되고 앱을 끄면 지워집니다
 
@@ -60,7 +60,7 @@ Retext PDF (the "app") is a desktop app for editing PDF and Markdown documents o
 
 The following is stored only on your PC. None of it is transmitted.
 
-- `~/.editor-kim.json` — the workspace folder path
+- `~/.retext-pdf.json` — the workspace folder path
 - App storage — recently opened files, alignment, fit and zoom settings, and whether hints were shown
 - The list of open files is kept only while the app is running and is cleared when it quits
 

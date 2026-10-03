@@ -1,5 +1,5 @@
 {
-  "name": "editor-kim",
+  "name": "retext-pdf",
   "productName": "Retext PDF",
   "version": "4.0.0",
   "description": "Local PDF and Markdown editor with true text editing and redaction",
@@ -13,10 +13,11 @@
     "assets": "node tools/demo-assets.js",
     "icon": "electron tools/make-icon.js",
     "dist:store": "node tools/dist-store.js",
-    "appx-assets": "electron tools/make-appx-assets.js"
+    "appx-assets": "electron tools/make-appx-assets.js",
+    "hero": "electron tools/make-hero.js"
   },
   "build": {
-    "appId": "com.kindsusu.editorkim",
+    "appId": "com.kindsusu.retextpdf",
     "productName": "Retext PDF",
     "artifactName": "Retext-PDF-${version}-${arch}-${os}.${ext}",
     "directories": {
@@ -68,7 +69,7 @@
       "shortcutName": "Retext PDF"
     },
     "appx": {
-      "applicationId": "EDITORKIM",
+      "applicationId": "RetextPDF",
       "identityName": "susukim.EDITORKIM",
       "publisher": "CN=9E51FDEE-767C-4BB7-A86D-154F244519D6",
       "displayName": "Retext PDF",

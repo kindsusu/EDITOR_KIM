@@ -6,11 +6,11 @@ const path = require('path');
 const { open } = require('./pdf-engine');
 const { verifyEdits } = require('./pdf-edit-service');
 
-process.env.EDITORKIM_PORT = '4861';
+process.env.RETEXTPDF_PORT = '4861';
 const app = require('./server');
 
 (async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'editor-kim-edits-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'retext-pdf-edits-'));
   try {
     const port = await app.ready;
     const post = async (route, data) => {

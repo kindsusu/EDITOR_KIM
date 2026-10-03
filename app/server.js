@@ -1,18 +1,14 @@
-// Retext PDF(옛 EDITOR_KIM) 백엔드: 정적 UI + 파일 읽기/쓰기 + PDF 편집(PDFium). 127.0.0.1에서만 열고 문서를 PC 밖으로 보내지 않는다
+// Retext PDF 백엔드: 정적 UI + 파일 읽기/쓰기 + PDF 편집(PDFium). 127.0.0.1에서만 열고 문서를 PC 밖으로 보내지 않는다
 const http = require('http');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
 const ROOT = __dirname;
-const PORT = Number(process.env.EDITORKIM_PORT) || 4747;
+const PORT = Number(process.env.RETEXTPDF_PORT) || 4747;
 const MARKED_BROWSER = path.join(path.dirname(require.resolve('marked')), 'marked.umd.js');
 const DOMPURIFY_BROWSER = path.join(path.dirname(require.resolve('dompurify')), 'purify.min.js');
-const CONF = path.join(os.homedir(), '.editor-kim.json');
-{ // 옛 이름 시절 설정 파일을 새 경로로 1회 이전
-  const OLD_CONF = path.join(os.homedir(), '.su-da' + 'epil.json');
-  if (!fs.existsSync(CONF) && fs.existsSync(OLD_CONF)) { try { fs.renameSync(OLD_CONF, CONF); } catch {} }
-}
+const CONF = path.join(os.homedir(), '.retext-pdf.json');
 const pdfEngine = require('./pdf-engine');
 const pdfFonts = require('./pdf-fonts');
 const fontService = require('./pdf-font-service');
@@ -21,14 +17,14 @@ const APP_VERSION = require('../package.json').version;
 
 let conf = {}; try { conf = JSON.parse(fs.readFileSync(CONF, 'utf8')); } catch {}
 // 기본 작업 폴더. 패키징된 앱에서는 __dirname이 app.asar 안이라 소스 옆 workspace는 읽기만 되고 저장이 실패한다
-// → 사용자 문서 폴더 아래 EDITOR_KIM(옛 앱 이름 그대로 유지 — 기존 사용자 파일이 있는 곳이라 호환)을 만들고 첫 실행에만 샘플을 복사해 쓴다. 개발 실행(npm start / node server.js)은 저장소의 workspace 그대로
+// → 사용자 문서 폴더 아래 Retext PDF를 만들고 첫 실행에만 샘플을 복사해 쓴다. 개발 실행(npm start / node server.js)은 저장소의 workspace 그대로
 const SAMPLES = path.join(ROOT, '..', 'workspace');
 const PACKAGED = /[\\/]app\.asar[\\/]/i.test(ROOT);
 function defaultWorkspace() {
   if (!PACKAGED) return SAMPLES;
   let documents = path.join(os.homedir(), 'Documents');
   try { documents = require('electron').app.getPath('documents'); } catch {}
-  for (const dir of [path.join(documents, 'EDITOR_KIM'), path.join(os.homedir(), 'EDITOR_KIM')]) {
+  for (const dir of [path.join(documents, 'Retext PDF'), path.join(os.homedir(), 'Retext PDF')]) {
     try {
       if (!fs.existsSync(dir)) { // 사용자가 지운 샘플을 되살리지 않도록 폴더가 없을 때만 복사
         fs.mkdirSync(dir, { recursive: true });
@@ -386,8 +382,8 @@ const server = http.createServer(async (req, res) => {
       // Markdown은 원문 스트림이라 JSON 필드를 못 넣는다 → temp/readOnly는 헤더로 실어 보낸다(렌더러가 fetch 응답 헤더에서 읽음)
       res.writeHead(200, {
         'Content-Type': p.endsWith('.pdf') ? 'application/pdf' : 'text/plain; charset=utf-8',
-        'X-Editor-Kim-Temp': isTempPath(p) ? '1' : '0',
-        'X-Editor-Kim-Readonly': isReadOnlyPath(p) ? '1' : '0',
+        'X-Retext-Pdf-Temp': isTempPath(p) ? '1' : '0',
+        'X-Retext-Pdf-Readonly': isReadOnlyPath(p) ? '1' : '0',
       });
       return fs.createReadStream(p).on('error', () => res.destroy()).pipe(res);
     }
@@ -844,8 +840,8 @@ const server = http.createServer(async (req, res) => {
 });
 // 기본 포트가 사용 중이면(다른 프로그램, 개발용 서버) 다음 포트를 차례로 시도한다. ready는 실제로 연 포트로 resolve — Electron 창은 이 포트로 접속
 // listen(p, cb)의 cb는 'listening' 리스너로 남아 실패한 시도의 것까지 다음 성공 때 함께 불린다 → 리스너를 직접 달고 실패하면 떼어 낸다
-// EDITORKIM_NO_LISTEN=1 이면 포트를 열지 않는다 — server.test.js가 순수 함수(snapshot·downsampleToTarget·jobs)만 불러 쓰기 위한 것
-const ready = process.env.EDITORKIM_NO_LISTEN === '1' ? Promise.resolve(0) : new Promise((resolve, reject) => {
+// RETEXTPDF_NO_LISTEN=1 이면 포트를 열지 않는다 — server.test.js가 순수 함수(snapshot·downsampleToTarget·jobs)만 불러 쓰기 위한 것
+const ready = process.env.RETEXTPDF_NO_LISTEN === '1' ? Promise.resolve(0) : new Promise((resolve, reject) => {
   const listen = (p, retries) => {
     const onError = (e) => {
       server.off('listening', onListening);

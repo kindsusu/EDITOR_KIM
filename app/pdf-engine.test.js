@@ -207,10 +207,6 @@ const mkPdf = ({ content, w = 400, h = 400, pageExtra = '' }) => {
     assert.strictEqual(rro[rIdx].mask, true, '저장·재열기 후에도 mask:true 유지');
     dr.close();
 
-    // 호환: 옛 이름(LEGACY)으로 달린 마크도 mask:true로 인식돼야 한다
-    assert.deepStrictEqual(d._addLegacyMark(0, rIdx), { ok: true });
-    assert.strictEqual(d.objects(0)[rIdx].mask, true, '옛 이름 마크도 mask:true로 인식');
-
     // K: removeObject — 삭제하면 객체 수가 다시 줄어든다
     assert.deepStrictEqual(d.removeObject(0, rIdx), { ok: true });
     assert.strictEqual(d.objects(0).length, nBefore, 'removeObject 후 원래 개수로 복귀');

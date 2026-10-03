@@ -6,8 +6,7 @@ const fontkit = require('fontkit');
 const jpeg = require('jpeg-js'); // 페이지 JPEG 내보내기 · 이미지 삽입 · 다운샘플링의 인코더 (동기, 순수 JS)
 const fontRegistry = require('./pdf-fonts');
 
-const MARK_MASK = 'EditorKimMask', MARK_GROUP = 'EditorKimGroup';
-const LEGACY = { EditorKimMask: 'DaepilMask', EditorKimGroup: 'DaepilGroup' }; // 옛 이름으로 저장된 파일 호환용 — 읽기 전용
+const MARK_MASK = 'RetextPdfMask', MARK_GROUP = 'RetextPdfGroup';
 
 const OBJ_TEXT = 1, OBJ_PATH = 2, OBJ_IMAGE = 3; // FPDF_PAGEOBJ_*
 const RENDER_FLAGS = 0x01 | 0x10;                // FPDF_ANNOT | FPDF_REVERSE_BYTE_ORDER(=RGBA로 뽑기)
@@ -275,7 +274,7 @@ async function open(buffer) {
     heap().set(data, ptr);
     fbPtrs.push(ptr);
     const font = P.FPDFText_LoadFont(doc, ptr, data.length, FPDF_FONT_TRUETYPE, true);
-    if (process.env.EDITORKIM_DEBUG) console.error('[fallbackFont]', key, path.split(/[\\/]/).pop(), 'chars', chars.size, 'bytes', data.length, 'font', font);
+    if (process.env.RETEXTPDF_DEBUG) console.error('[fallbackFont]', key, path.split(/[\\/]/).pop(), 'chars', chars.size, 'bytes', data.length, 'font', font);
     if (!font) return 0;
     fb[key] = { font, chars };
     fbBold.set(font, !!bold);
@@ -464,8 +463,8 @@ async function open(buffer) {
     } finally { P.FPDFBitmap_Destroy(bmp); }
   };
 
-  // ── 그룹 마크: 줄바꿈 편집으로 만든 줄들, 사용자가 Shift 클릭으로 묶은 상자들을 콘텐츠 마크 EditorKimGroup(id)로 표시. 저장 후에도 유지 ──
-  const findMark = (o, name) => { for (let k = 0, mc = P.FPDFPageObj_CountMarks(o); k < mc; k++) { const mk = P.FPDFPageObj_GetMark(o, k); const n = mk && markName(mk); if (n === name || n === LEGACY[name]) return mk; } return 0; };
+  // ── 그룹 마크: 줄바꿈 편집으로 만든 줄들, 사용자가 Shift 클릭으로 묶은 상자들을 콘텐츠 마크 RetextPdfGroup(id)로 표시. 저장 후에도 유지 ──
+  const findMark = (o, name) => { for (let k = 0, mc = P.FPDFPageObj_CountMarks(o); k < mc; k++) { const mk = P.FPDFPageObj_GetMark(o, k); const n = mk && markName(mk); if (n === name) return mk; } return 0; };
   const markParam = (mk, key) => {
     const n = mal(4);
     try {
@@ -475,11 +474,11 @@ async function open(buffer) {
     } finally { free(n); }
   };
   const groupOf = (o) => { const mk = findMark(o, MARK_GROUP); return mk ? markParam(mk, 'id') : null; };
-  const fontOf = (o) => { const mk = findMark(o, 'EditorKimFont'); return mk ? markParam(mk, 'id') : null; };
+  const fontOf = (o) => { const mk = findMark(o, 'RetextPdfFont'); return mk ? markParam(mk, 'id') : null; };
   const chosenFont = (o) => selectedFont || (fontOf(o) ? fontRegistry.get(fontOf(o)) : null);
   const tagFont = (o, entry) => {
-    let mk; while ((mk = findMark(o, 'EditorKimFont'))) P.FPDFPageObj_RemoveMark(o, mk);
-    mk = P.FPDFPageObj_AddMark(o, 'EditorKimFont');
+    let mk; while ((mk = findMark(o, 'RetextPdfFont'))) P.FPDFPageObj_RemoveMark(o, mk);
+    mk = P.FPDFPageObj_AddMark(o, 'RetextPdfFont');
     P.FPDFPageObjMark_SetStringParam(doc, o, mk, 'id', entry.id);
     P.FPDFPageObjMark_SetStringParam(doc, o, mk, 'label', entry.label);
   };
@@ -645,7 +644,7 @@ async function open(buffer) {
             item.weight = P.FPDFFont_GetWeight ? P.FPDFFont_GetWeight(P.FPDFTextObj_GetFont(o)) : null;
           }
           item.group = groupOf(o); // 줄바꿈 줄들·사용자 그룹 (없으면 null)
-          const fm = findMark(o, 'EditorKimFont');
+          const fm = findMark(o, 'RetextPdfFont');
           if (fm) { item.fontId = markParam(fm, 'id'); item.fontLabel = markParam(fm, 'label'); }
           P.FPDFPageObj_GetBounds(o, scratch, scratch + 4, scratch + 8, scratch + 12);
           item.bounds = { x0: f32(scratch), y0: f32(scratch + 4), x1: f32(scratch + 8), y1: f32(scratch + 12) };
@@ -966,15 +965,6 @@ async function open(buffer) {
       return { idx: P.FPDFPage_CountObjects(p) - 1 };
     },
 
-    // 테스트 전용: 마크를 옛 이름(LEGACY)으로 다시 달아 하위 호환 읽기를 검증한다
-    _addLegacyMark(i, idx) {
-      const o = P.FPDFPage_GetObject(page(i), idx);
-      if (!o) return { ok: false };
-      let mk; while ((mk = findMark(o, MARK_MASK))) P.FPDFPageObj_RemoveMark(o, mk);
-      P.FPDFPageObj_AddMark(o, LEGACY[MARK_MASK]);
-      return { ok: true };
-    },
-
     // 객체 하나를 페이지에서 제거 (가림 상자 삭제용)
     removeObject(i, idx) {
       const p = page(i);
@@ -1123,7 +1113,7 @@ async function open(buffer) {
               copyTextStyle(obj, neo);
               P.FPDFTextObj_SetTextRenderMode(neo, P.FPDFTextObj_GetTextRenderMode(obj));
               const gid = groupOf(obj); if (gid) tagGroup(neo, gid);
-              const fm = findMark(obj, 'EditorKimFont'); if (fm) tagFont(neo, { id: markParam(fm, 'id') || '', label: markParam(fm, 'label') || '' });
+              const fm = findMark(obj, 'RetextPdfFont'); if (fm) tagFont(neo, { id: markParam(fm, 'id') || '', label: markParam(fm, 'label') || '' });
               let k = at;
               if (!P.FPDFPage_InsertObjectAtIndex(p, neo, at)) { P.FPDFPage_InsertObject(p, neo); k = P.FPDFPage_CountObjects(p) - 1; }
               if (j === idx) inserted = k;

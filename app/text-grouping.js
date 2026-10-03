@@ -54,7 +54,7 @@ function unionBounds(members) {
 }
 function sameRow(a, b) { return Math.abs(baselineOf(a) - baselineOf(b)) <= ROW_BASELINE_EPS * Math.max(sizeOf(a), sizeOf(b)); }
 
-// 그룹 마크(EditorKimGroup)가 있는 객체들 — 줄바꿈 편집으로 생긴 줄들, 사용자가 Shift 클릭으로 묶은 상자들.
+// 그룹 마크(RetextPdfGroup)가 있는 객체들 — 줄바꿈 편집으로 생긴 줄들, 사용자가 Shift 클릭으로 묶은 상자들.
 // 기준선 규칙보다 우선한다: 마크가 있으면 멀리 떨어져 있어도 한 상자다.
 // 상자 안 정렬·seps만 기준선으로 다시 계산한다(위→아래, 왼→오른쪽; 같은 줄이면 '', 다른 줄이면 '\n').
 function buildGroupBox(members, groupId) {

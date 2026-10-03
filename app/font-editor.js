@@ -71,10 +71,10 @@ window.openPdfFontEditor = async function ({ name, i, idx, remove = [], text, on
   el('.fontPreview').onclick = preview;
   select.onchange = () => { invalidate(); preview(); };
   input.onchange = () => loadContext().catch((e) => { note.textContent = e.message; });
-  el('.fontAdd').hidden = !window.editorKim?.openFont;
+  el('.fontAdd').hidden = !window.retextPdf?.openFont;
   el('.fontAdd').onclick = async () => {
     try {
-      const file = await window.editorKim.openFont(); if (!file || closed) return;
+      const file = await window.retextPdf.openFont(); if (!file || closed) return;
       const font = await post('/api/fonts/add', { path: file });
       await loadContext(); select.value = font.id; invalidate(); await preview();
     } catch (error) { note.textContent = error.message; }

@@ -271,13 +271,11 @@ async function apiPost(path, payload) {
   if (!r.ok || data.error) { const message = data.error || (r.status === 409 ? '다른 작업이 진행 중입니다 — 끝난 뒤 다시 시도하세요' : `HTTP ${r.status}`); flash('⚠ ' + message, 5000); throw new Error(message); }
   return data;
 }
-// AI 기능을 없애기(2026-10) 전에 쓰던 설정 키를 청소한다 — 남아 있어도 해는 없지만 쓰지 않는 값을 남기지 않는다
-for (const key of ['editorkim.ai', 'editorkim.aiChoice']) { try { localStorage.removeItem(key); } catch {} }
 let cur = null, docText = '', savedText = '', curTemp = false, curReadOnly = false;
 let mdEol = '\n'; // 지금 연 Markdown 파일의 원래 줄바꿈('\r\n'이면 저장할 때 되돌린다)
 const ZOOM_MIN = 0.5, ZOOM_MAX = 3, ZOOM_DEFAULT = 1.5;
 const clampZoom = (s) => Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, Math.round((+s || ZOOM_DEFAULT) * 100) / 100));
-let pdfPages = [], pdfObjects = [], pdfScale = clampZoom(localStorage.getItem('editorkim.zoom')), pdfDirty = false, selectedObj = null, selectedMask = null, pdfRenderGeneration = 0;
+let pdfPages = [], pdfObjects = [], pdfScale = clampZoom(localStorage.getItem('retextpdf.zoom')), pdfDirty = false, selectedObj = null, selectedMask = null, pdfRenderGeneration = 0;
 // 변경 카운터: 저장하는 동안 편집이 있었는지 판별(저장 후에도 미저장 표시를 유지). pdfDocName: 화면에 그려진 PDF(같은 문서를 다시 그릴 때만 쪽·스크롤을 유지). externalWarned: 외부 변경 경고는 문서당 한 번
 let mutationSeq = 0, pdfDocName = null, externalWarned = null;
 const refreshSeq = []; // 쪽별 refreshPage 순번 — 늦게 온 오래된 응답이 새 화면을 덮지 못하게
@@ -304,18 +302,17 @@ async function showVersion() {
 // ---- 열어 둔 파일 목록 (절대경로, localStorage에 저장) ----
 let files = [];
 const basename = (p) => p.split(/[\\/]/).pop();
-// editorkim.files는 sessionStorage에만 둔다(같은 실행 중 새로고침만 유지, 앱 재시작 시 자동으로 비워짐) — P2-O
-const loadFilesLS = () => { try { files = JSON.parse(sessionStorage.getItem('editorkim.files') || '[]'); } catch { files = []; } };
-const saveFilesLS = () => sessionStorage.setItem('editorkim.files', JSON.stringify(files));
-{ const OLD_K = 'da' + 'epil.recent'; if (localStorage.getItem(OLD_K) && !localStorage.getItem('editorkim.recent')) { localStorage.setItem('editorkim.recent', localStorage.getItem(OLD_K)); } localStorage.removeItem(OLD_K); } // 옛 키 1회 이전(이름 이전 프로젝트 키)
-function loadRecent() { try { return JSON.parse(localStorage.getItem('editorkim.recent') || '[]'); } catch { return []; } }
+// retextpdf.files는 sessionStorage에만 둔다(같은 실행 중 새로고침만 유지, 앱 재시작 시 자동으로 비워짐) — P2-O
+const loadFilesLS = () => { try { files = JSON.parse(sessionStorage.getItem('retextpdf.files') || '[]'); } catch { files = []; } };
+const saveFilesLS = () => sessionStorage.setItem('retextpdf.files', JSON.stringify(files));
+function loadRecent() { try { return JSON.parse(localStorage.getItem('retextpdf.recent') || '[]'); } catch { return []; } }
 function pushRecent(p) {
   const r = loadRecent();
-  localStorage.setItem('editorkim.recent', JSON.stringify([p, ...r.filter((x) => x !== p)].slice(0, 20)));
+  localStorage.setItem('retextpdf.recent', JSON.stringify([p, ...r.filter((x) => x !== p)].slice(0, 20)));
   renderRecent();
 }
 function removeRecentEntry(p) {
-  localStorage.setItem('editorkim.recent', JSON.stringify(loadRecent().filter((x) => x !== p)));
+  localStorage.setItem('retextpdf.recent', JSON.stringify(loadRecent().filter((x) => x !== p)));
   renderRecent();
 }
 function fileEntry(pathValue, recent = false) {
@@ -329,7 +326,7 @@ function fileEntry(pathValue, recent = false) {
   return item;
 }
 function renderRecent() {
-  if (!window.editorKim) return;
+  if (!window.retextPdf) return;
   const r = loadRecent();
   $('#recentDetails').hidden = false; // WP-B1: 목록이 비어도 "최근 파일" 절은 항상 보인다
   if (r.length) $('#recentList').replaceChildren(...r.map((p) => fileEntry(p, true)));
@@ -394,11 +391,11 @@ function updateEmptyState() {
   if (!has) renderEmptyRecent();
 }
 async function initFiles() {
-  if (window.editorKim) {
+  if (window.retextPdf) {
     $('#openFiles').hidden = false; $('#openFolder').hidden = false; $('#emptyOpen').hidden = false;
-    $('#openFiles').onclick = $('#emptyOpen').onclick = async () => addFiles(await window.editorKim.openFiles());
+    $('#openFiles').onclick = $('#emptyOpen').onclick = async () => addFiles(await window.retextPdf.openFiles());
     $('#openFolder').onclick = async () => {
-      const p = await window.editorKim.openFolder(); if (!p) return;
+      const p = await window.retextPdf.openFolder(); if (!p) return;
       addFiles(await (await fetch('/api/files?dir=' + encodeURIComponent(p))).json());
     };
     loadFilesLS(); renderFiles(); renderRecent();
@@ -413,8 +410,8 @@ async function initFiles() {
 }
 // ---- 인터넷·메일에서 연결 프로그램으로 바로 열기(WP-B1) ----
 // 연결 프로그램으로 더블클릭·`electron . <파일>`·이미 뜬 창에 두 번째로 파일을 연 경우: main.js가 open-paths로 보낸다
-if (window.editorKim && window.editorKim.onOpenPaths) {
-  window.editorKim.onOpenPaths((paths) => { if (Array.isArray(paths) && paths.length) addFiles(paths); });
+if (window.retextPdf && window.retextPdf.onOpenPaths) {
+  window.retextPdf.onOpenPaths((paths) => { if (Array.isArray(paths) && paths.length) addFiles(paths); });
 }
 // 창에 파일을 끌어다 놓으면 목록에 추가해 연다. 브라우저 기본 동작(파일을 새 탭으로 여는 것)을 막아야 drop 이벤트를 받는다.
 // 오버레이(놓아서 열기)는 무엇을 끌어오는지 몰라도 항상 보여 시각 신호를 준다 — 실제로 파일을 여는 것은 경로를 얻을 수 있는 Electron에서만.
@@ -425,15 +422,15 @@ document.addEventListener('dragenter', (e) => { e.preventDefault(); dragCounter+
 document.addEventListener('dragleave', (e) => { e.preventDefault(); dragCounter = Math.max(0, dragCounter - 1); if (!dragCounter) $('#dropOverlay').hidden = true; });
 document.addEventListener('drop', (e) => {
   e.preventDefault(); dragCounter = 0; $('#dropOverlay').hidden = true;
-  // FileList를 그대로 window.editorKim으로 넘기면 contextBridge가 복제하지 못해 프리로드에 빈 객체가 간다
+  // FileList를 그대로 window.retextPdf으로 넘기면 contextBridge가 복제하지 못해 프리로드에 빈 객체가 간다
   // (v0.8.0부터 끌어다 놓기가 한 번도 동작하지 않은 이유). 여기서 배열로 바꿔 File 하나씩 넘긴다.
   const dropped = Array.from(e.dataTransfer?.files || []);
   const fromItems = dropped.length ? [] : Array.from(e.dataTransfer?.items || [])
     .filter((it) => it.kind === 'file').map((it) => it.getAsFile()).filter(Boolean);
   const list = dropped.length ? dropped : fromItems;
   if (!list.length) return;
-  if (!(window.editorKim && window.editorKim.pathForFile)) return flash('끌어다 놓기는 설치된 앱에서만 됩니다 — 브라우저 화면에서는 [파일 열기]를 쓰세요', 4000);
-  const all = list.map((f) => window.editorKim.pathForFile(f)).filter(Boolean);
+  if (!(window.retextPdf && window.retextPdf.pathForFile)) return flash('끌어다 놓기는 설치된 앱에서만 됩니다 — 브라우저 화면에서는 [파일 열기]를 쓰세요', 4000);
+  const all = list.map((f) => window.retextPdf.pathForFile(f)).filter(Boolean);
   const paths = all.filter((p) => /\.(pdf|md)$/i.test(p));
   if (paths.length) return addFiles(paths);
   // 조용히 실패하지 않는다: 무엇이 문제인지 알려 준다
@@ -467,7 +464,7 @@ async function open(name) {
   const isPdf = name.endsWith('.pdf');
   setRectMode(false);
   updateEmptyState();
-  $('#md').hidden = isPdf; $('#pdf').hidden = !isPdf; $('#save').hidden = false; $('#saveAs').hidden = !window.editorKim; $('#pdfZoom').hidden = !isPdf; $('#rectTool').hidden = !isPdf;
+  $('#md').hidden = isPdf; $('#pdf').hidden = !isPdf; $('#save').hidden = false; $('#saveAs').hidden = !window.retextPdf; $('#pdfZoom').hidden = !isPdf; $('#rectTool').hidden = !isPdf;
   $('#undoBtn').hidden = $('#redoBtn').hidden = !isPdf;
   $('#groupView').hidden = $('#groupEdit').hidden = $('#groupPage').hidden = $('#groupDoc').hidden = !isPdf;
   $('#groupSave').hidden = false;
@@ -481,7 +478,7 @@ async function open(name) {
     if (!r.ok) { flash('⚠ 파일을 읽지 못했습니다', 4000); return removeFile(name); }
     const text = await r.text();
     if (cur !== name) return;
-    curTemp = r.headers.get('X-Editor-Kim-Temp') === '1'; curReadOnly = r.headers.get('X-Editor-Kim-Readonly') === '1'; updateTempBanner();
+    curTemp = r.headers.get('X-Retext-Pdf-Temp') === '1'; curReadOnly = r.headers.get('X-Retext-Pdf-Readonly') === '1'; updateTempBanner();
     // 편집 창(textarea)은 CRLF를 LF로 바꿔 담는다 — 원문 그대로 비교하면 한 글자만 입력했다 되돌려도 미저장(●)이 남았다.
     // 화면 안에서는 LF로 다루고, 저장할 때 원래 줄바꿈(CRLF)으로 되돌려 쓴다
     mdEol = /\r\n/.test(text) ? '\r\n' : '\n';
@@ -521,9 +518,9 @@ async function save() {
   } catch (error) { flash('⚠ ' + error.message, 5000); }
 }
 async function saveAs() {
-  if (!cur || !window.editorKim) return;
+  if (!cur || !window.retextPdf) return;
   const name = cur, seq = mutationSeq;
-  const to = await window.editorKim.saveAs(cur, { suggestDocFolder: curTemp || curReadOnly });
+  const to = await window.retextPdf.saveAs(cur, { suggestDocFolder: curTemp || curReadOnly });
   if (!to) return;
   const text = $('#src').value;
   try {
@@ -539,18 +536,18 @@ async function saveAs() {
   showDirty(); flash('다른 이름으로 저장됨');
 }
 // 임시·읽기전용 파일에서는 [저장]/Ctrl+S도 다른 이름으로 저장으로 보낸다(그 자리에 덮어쓸 수 없거나, 덮어써도 편집이 남지 않으므로)
-function saveOrSaveAs() { return (curTemp || curReadOnly) && window.editorKim ? saveAs() : save(); }
+function saveOrSaveAs() { return (curTemp || curReadOnly) && window.retextPdf ? saveAs() : save(); }
 $('#save').onclick = saveOrSaveAs;
 $('#saveAs').onclick = saveAs;
 // 창 닫기 대화상자(main.js)에서 호출: 저장 성공이면 true. "이 문서에 덮어쓰기"는 사용자가 그 자리에 쓰겠다고 명시적으로 고른 선택이라
 // 임시 파일이어도 saveAs로 돌리지 않는다(다른 이름으로 저장은 별도 버튼으로 이미 있음).
-window.editorKimSave = async () => { await save(); return !dirty(); };
-window.editorKimSaveAs = async () => { await saveAs(); return !dirty(); }; // 대화상자에서 취소하면 dirty 그대로 → false
+window.retextPdfSave = async () => { await save(); return !dirty(); };
+window.retextPdfSaveAs = async () => { await saveAs(); return !dirty(); }; // 대화상자에서 취소하면 dirty 그대로 → false
 document.addEventListener('keydown', (e) => {
   if (!e.ctrlKey || e.key.toLowerCase() !== 's') return;
   e.preventDefault(); e.shiftKey ? saveAs() : saveOrSaveAs();
 });
-window.onbeforeunload = (e) => { if (dirty() && !window.editorKim) { e.preventDefault(); e.returnValue = ''; } };
+window.onbeforeunload = (e) => { if (dirty() && !window.retextPdf) { e.preventDefault(); e.returnValue = ''; } };
 
 // ---- 실행 취소 / 다시 실행 ----
 function setUndoRedoState(u, r) { $('#undoBtn').disabled = !u; $('#redoBtn').disabled = !r; }
@@ -866,7 +863,7 @@ function selectImage(i, o, wrap, box) {
     flash('이미지 삭제됨');
   };
 }
-// ---- 여러 상자 선택(Shift 클릭) → 그룹 설정 / 선택 해제. 그룹은 PDF 안 마크(EditorKimGroup)로 저장돼 다시 열어도 상자 하나로 다뤄진다 ----
+// ---- 여러 상자 선택(Shift 클릭) → 그룹 설정 / 선택 해제. 그룹은 PDF 안 마크(RetextPdfGroup)로 저장돼 다시 열어도 상자 하나로 다뤄진다 ----
 const multi = new Map(); // box → { i, line }
 function toggleMulti(i, line, wrap, box) {
   closeAnyPanel();
@@ -1066,15 +1063,15 @@ function openInlineEditor(initialText, caret) {
   const alignLbl = document.createElement('span'); alignLbl.textContent = '정렬 유지:';
   const alignSel = document.createElement('select');
   alignSel.innerHTML = '<option value="left">왼쪽</option><option value="center">가운데</option><option value="right">오른쪽</option>';
-  alignSel.value = localStorage.getItem('editorkim.align') || 'left';
-  alignSel.onchange = () => localStorage.setItem('editorkim.align', alignSel.value);
+  alignSel.value = localStorage.getItem('retextpdf.align') || 'left';
+  alignSel.onchange = () => localStorage.setItem('retextpdf.align', alignSel.value);
   alignRow.append(alignLbl, alignSel);
   // 넘치면: 옆 글자·페이지 끝까지의 폭 안에서 줄바꿈(기본) / 글자 축소 / 그대로
   const fitLbl = document.createElement('span'); fitLbl.textContent = '넘치면:';
   const fitSel = document.createElement('select');
   fitSel.innerHTML = '<option value="wrap">줄바꿈</option><option value="shrink">글자 축소</option><option value="none">그대로</option>';
-  fitSel.value = localStorage.getItem('editorkim.fit') || 'wrap';
-  fitSel.onchange = () => localStorage.setItem('editorkim.fit', fitSel.value);
+  fitSel.value = localStorage.getItem('retextpdf.fit') || 'wrap';
+  fitSel.onchange = () => localStorage.setItem('retextpdf.fit', fitSel.value);
   alignRow.append(fitLbl, fitSel);
   // sx,sy는 화면 방향 단위(오른쪽+,아래+) — screenDeltaToPdf(scale=1)로 회전에 맞는 PDF pt 이동량으로 바꾼다(WP-B2)
   for (const [sym, sx, sy] of [['◀', -1, 0], ['▲', 0, -1], ['▼', 0, 1], ['▶', 1, 0]]) {
@@ -1250,7 +1247,7 @@ function applyZoom(next, anchor) {
   next = clampZoom(next);
   if (next === pdfScale) return;
   const el = $('#pdf'), wraps = [...el.children];
-  if (!cur || !cur.endsWith('.pdf') || !wraps.length) { pdfScale = next; showZoom(); localStorage.setItem('editorkim.zoom', pdfScale); return; }
+  if (!cur || !cur.endsWith('.pdf') || !wraps.length) { pdfScale = next; showZoom(); localStorage.setItem('retextpdf.zoom', pdfScale); return; }
   const rect = el.getBoundingClientRect();
   const ax = anchor ? anchor.x - rect.left : el.clientWidth / 2, ay = anchor ? anchor.y - rect.top : el.clientHeight / 2;
   const docX = el.scrollLeft + ax, docY = el.scrollTop + ay;
@@ -1260,7 +1257,7 @@ function applyZoom(next, anchor) {
   const fx = (docX - target.offsetLeft) / target.offsetWidth, fy = (docY - target.offsetTop) / target.offsetHeight;
   const editing = selectedObj && { i: selectedObj.i, idxs: selectedObj.objs.map((o) => o.idx), text: el.querySelector('.pdfEditor textarea')?.value, caret: (() => { const t = el.querySelector('.pdfEditor textarea'); return t && { start: t.selectionStart, end: t.selectionEnd }; })() };
   closeAnyPanel(); clearMulti();
-  pdfScale = next; showZoom(); localStorage.setItem('editorkim.zoom', pdfScale);
+  pdfScale = next; showZoom(); localStorage.setItem('retextpdf.zoom', pdfScale);
   const boxedByPage = wraps.map((wrap, i) => {
     const { w, h } = pdfPages[i];
     wrap.style.width = (w * pdfScale) + 'px'; wrap.style.height = (h * pdfScale) + 'px';
@@ -1387,14 +1384,14 @@ document.addEventListener('keydown', (e) => {
   else if (e.key === 'Home') { e.preventDefault(); goToPage(0); }
   else if (e.key === 'End') { e.preventDefault(); goToPage(pdfPages.length - 1); }
 });
-// 첫 안내: 문서를 열면 한 번, 첫 편집(pdfMutate)까지만 보인다(localStorage.editorkim.hintSeen)
+// 첫 안내: 문서를 열면 한 번, 첫 편집(pdfMutate)까지만 보인다(localStorage.retextpdf.hintSeen)
 function maybeShowHint() {
-  if (!cur || !cur.endsWith('.pdf') || localStorage.getItem('editorkim.hintSeen')) return;
+  if (!cur || !cur.endsWith('.pdf') || localStorage.getItem('retextpdf.hintSeen')) return;
   $('#statusHint').textContent = '글줄을 클릭하면 고칠 수 있습니다 · 가리려면 글줄을 고른 뒤 [가리기]';
 }
 function dismissHint() {
-  if (localStorage.getItem('editorkim.hintSeen')) return;
-  localStorage.setItem('editorkim.hintSeen', '1');
+  if (localStorage.getItem('retextpdf.hintSeen')) return;
+  localStorage.setItem('retextpdf.hintSeen', '1');
   $('#statusHint').textContent = '';
 }
 // 사이드바 "페이지" 탭: 현재 PDF의 축소본 세로 목록. 지연 로딩(loading=lazy), 클릭으로 스크롤 이동, 우클릭 메뉴, 드래그(순서 변경은 B2에서 연결)
@@ -1452,7 +1449,7 @@ function openPageCtxMenu(i, x, y) {
   const rotR = document.createElement('button'); rotR.type = 'button'; rotR.textContent = '오른쪽으로 회전 ↻';
   rotR.onclick = () => { closeCtxMenu(); rotatePages([i], 90, `${i + 1}쪽을 오른쪽으로 회전했습니다`); };
   const saveOne = document.createElement('button'); saveOne.type = 'button'; saveOne.textContent = '새 파일로 저장…';
-  saveOne.disabled = !window.editorKim; if (!window.editorKim) saveOne.title = '이 화면에서는 저장 대화상자를 열 수 없습니다';
+  saveOne.disabled = !window.retextPdf; if (!window.retextPdf) saveOne.title = '이 화면에서는 저장 대화상자를 열 수 없습니다';
   saveOne.onclick = () => { closeCtxMenu(); savePageAs(i); };
   menu.append(del, rotL, rotR, saveOne);
   document.body.appendChild(menu);
@@ -1464,9 +1461,9 @@ function openPageCtxMenu(i, x, y) {
   });
 }
 async function savePageAs(i) {
-  if (!cur || !window.editorKim) return;
+  if (!cur || !window.retextPdf) return;
   const suggestion = basename(cur).replace(/\.pdf$/i, '') + `-p${i + 1}.pdf`;
-  const to = await window.editorKim.saveAs(suggestion, {});
+  const to = await window.retextPdf.saveAs(suggestion, {});
   if (!to) return;
   try {
     const r = await apiPost('/api/pdf/pages/extract', { name: cur, indices: [i], out: to });
@@ -1489,8 +1486,8 @@ function openSplitDialog() {
   $('#splitDialog').showModal();
 }
 $('#splitChooseDir').onclick = async () => {
-  if (!window.editorKim) return;
-  const p = await window.editorKim.openFolder();
+  if (!window.retextPdf) return;
+  const p = await window.retextPdf.openFolder();
   if (!p) return;
   splitDir = p; $('#splitDirLabel').textContent = p;
 };
@@ -1612,8 +1609,8 @@ function openSearchHitCtxMenu(hitIdx, x, y) {
 
 // ---- WP-B2: 빈 상태 빠른 도구(여러 파일 용량 줄이기·이미지로 내보내기) ----
 $('#emptyExportImages').onclick = async () => {
-  if (!window.editorKim) return flash('이 화면에서는 파일 선택 대화상자를 열 수 없습니다');
-  const paths = await window.editorKim.openFiles();
+  if (!window.retextPdf) return flash('이 화면에서는 파일 선택 대화상자를 열 수 없습니다');
+  const paths = await window.retextPdf.openFiles();
   const pdf = (paths || []).find((p) => /\.pdf$/i.test(p));
   if (!pdf) return;
   if (!files.includes(pdf)) { files.push(pdf); saveFilesLS(); renderFiles(); }
@@ -1629,8 +1626,8 @@ function openDownsampleFilesDialog() {
 }
 $('#emptyDownsampleFiles').onclick = openDownsampleFilesDialog;
 $('#downsampleFilesChoose').onclick = async () => {
-  if (!window.editorKim) return flash('이 화면에서는 파일 선택 대화상자를 열 수 없습니다');
-  const paths = await window.editorKim.openPdfFiles();
+  if (!window.retextPdf) return flash('이 화면에서는 파일 선택 대화상자를 열 수 없습니다');
+  const paths = await window.retextPdf.openPdfFiles();
   if (!paths || !paths.length) return;
   downsampleFilesPaths = paths;
   $('#downsampleFilesLabel').textContent = `${paths.length}개 파일 선택됨`;
@@ -1727,16 +1724,16 @@ function openMergeDialog() {
   $('#mergeDialog').showModal();
 }
 $('#mergeAddFiles').onclick = async () => {
-  if (!window.editorKim) return;
-  const paths = await window.editorKim.openFiles();
+  if (!window.retextPdf) return;
+  const paths = await window.retextPdf.openFiles();
   for (const p of paths || []) if (/\.pdf$/i.test(p) && !mergeFiles.includes(p)) mergeFiles.push(p);
   renderMergeList();
 };
 $('#mergeRun').onclick = async () => {
   const list = [...(($('#mergeIncludeCurrent').checked && cur && cur.endsWith('.pdf')) ? [cur] : []), ...mergeFiles];
   if (list.length < 1) return flash('병합할 파일이 없습니다');
-  if (!window.editorKim) return flash('이 화면에서는 저장 대화상자를 열 수 없습니다');
-  const out = await window.editorKim.saveAs('병합.pdf', {});
+  if (!window.retextPdf) return flash('이 화면에서는 저장 대화상자를 열 수 없습니다');
+  const out = await window.retextPdf.saveAs('병합.pdf', {});
   if (!out) return;
   try {
     const r = await runJob('병합', (jobId) => apiPost('/api/pdf/merge', { paths: list, out, jobId }));
@@ -1763,8 +1760,8 @@ function openExportImagesDialog() {
 }
 document.querySelectorAll('[name=exportRange]').forEach((r) => { r.onchange = () => { $('#exportRangeInput').disabled = document.querySelector('[name=exportRange]:checked').value !== 'custom'; }; });
 $('#exportChooseDir').onclick = async () => {
-  if (!window.editorKim) return;
-  const p = await window.editorKim.openFolder();
+  if (!window.retextPdf) return;
+  const p = await window.retextPdf.openFolder();
   if (!p) return;
   exportDir = p; $('#exportDirLabel').textContent = p;
 };
@@ -1793,8 +1790,8 @@ $('#exportClose').onclick = () => $('#exportImagesDialog').close();
 
 // ---- 이미지 삽입 ----
 async function insertImage() {
-  if (!cur || !cur.endsWith('.pdf') || !window.editorKim) return;
-  const p = await window.editorKim.openImage();
+  if (!cur || !cur.endsWith('.pdf') || !window.retextPdf) return;
+  const p = await window.retextPdf.openImage();
   if (!p) return;
   const i = currentPageIndex();
   try {
