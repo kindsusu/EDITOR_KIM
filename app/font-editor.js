@@ -1,7 +1,7 @@
 // UI for the exceptional path: PDFium keeps handling text it can edit directly.
-// ai()는 현재 선택된 공급자·모델을 돌려주는 getter(대화상자가 열린 채 로그인을 마쳐도 반영), ensureAi()는 로그인 안 됐을 때 선택·로그인 대화상자를 연다
-window.openPdfFontEditor = async function ({ name, i, idx, text, ai = () => null, ensureAi = null, autoRecommend = false, onApply }) {
-  const provider = () => ai()?.provider || null, model = () => ai()?.model || null;
+// 원래 글꼴을 재사용할 수 없는 줄(그림으로 그려진 글자·원본 폰트에 없는 글자)은 사용자가 설치된 TTF를 직접 골라 미리보기 → 적용한다
+// remove: 줄 단위 상자의 나머지 조각 idx들 — 적용하면 첫 조각(idx)이 줄 전체를 새 폰트로 그리고 나머지는 지워진다
+window.openPdfFontEditor = async function ({ name, i, idx, remove = [], text, onApply }) {
   if (document.querySelector('#fontEditor')) return;
   const dialog = document.createElement('dialog'); dialog.id = 'fontEditor';
   dialog.innerHTML = `<h3>폰트 맞추기</h3>
@@ -10,35 +10,30 @@ window.openPdfFontEditor = async function ({ name, i, idx, text, ai = () => null
     <div class="fontControls"><label>사용할 폰트<select class="fontSelect"></select></label><button class="fontAdd">TTF 추가</button></div>
     <div class="fontControls"><label>크기 (pt)<input class="fontSize" type="number" min="1" max="300" step="0.1"></label>
       <label><input class="fontFit" type="checkbox" checked>기존 폭을 넘으면 축소</label></div>
-    <div class="fontControls"><button class="fontRecommend">AI 후보 추천</button><button class="fontStop" hidden>추천 중지</button><button class="fontPreview">미리보기</button></div>
-    <p class="fontDisclosure">AI는 PDFium으로 직접 편집하기 어려운 경우에만 호출됩니다. 선택 영역 이미지·문구·폰트 목록이 선택한 AI로 전송됩니다.</p>
-    <div class="fontCandidates"></div><p class="fontAdvice"></p><p class="fontNote" role="status"></p>
+    <div class="fontControls"><button class="fontPreview">미리보기</button></div>
+    <p class="fontAdvice"></p><p class="fontNote" role="status"></p>
     <div class="fontCompare"><figure><figcaption>현재 문서</figcaption><img class="fontBefore" alt="현재 선택 영역"></figure>
       <figure><figcaption>저장 후 예상 결과</figcaption><img class="fontAfter" alt="폰트 적용 미리보기" hidden></figure></div>
     <div class="fontControls"><button class="fontApply pri" disabled>이 폰트로 적용</button><button class="fontClose">닫기</button></div>`;
   document.body.appendChild(dialog); dialog.showModal();
   const el = (s) => dialog.querySelector(s), input = el('.fontText'), select = el('.fontSelect'), size = el('.fontSize');
-  const note = el('.fontNote'), apply = el('.fontApply'), rec = el('.fontRecommend');
-  let ctx, closed = false, aiAbort = null, previewKey = '', busy = false, generation = 0;
+  const note = el('.fontNote'), apply = el('.fontApply');
+  let ctx, closed = false, previewKey = '', busy = false, generation = 0;
   input.value = text;
-  const post = async (url, payload, signal) => {
-    const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), signal });
+  const post = async (url, payload) => {
+    const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
     const result = await res.json();
-    if (!res.ok || result.error) {
-      // P6 WP-B3: 401 code:'auth'(로그인 만료)를 던지는 쪽(index.html)이 배너를 띄울 수 있게 그대로 실어 보낸다
-      const err = new Error(result.error || `HTTP ${res.status}`); if (result.code) err.code = result.code; throw err;
-    }
+    if (!res.ok || result.error) throw new Error(result.error || `HTTP ${res.status}`);
     return result;
   };
-  const base = () => ({ name, i, idx, text: input.value, token: ctx?.token });
+  const base = () => ({ name, i, idx, remove, text: input.value, token: ctx?.token });
   const payload = () => ({ ...base(), fontId: select.value, size: Number(size.value), fit: el('.fontFit').checked });
   const key = () => JSON.stringify(payload());
   const invalidate = () => { generation++; previewKey = ''; apply.disabled = true; el('.fontAfter').hidden = true; };
-  function close() { closed = true; aiAbort?.abort(); dialog.close(); dialog.remove(); }
+  function close() { closed = true; dialog.close(); dialog.remove(); }
   el('.fontClose').onclick = close;
   dialog.addEventListener('cancel', (event) => { event.preventDefault(); close(); });
-  el('.fontStop').onclick = () => aiAbort?.abort();
-  input.oninput = () => { invalidate(); aiAbort?.abort(); el('.fontCandidates').replaceChildren(); el('.fontAdvice').textContent = ''; };
+  input.oninput = invalidate;
   size.oninput = invalidate; el('.fontFit').onchange = invalidate;
   async function loadContext() {
     const before = input.value;
@@ -46,6 +41,8 @@ window.openPdfFontEditor = async function ({ name, i, idx, text, ai = () => null
     if (closed || before !== input.value) return false;
     ctx = next;
     el('.fontStatus').textContent = ctx.reason;
+    // needsAi(엔진 필드 이름 그대로): PDFium이 원래 글꼴로 그릴 수 없는 줄 — 사람이 비슷한 글꼴을 고르도록 안내한다
+    el('.fontAdvice').textContent = ctx.needsAi ? '원래 글꼴을 판단하기 어렵습니다 — 아래 미리보기로 비교하며 비슷한 글꼴을 고르세요.' : '';
     el('.fontBefore').src = 'data:image/png;base64,' + ctx.image;
     const previous = select.value || ctx.object.fontId || ctx.suggestedFontId; // 이미 지정한 폰트 > PDF 폰트 이름과 비슷한 설치 폰트 > 첫 후보
     select.replaceChildren();
@@ -55,8 +52,6 @@ window.openPdfFontEditor = async function ({ name, i, idx, text, ai = () => null
     }
     select.value = ctx.fonts.find((f) => f.id === previous && f.supported)?.id || ctx.fonts.find((f) => f.supported)?.id || '';
     if (!size.value) size.value = Number(ctx.object.size.toFixed(1));
-    rec.disabled = !ctx.needsAi || !!aiAbort;
-    rec.title = !ctx.needsAi ? 'PDFium이 직접 처리할 수 있어 AI를 호출하지 않습니다.' : !provider() ? 'AI 로그인이 필요합니다. 누르면 Claude/ChatGPT 선택 화면을 엽니다.' : '선택 영역으로 폰트 후보 추천';
     return true;
   }
   async function preview() {
@@ -73,36 +68,7 @@ window.openPdfFontEditor = async function ({ name, i, idx, text, ai = () => null
     } catch (error) { if (!closed) note.textContent = error.message; }
     finally { busy = false; }
   }
-  async function recommend() {
-    if (aiAbort || closed) return;
-    if (!provider()) { ensureAi?.(); return; } // 로그인 뒤 다시 누르면 ai()가 선택된 공급자를 돌려준다
-    aiAbort = new AbortController(); rec.disabled = true; el('.fontStop').hidden = false;
-    try {
-      if (!await loadContext() || !ctx.needsAi) return;
-      const expected = input.value;
-      note.textContent = 'AI가 선택한 글자 이미지와 설치 폰트 목록을 비교하는 중…';
-      const result = await post('/api/pdf/font-recommend', { ...base(), provider: provider(), model: model() }, aiAbort.signal);
-      if (closed || expected !== input.value) return;
-      el('.fontAdvice').textContent = result.note;
-      el('.fontCandidates').replaceChildren();
-      for (const candidate of result.candidates) {
-        const font = ctx.fonts.find((f) => f.id === candidate.fontId);
-        if (!font) continue;
-        const button = document.createElement('button'); button.textContent = font.label; button.title = candidate.reason;
-        button.onclick = () => { select.value = font.id; el('.fontAdvice').textContent = `${candidate.reason} ${result.note}`; preview(); };
-        el('.fontCandidates').appendChild(button);
-      }
-      if (result.candidates.length) { select.value = result.candidates[0].fontId; await preview(); }
-    } catch (error) {
-      if (!closed) {
-        note.textContent = error.name === 'AbortError' ? '추천을 중지했습니다. 직접 선택할 수 있습니다.' : error.message;
-        // P6 WP-B3: 로그인이 만료됐으면(code:'auth') index.html의 상단 배너로 알린다(이 창은 로그인 대화상자를 모른다)
-        if (error.code === 'auth' && window.editorKimAuthError) window.editorKimAuthError(provider());
-      }
-    }
-    finally { aiAbort = null; if (!closed) { rec.disabled = !ctx?.needsAi; el('.fontStop').hidden = true; } }
-  }
-  rec.onclick = recommend; el('.fontPreview').onclick = preview;
+  el('.fontPreview').onclick = preview;
   select.onchange = () => { invalidate(); preview(); };
   input.onchange = () => loadContext().catch((e) => { note.textContent = e.message; });
   el('.fontAdd').hidden = !window.editorKim?.openFont;
@@ -125,9 +91,9 @@ window.openPdfFontEditor = async function ({ name, i, idx, text, ai = () => null
     } catch (error) {
       note.textContent = error.message;
       dialog.querySelectorAll('input,select,button').forEach((node) => { node.disabled = false; });
-      previewKey = ''; apply.disabled = true; rec.disabled = !ctx?.needsAi;
+      previewKey = ''; apply.disabled = true;
     } finally { busy = false; }
   };
-  try { if (await loadContext() && autoRecommend && ctx.needsAi && provider()) await recommend(); }
+  try { await loadContext(); }
   catch (error) { note.textContent = error.message; }
 };

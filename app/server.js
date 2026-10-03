@@ -1,4 +1,4 @@
-// EDITOR_KIM 백엔드: 정적 UI + 파일 읽기/쓰기 + Claude Code/Codex 호출 (API 키 없음, 구독 로그인 사용)
+// Retext PDF(옛 EDITOR_KIM) 백엔드: 정적 UI + 파일 읽기/쓰기 + PDF 편집(PDFium). 127.0.0.1에서만 열고 문서를 PC 밖으로 보내지 않는다
 const http = require('http');
 const fs = require('fs');
 const os = require('os');
@@ -18,11 +18,10 @@ const pdfFonts = require('./pdf-fonts');
 const fontService = require('./pdf-font-service');
 const { applyEdits, verifyEdits } = require('./pdf-edit-service');
 const APP_VERSION = require('../package.json').version;
-const ai = require('./ai-providers').createProviders({ version: APP_VERSION });
 
 let conf = {}; try { conf = JSON.parse(fs.readFileSync(CONF, 'utf8')); } catch {}
 // 기본 작업 폴더. 패키징된 앱에서는 __dirname이 app.asar 안이라 소스 옆 workspace는 읽기만 되고 저장이 실패한다
-// → 사용자 문서 폴더 아래 EDITOR_KIM을 만들고 첫 실행에만 샘플을 복사해 쓴다. 개발 실행(npm start / node server.js)은 저장소의 workspace 그대로
+// → 사용자 문서 폴더 아래 EDITOR_KIM(옛 앱 이름 그대로 유지 — 기존 사용자 파일이 있는 곳이라 호환)을 만들고 첫 실행에만 샘플을 복사해 쓴다. 개발 실행(npm start / node server.js)은 저장소의 workspace 그대로
 const SAMPLES = path.join(ROOT, '..', 'workspace');
 const PACKAGED = /[\\/]app\.asar[\\/]/i.test(ROOT);
 function defaultWorkspace() {
@@ -43,7 +42,6 @@ function defaultWorkspace() {
   return os.tmpdir();
 }
 let WS = conf.workspace && fs.existsSync(conf.workspace) ? conf.workspace : defaultWorkspace();
-const sessions = {}; // `${provider}\0${문서명}` → { model, id }
 const pdfDocs = {}; // docKey(파일) → { doc, mtimeMs, dirty, busy, externalChange, undo, redo, ... }
 const MAX_RENDER_SCALE = 4; // A4 기준 2380×3368px. 그 이상은 WASM 힙만 먹고 화면에서 구분되지 않는다
 // 상태 코드를 실은 오류 — 공통 catch가 e.status로 응답한다
@@ -339,13 +337,6 @@ const localHosts = () => [`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${por
 const trustedRequest = (req) => localHosts().includes(req.headers.host || '')
   && (!req.headers.origin || localHosts().map((h) => `http://${h}`).includes(req.headers.origin));
 
-const PROMPTS = {
-  chat: (doc, name, q) => `아래는 사용자가 열어둔 문서 "${name}"의 내용이다. 문서에 근거해 한국어로 간결하게 답하라. 도구는 쓰지 말 것.\n\n<document>\n${doc}\n</document>\n\n질문: ${q}`,
-  chatMore: (_doc, _name, q) => q, // 같은 세션의 후속 질문: 문서는 이미 대화에 있음
-  edit: (doc, name, q) => `아래 Markdown 문서 "${name}"를 지시대로 수정하라. 출력은 수정된 문서 전체만, 코드펜스나 설명 없이 그대로 출력할 것. 지시와 무관한 부분은 바꾸지 말 것. 도구는 쓰지 말 것.\n\n<document>\n${doc}\n</document>\n\n지시: ${q}`,
-  editText: (doc, name, q) => `아래 텍스트를 지시대로 고쳐라. 출력은 고친 텍스트만, 설명 없이.\n\n<text>\n${doc}\n</text>\n\n지시: ${q}`,
-};
-
 const server = http.createServer(async (req, res) => {
   let url;
   try {
@@ -358,10 +349,7 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/text-grouping.js') { res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }); return fs.createReadStream(path.join(ROOT, 'text-grouping.js')).pipe(res); }
     if (url.pathname === '/vendor/marked.js') { res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }); return fs.createReadStream(MARKED_BROWSER).pipe(res); }
     if (url.pathname === '/vendor/purify.js') { res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }); return fs.createReadStream(DOMPURIFY_BROWSER).pipe(res); }
-    if (url.pathname === '/api/health') { // ?provider=claude|codex 이면 그 공급자만 검사(로그인 대기 중 2초마다 부르므로)
-      const only = url.searchParams.get('provider');
-      return json(res, 200, { appVersion: APP_VERSION, providers: await ai.health(['claude', 'codex'].includes(only) ? only : undefined) });
-    }
+    if (url.pathname === '/api/health') return json(res, 200, { appVersion: APP_VERSION }); // 화면 머리줄의 앱 버전(#ver)이 읽는다
     // P6 C1: 진행 조회·취소. UI는 긴 작업을 시작할 때 만든 jobId로 500ms마다 폴링하고 [취소]에서 cancel을 부른다
     if (url.pathname === '/api/jobs' && req.method === 'GET') {
       const job = jobs.get(url.searchParams.get('id') || '');
@@ -380,11 +368,6 @@ const server = http.createServer(async (req, res) => {
       }
       job.cancelled = true; // 실제 중단은 라우트가 다음 단위 작업 사이에서 확인한다
       return json(res, 200, { ok: true });
-    }
-    if (url.pathname === '/api/setup' && req.method === 'POST') {
-      const { provider, action } = await readJson(req);
-      if (!['claude', 'codex'].includes(provider) || !['install', 'login'].includes(action)) return json(res, 400, { error: '잘못된 AI 설정 요청' });
-      return json(res, 200, action === 'install' ? await ai.install(provider) : await ai.login(provider));
     }
     if (url.pathname === '/api/workspace' && req.method === 'GET') return json(res, 200, { path: WS });
     if (url.pathname === '/api/workspace' && req.method === 'POST') {
@@ -409,12 +392,6 @@ const server = http.createServer(async (req, res) => {
       return fs.createReadStream(p).on('error', () => res.destroy()).pipe(res);
     }
     if (url.pathname === '/api/file' && req.method === 'PUT') { writeAtomic(safe(url.searchParams.get('name')), await body(req)); return json(res, 200, { ok: true }); }
-    if (url.pathname === '/api/session/reset' && req.method === 'POST') {
-      const { name, provider } = await readJson(req);
-      if (provider) delete sessions[`${provider}\0${name}`];
-      else for (const key of Object.keys(sessions)) if (key.endsWith(`\0${name}`)) delete sessions[key];
-      return json(res, 200, { ok: true });
-    }
     if (url.pathname === '/api/pdf/info' && req.method === 'GET') { // 서버가 문서 상태의 정본: 미저장 여부와 실행취소 스택도 함께 준다(새로고침·재열기 뒤 화면과 어긋나지 않게)
       const name = url.searchParams.get('name');
       const entry = await getPdfDoc(name);
@@ -692,32 +669,23 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/pdf/font-context' && req.method === 'POST') {
       const q = await readJson(req), { doc } = await getPdfDoc(q.name);
-      const ctx = fontService.context(doc, q.i, q.idx, q.text, q.token), fonts = pdfFonts.list(q.text);
-      return json(res, 200, { ...ctx, ...doc.fontStatus(q.i, q.idx, q.text), fonts, suggestedFontId: pdfFonts.suggest(ctx.object.font, fonts), image: doc.renderRegion(q.i, ctx.object.bounds).toString('base64') });
+      const ctx = fontService.context(doc, q.i, q.idx, q.text, q.token, q.remove), fonts = pdfFonts.list(q.text);
+      return json(res, 200, { ...ctx, ...doc.fontStatus(q.i, q.idx, q.text), fonts, suggestedFontId: pdfFonts.suggest(ctx.object.font, fonts), image: doc.renderRegion(q.i, ctx.region).toString('base64') });
     }
     if (url.pathname === '/api/pdf/font-status' && req.method === 'POST') {
       const q = await readJson(req), { doc } = await getPdfDoc(q.name);
       fontService.context(doc, q.i, q.idx, q.text);
       return json(res, 200, doc.fontStatus(q.i, q.idx, q.text));
     }
-    if (url.pathname === '/api/pdf/font-recommend' && req.method === 'POST') {
-      const q = await readJson(req), { doc } = await getPdfDoc(q.name);
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 120000);
-      res.on('close', () => { if (!res.writableFinished) controller.abort(); });
-      try { return json(res, 200, await fontService.recommend(doc, q, ai, controller.signal)); }
-      catch (e) { if (e.code === 'auth' && !e.provider) e.provider = q.provider; throw e; } // P6 C2: 아래 공통 catch가 401 + code:'auth'로 보낸다
-      finally { clearTimeout(timer); }
-    }
     if (['/api/pdf/font-preview', '/api/pdf/font-apply'].includes(url.pathname) && req.method === 'POST') {
       const q = await readJson(req), entry = await getEditableDoc(q.name);
       const prepared = await fontService.prepare(entry.doc, q);
       if (await getPdfDoc(q.name) !== entry) throw new Error('파일이 변경됐습니다. 다시 선택하세요.');
-      fontService.context(entry.doc, q.i, q.idx, q.text, q.token);
+      fontService.context(entry.doc, q.i, q.idx, q.text, q.token, q.remove);
       if (url.pathname.endsWith('font-apply')) {
         const next = await pdfEngine.open(prepared.bytes);
         try {
-          fontService.context(entry.doc, q.i, q.idx, q.text, q.token);
+          fontService.context(entry.doc, q.i, q.idx, q.text, q.token, q.remove);
           snapshot(entry, q.i);
         } catch (error) { next.close(); throw error; }
         entry.doc.close(); entry.doc = next; entry.dirty = true;
@@ -868,42 +836,9 @@ const server = http.createServer(async (req, res) => {
       dropDoc(name);
       return json(res, 200, { ok: true });
     }
-    if (url.pathname === '/api/chat' && req.method === 'POST') {
-      const { mode, doc, name, q, model, provider = 'claude' } = await readJson(req);
-      if (!['claude', 'codex'].includes(provider)) return json(res, 400, { error: '지원하지 않는 AI 공급자' });
-      if (!PROMPTS[mode]) return json(res, 400, { error: '잘못된 모드' });
-      res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache' });
-      const send = (o) => { if (!res.writableEnded) res.write(`data: ${JSON.stringify(o)}\n\n`); };
-      // WP-B 검증용 스위치: EDITORKIM_FAKE_AUTH_ERROR=1 로 서버를 띄우면 CLI를 부르지 않고 로그인 만료 오류만 보낸다.
-      // UI의 "AI 로그인이 만료됐습니다" 배너를 실제 로그아웃 없이 시험하기 위한 것 — 평소에는 이 환경변수가 없다.
-      if (process.env.EDITORKIM_FAKE_AUTH_ERROR === '1') { send({ error: '로그인이 필요합니다', code: 'auth', provider }); return res.end(); }
-      // 사용자가 [중지]를 누르거나 창을 닫아 연결이 끊기면 CLI 호출도 함께 끊는다(토큰·시간 낭비 방지)
-      const controller = new AbortController();
-      res.on('close', () => { if (!res.writableFinished) controller.abort(); });
-      try {
-        const key = `${provider}\0${name}`;
-        const saved = mode === 'chat' && sessions[key]?.model === model ? sessions[key] : null;
-        const session = saved && ai.sessionValid(provider, saved.id) ? saved.id : undefined; // 편집은 매번 문서 전체를 새로 넘김
-        const run = (resume) => ai.ask(provider, { prompt: PROMPTS[mode === 'chat' && resume ? 'chatMore' : mode](doc, name, q), model, session: resume, signal: controller.signal }, (text) => send({ delta: text }));
-        let result;
-        try { result = await run(session); }
-        catch (e) { // 이어가던 대화를 CLI가 잃었으면(업데이트·세션 파일 정리 등) 문서를 다시 넣어 새 대화로 한 번 더 시도
-          if (!session || e.aborted) throw e;
-          delete sessions[key]; send({ notice: '이전 대화를 이어갈 수 없어 새 대화로 다시 보냅니다' });
-          result = await run(undefined);
-        }
-        if (mode === 'chat' && result.session) sessions[key] = { model, id: result.session };
-        send({ done: { ...result, provider } });
-      } catch (e) { // P6 C2: 로그인 만료면 code:'auth'를 함께 보낸다 — UI가 그 공급자만 다시 확인하고 재로그인 배너를 띄운다
-        if (!controller.signal.aborted) send({ error: e.message, ...(e.code === 'auth' ? { code: 'auth', provider } : {}) });
-      }
-      return res.end();
-    }
     json(res, 404, { error: 'not found' });
   } catch (e) {
     if (res.headersSent) return res.end();
-    // P6 C2: 인증 만료는 401 + code:'auth'(+provider) — UI가 재로그인 배너를 띄우고 그 공급자만 다시 확인한다
-    if (e.code === 'auth') return json(res, 401, { error: e.message, code: 'auth', ...(e.provider ? { provider: e.provider } : {}) });
     json(res, e.status || 500, { error: e.message });
   }
 });
@@ -919,7 +854,7 @@ const ready = process.env.EDITORKIM_NO_LISTEN === '1' ? Promise.resolve(0) : new
     };
     const onListening = () => {
       server.off('error', onError); server.on('error', (e) => console.error('server:', e.message));
-      port = server.address().port; console.log(`EDITOR_KIM → http://localhost:${port}  workspace=${WS}`); resolve(port);
+      port = server.address().port; console.log(`Retext PDF → http://localhost:${port}  workspace=${WS}`); resolve(port);
     };
     server.once('error', onError); server.once('listening', onListening);
     server.listen(p, '127.0.0.1');
@@ -927,7 +862,6 @@ const ready = process.env.EDITORKIM_NO_LISTEN === '1' ? Promise.resolve(0) : new
   listen(PORT, 10);
 });
 ready.catch((e) => console.error('server:', e.message));
-process.once('exit', () => ai.close());
 module.exports = { PORT, ready, port: () => port,
   // 자체 검사용(server.test.js): P6 C1·C3·C4 로직을 직접 부르고, server를 4848에 직접 listen해 라우트를 가짜 엔진으로 검사한다
   _test: { server, pdfDocs, jobs, startJob, progress, endJob, jobView, snapshot, stacks, trimStacks, downsampleToTarget, UNDO_MAX, UNDO_MAX_BYTES } };

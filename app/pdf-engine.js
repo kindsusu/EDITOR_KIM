@@ -565,7 +565,8 @@ async function open(buffer) {
       } finally { free(outPP); P.FPDFBitmap_Destroy(bmp); }
     },
 
-    setFontText(i, idx, text, { fontId, size, fit = true }) {
+    // maxWidth: 줄 단위 상자처럼 여러 조각을 한 객체로 합칠 때 "기존 폭"의 기준(없으면 이 객체의 폭)
+    setFontText(i, idx, text, { fontId, size, fit = true, maxWidth: lineWidth }) {
       const o = P.FPDFPage_GetObject(page(i), idx);
       if (!o || P.FPDFPageObj_GetType(o) !== OBJ_TEXT) throw new Error('텍스트 상자를 선택하세요.');
       if (typeof text !== 'string' || !text.trim() || text.length > 2000 || /[\r\n]/.test(text)) throw new Error('폰트 맞추기는 2,000자 이하의 한 줄씩 적용하세요.');
@@ -581,7 +582,7 @@ async function open(buffer) {
         if (!r.ok) throw new Error('선택한 폰트로 글자를 그리지 못했습니다.');
         const index = r.idx ?? idx, neo = P.FPDFPage_GetObject(page(i), index);
         const after = api.objects(i)[index], width = after.bounds.x1 - after.bounds.x0;
-        const maxWidth = before.bounds.x1 - before.bounds.x0;
+        const maxWidth = lineWidth > 0 ? lineWidth : before.bounds.x1 - before.bounds.x0;
         if (fit && width > maxWidth && maxWidth > 0) {
           const factor = maxWidth / width, m = mal(24);
           try {

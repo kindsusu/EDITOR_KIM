@@ -158,7 +158,7 @@ function mergeRow(rowItems, nonText) {
 }
 
 // Chromium이 만든 PDF는 낱말 끝 조각에 공백을 붙이고("월 ") 그 뒤에 공백만 든 조각(" ")을 또 둔다.
-// 그대로 이으면 줄 글이 "9월  첫째  주"처럼 두 칸이 돼 편집 창·AI로 보내는 문서 글에 그대로 보인다(v3.0.0 실측: 회의록_초안.pdf 모든 줄).
+// 그대로 이으면 줄 글이 "9월  첫째  주"처럼 두 칸이 돼 편집 창에 그대로 보인다(v3.0.0 실측: 회의록_초안.pdf 모든 줄).
 // 앞 글이 이미 공백으로 끝났으면 공백만 든 조각은 글을 보태지 않도록 text를 ''로 바꾼 사본으로 둔다.
 // 조각 자체는 objs에 남긴다 — 편집(나머지 조각 비우기)·이동이 idx로 함께 처리해야 하고,
 // text 길이로 글자 위치를 맞추는 가리기(mapRangeToParts)는 길이 0인 조각을 자연히 건너뛴다.
@@ -193,7 +193,7 @@ function groupLines(objs) {
   const visible = boxes.filter((b) => (b.text || '').trim() !== '');
   // 화면에 보이는 순서(위→아래, 같은 줄이면 왼→오른쪽)로 정렬한다.
   // groups/rows를 만든 순서는 PDF 객체가 쓰인 순서를 따르므로 문서 읽기 순서와 다를 수 있다
-  // (rebuildDocText가 AI에 보내는 글의 줄 순서, 회귀 검사의 "첫 상자" 판정이 이 순서에 기댄다).
+  // (회귀 검사의 "첫 상자" 판정이 이 순서에 기댄다).
   visible.sort((A, B) => {
     const a0 = A.objs[0], b0 = B.objs[0];
     const dy = baselineOf(b0) - baselineOf(a0);

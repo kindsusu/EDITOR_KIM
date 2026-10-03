@@ -4,6 +4,11 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 
+// 앱 이름이 EDITOR_KIM에서 Retext PDF로 바뀌었다. Electron의 userData 폴더는 productName을 따라가므로 그대로 두면
+// %APPDATA%\Retext PDF라는 새 폴더가 만들어져 기존 사용자의 최근 파일·설정(localStorage)이 사라진다.
+// 그래서 옛 폴더(%APPDATA%\EDITOR_KIM)를 계속 쓰도록 app ready 전에(단일 실행 잠금도 userData를 쓰므로 그보다 먼저) 고정한다.
+app.setPath('userData', path.join(app.getPath('appData'), 'EDITOR_KIM'));
+
 // 두 번 실행하면 창을 하나만 쓴다. 예전에는 두 번째 실행의 서버가 포트를 못 잡고 창만 첫 서버에 붙었다.
 // 잠금을 얻은 뒤에만 서버 모듈을 읽는다(읽는 순간 listen이 시작되므로)
 if (!app.requestSingleInstanceLock()) app.quit();
@@ -47,9 +52,9 @@ function main() {
   app.whenReady().then(async () => {
     let port;
     try { port = await ready; } // 기본 4747이 사용 중이면 서버가 다음 포트로 옮긴다
-    catch (e) { dialog.showErrorBox('EDITOR_KIM을 시작할 수 없습니다', `로컬 서버를 열지 못했습니다.\n${e.message}`); app.quit(); return; }
+    catch (e) { dialog.showErrorBox('Retext PDF를 시작할 수 없습니다', `로컬 서버를 열지 못했습니다.\n${e.message}`); app.quit(); return; }
     win = new BrowserWindow({
-      width: 1400, height: 900, title: `EDITOR_KIM v${require('../package.json').version}`, autoHideMenuBar: true, backgroundColor: '#1b1b1f',
+      width: 1400, height: 900, title: `Retext PDF v${require('../package.json').version}`, autoHideMenuBar: true, backgroundColor: '#1b1b1f',
       webPreferences: { preload: path.join(__dirname, 'preload.js') },
     });
     const appUrl = `http://localhost:${port}`;
@@ -102,7 +107,7 @@ function main() {
     ipcMain.handle('saveAs', async (_e, defaultPath, opts) => {
       const isPdf = /\.pdf$/i.test(defaultPath || '');
       const filters = isPdf ? [{ name: 'PDF', extensions: ['pdf'] }] : [{ name: 'Markdown', extensions: ['md'] }];
-      // 임시·읽기전용 파일의 "다른 이름으로 저장"은 같은 임시 폴더가 아니라 문서 폴더의 EDITOR_KIM에 원래 파일명으로 유도한다
+      // 임시·읽기전용 파일의 "다른 이름으로 저장"은 같은 임시 폴더가 아니라 문서 폴더의 EDITOR_KIM(옛 앱 이름 그대로 유지 — 기존 사용자 파일이 있는 곳이라 호환)에 원래 파일명으로 유도한다
       if (opts && opts.suggestDocFolder && defaultPath) {
         let documents = path.join(os.homedir(), 'Documents');
         try { documents = app.getPath('documents'); } catch {}

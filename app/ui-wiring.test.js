@@ -1,43 +1,19 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
-const { parseClaudeAuth, parseCodexAuth, pickExecutable } = require('./ai-providers');
-
-assert.deepStrictEqual(parseCodexAuth('Logged in using ChatGPT'), { loggedIn: true, authMethod: 'ChatGPT' });
-assert.deepStrictEqual(parseCodexAuth('Logged in using API key'), { loggedIn: true, authMethod: 'API key' });
-assert.deepStrictEqual(parseCodexAuth('Not logged in'), { loggedIn: false, authMethod: null });
-assert.deepStrictEqual(parseClaudeAuth('{"loggedIn":true,"authMethod":"claude.ai"}'), { loggedIn: true, authMethod: 'claude.ai' });
-assert.deepStrictEqual(parseClaudeAuth('not json'), {});
-
-// `where`가 npm의 확장자 없는 sh 스크립트를 먼저 돌려줘도 실행 가능한 .exe/.cmd를 고른다 (실제 회귀: codex가 "설치 안 됨"으로 보였음)
-const npm = 'C:\\Users\\u\\AppData\\Roaming\\npm\\';
-assert.strictEqual(pickExecutable([npm + 'codex', npm + 'codex.cmd'], 'win32'), npm + 'codex.cmd');
-assert.strictEqual(pickExecutable([npm + 'claude', npm + 'claude.cmd', 'C:\\Links\\claude.exe'], 'win32'), 'C:\\Links\\claude.exe');
-assert.strictEqual(pickExecutable([npm + 'codex'], 'win32'), null);
-assert.strictEqual(pickExecutable(['/usr/local/bin/codex'], 'linux'), '/usr/local/bin/codex');
-assert.strictEqual(pickExecutable([], 'win32'), null);
 
 const html = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
-const providerSource = fs.readFileSync(path.join(__dirname, 'ai-providers.js'), 'utf8');
 const serverSource = fs.readFileSync(path.join(__dirname, 'server.js'), 'utf8');
 const script = html.match(/<script type="module">([\s\S]*?)<\/script>/)?.[1];
 assert.ok(script, 'index.html module script exists');
 assert.doesNotThrow(() => new Function(script), 'index.html module script parses');
-assert.match(html, /id="modelPicker"/, 'model picker exists');
-assert.match(html, /id="aiToggle"/, 'AI chat toggle remains available');
-assert.match(html, /id="aiRailToggle"/, 'AI panel has a persistent edge toggle');
-assert.match(html, /ChatGPT \(Codex\)/, 'Codex option is presented as ChatGPT (Codex)');
 assert.match(html, /pdfRenderGeneration/, 'stale PDF renders are invalidated');
 assert.match(html, /DOMPurify\.sanitize\(marked\.parse/, 'Markdown preview is sanitized');
 assert.doesNotMatch(html, /https:\/\/cdnjs\.cloudflare\.com/, 'UI has no CDN runtime dependency');
 assert.match(html, /addEventListener\('wheel'[\s\S]*ctrlKey/, 'Ctrl+wheel zooms the PDF');
 assert.match(html, /id="zoomFit"/, 'fit-to-width zoom exists');
-assert.match(html, /id="stop"/, 'AI generation can be stopped');
-assert.match(providerSource, /Anthropic\.ClaudeCode/, 'Claude installs from the WinGet package');
-assert.match(providerSource, /OpenAI\.Codex/, 'Codex installs from the WinGet package');
-assert.match(providerSource, /WindowsApps/, 'Claude Desktop app alias is excluded from CLI discovery');
-assert.doesNotMatch(providerSource + serverSource, /install\.ps1|ExecutionPolicy\s+Bypass|irm\s+https:/i,
-  'setup never pipes a remote PowerShell script into execution');
+assert.doesNotMatch(serverSource, /install\.ps1|ExecutionPolicy\s+Bypass|irm\s+https:/i,
+  'server never pipes a remote PowerShell script into execution');
 assert.match(serverSource, /headers\.host/, 'server checks the Host header (DNS rebinding)');
 assert.match(html, /id="tempBanner"/, 'temp/read-only file banner exists (WP-B1)');
 assert.match(html, /window\.editorKim\.onOpenPaths/, 'renderer wires up onOpenPaths for files opened via file association/argv (WP-B1)');
@@ -144,16 +120,6 @@ assert.match(html, /toast\(label, \{ action: '실행 취소', onAction: undo \}\
 assert.match(html, /toast\('페이지 순서를 바꿨습니다', \{ action: '실행 취소', onAction: undo \}\)/, 'page reorder completion offers an undo toast (P6 WP-B2)');
 assert.match(html, /toast\('용량을 줄였습니다', \{ action: '실행 취소', onAction: undo \}\)/, 'downsample completion offers an undo toast (P6 WP-B2)');
 
-// P6 WP-B3: 로그인 만료 배너 — 계약 C2
-assert.match(html, /id="authBanner"/, 'auth-expired banner exists (P6 WP-B3)');
-assert.match(html, /id="authBannerLogin"/, 'auth banner has a re-login button (P6 WP-B3)');
-assert.match(html, /function showAuthBanner\(provider\)/, 'showAuthBanner() opens the re-login banner for a specific provider (P6 WP-B3)');
-assert.match(html, /ev\.code === 'auth'/, "chat SSE auth errors (code:'auth') trigger the banner (P6 WP-B3, contract C2)");
-assert.match(html, /needsRelogin/, 'status bar reflects re-login-needed state for the active provider (P6 WP-B3)');
-assert.match(html, /window\.editorKimAuthError = showAuthBanner/, 'font-editor.js (which has no dialog access) can reach the banner via a global hook (P6 WP-B3)');
-assert.match(fontEditorSource, /err\.code = result\.code/, 'font-recommend errors propagate the server code field (P6 WP-B3, contract C2)');
-assert.match(fontEditorSource, /error\.code === 'auth' && window\.editorKimAuthError/, 'font editor calls the global auth-banner hook on code:\'auth\' (P6 WP-B3)');
-
 // P6 WP-B4: 회전 페이지 이미지 크기 조절 손잡이 — 실측(브라우저, 회전 0·1·2·3, 계약 C5 표와 대조) 결과를 코드에 반영
 // · box.offsetLeft/Top/Width/Height는 정수로 반올림돼 오차가 생긴다 — box.style.*(pdfToScreen이 써 넣은 소수)를 읽어야 한다
 assert.match(html, /function attachResize[\s\S]{0,2000}?screenToPdf/, '이미지 손잡이 크기 조절이 screenToPdf로 화면→PDF 변환을 한다 (P6 WP-B4)');
@@ -161,26 +127,9 @@ assert.match(html, /parseFloat\(box\.style\.left\)/, '손잡이 드래그 시작
 assert.doesNotMatch(html, /const left0 = box\.offsetLeft, top0 = box\.offsetTop, w0 = box\.offsetWidth/, '손잡이 크기 조절은 더 이상 반올림되는 offset\* 값으로 시작점을 잡지 않는다 (P6 WP-B4)');
 assert.match(html, /const MIN_PX = 8/, '손잡이로 만들 수 있는 최소 화면 크기가 있다 — 뒤집히거나 0이 되지 않는다 (P6 WP-B4)');
 
-console.log('OK — AI provider and UI checks passed');
+console.log('OK — UI checks passed');
 
-// --- P6 WP-A --- (서버·공급자 함수 단언. 이 절만 Opus가 고친다 — 위쪽 줄은 건드리지 않는다)
-const { isAuthError } = require('./ai-providers');
-// C2: 로그인 만료·미로그인 문구는 auth로 분류한다(두 CLI가 실제로 내보내는 문장들)
-for (const text of [
-  'Not logged in. Run `claude auth login` to continue.',
-  'Invalid API key · Please run /login',
-  'Error: OAuth token has expired, please re-authenticate',
-  'request failed with status 401',
-  'authentication_error: invalid x-api-key',
-  'You must run `codex login` before starting a thread',
-]) assert.strictEqual(isAuthError(text), true, `auth로 분류돼야 함: ${text}`);
-// 일반 오류는 auth가 아니다 — 배너를 띄우면 안 된다
-for (const text of [
-  'Claude usage limit reached|1772409600',
-  'turn/start 응답 시간이 초과되었습니다',
-  'fetch failed: ECONNRESET',
-]) assert.strictEqual(isAuthError(text), false, `auth가 아니어야 함: ${text}`);
-
+// --- P6 WP-A --- (서버 단언)
 // C1: 작업 진행·취소 API와 6개 라우트의 jobId 수신
 assert.match(serverSource, /url\.pathname === '\/api\/jobs' && req\.method === 'GET'/, '진행 조회 라우트 GET /api/jobs (C1)');
 assert.match(serverSource, /url\.pathname === '\/api\/jobs\/cancel' && req\.method === 'POST'/, '취소 라우트 POST /api/jobs/cancel (C1)');
@@ -193,11 +142,6 @@ for (const phase of ['export-images', 'split', 'merge', 'downsample', 'downsampl
 assert.match(serverSource, /if \(result\.cancelled\) \{ \/\/ 문서를 바꾸는 작업/, '취소된 용량 줄이기는 스냅샷으로 되돌린다 (C1)');
 assert.match(serverSource, /async function restore\(entry, i, before\)/, '실패·취소한 변경은 이전 바이트로 되돌리고 실행 취소 스택에 남기지 않는다 (C1)');
 assert.match(serverSource, /JOB_TTL = 60000/, '끝난 작업은 60초 뒤 지운다 (C1)');
-// C2: 인증 만료 신호
-assert.match(serverSource, /json\(res, 401, \{ error: e\.message, code: 'auth'/, 'JSON 라우트는 401 + code:auth (C2)');
-assert.match(serverSource, /code: 'auth', provider/, 'SSE는 code:auth와 provider를 함께 보낸다 (C2)');
-assert.match(serverSource, /EDITORKIM_FAKE_AUTH_ERROR/, 'WP-B 검증용 로그인 만료 모의 스위치 (C2)');
-assert.match(providerSource, /isAuthError/, '공급자 오류 문구를 판별하는 함수가 있다 (C2)');
 // C3: 실행 취소 메모리 상한
 assert.match(serverSource, /UNDO_MAX_BYTES = 256 \* 1024 \* 1024/, 'undo 바이트 상한 256MB (C3)');
 assert.match(serverSource, /undoTrimmed/, 'undo를 잘라냈음을 UI에 알린다 (C3)');
@@ -205,7 +149,7 @@ assert.match(serverSource, /undoTrimmed/, 'undo를 잘라냈음을 UI에 알린�
 assert.match(serverSource, /DOWNSAMPLE_MIN_GAIN = 0\.01/, '1% 미만 개선이면 다음 dpi 단계로 (C4)');
 assert.match(serverSource, /stalledDpis/, '두 dpi 연속 제자리면 중단 (C4)');
 
-console.log('OK — P6 WP-A 서버·공급자 단언 통과');
+console.log('OK — P6 WP-A 서버 단언 통과');
 
 // P7: 줄 단위 편집 상자 — text-grouping.js가 font-editor.js와 같은 모양으로 배선됐는지(로직 자체는 text-grouping.test.js)
 assert.match(serverSource, /url\.pathname === '\/text-grouping\.js'/, '/text-grouping.js 라우트가 font-editor.js와 같은 모양으로 있다 (P7)');
@@ -244,3 +188,66 @@ assert.match(html, /refreshSeq\[i\]/, 'refreshPage drops out-of-order responses'
 assert.match(html, /mutationSeq/, 'save only clears dirty if no edit happened during it');
 assert.match(html, /externalChange/, 'external file change is surfaced');
 assert.match(html, /new DOMParser\(\)\.parseFromString\(DOMPurify\.sanitize/, 'Markdown remote images are neutralised before insertion');
+
+// AI 기능 제거(2026-10-03): Claude Code/Codex 연동(채팅 패널·설정 대화상자·로그인 배너·모델 선택·폰트 추천)이 코드에 남지 않는다.
+// PDF 편집용으로만 쓰고, 문서는 PC 밖으로 나가지 않는다 — 외부 CLI를 부르는 길 자체가 없어야 한다
+assert.ok(!fs.existsSync(path.join(__dirname, 'ai-providers.js')), 'app/ai-providers.js는 지워졌다');
+assert.ok(!fs.existsSync(path.join(__dirname, 'claude-provider.test.js')), 'AI 공급자 어댑터 테스트도 지워졌다');
+assert.doesNotMatch(html, /id="aiPanel"|class="ai"/, 'AI 채팅 패널이 없다');
+assert.doesNotMatch(html, /id="modelPicker"|id="aiToggle"|id="aiRailToggle"/, '머리줄에 AI 모델 선택·채팅 버튼이 없다');
+assert.doesNotMatch(html, /<dialog id="setup"/, 'AI 설치·로그인 대화상자가 없다');
+assert.doesNotMatch(html, /id="authBanner"|editorKimAuthError/, 'AI 로그인 만료 배너가 없다');
+assert.doesNotMatch(html, /\/api\/chat|\/api\/setup|\/api\/session\/reset|font-recommend/, '화면이 AI 라우트를 부르지 않는다');
+assert.doesNotMatch(html, /ai-collapsed|editRadio|showDiff|rebuildDocText/, 'AI 패널 열·편집 모드·수정안 비교 코드가 없다');
+assert.doesNotMatch(html, /claude|codex|chatgpt/i, '화면에 Claude/Codex/ChatGPT 언급이 없다');
+assert.match(html, /grid-template-columns:220px 1fr;/, '레이아웃은 파일 목록/편집기 2열이다');
+assert.match(html, /<span id="status"><\/span>/, '머리줄 #status는 flash() 알림 자리로만 남는다');
+assert.match(html, /id="ver"/, '앱 버전 표시(#ver)는 유지된다');
+assert.match(html, /fetch\('\/api\/health'\)/, '앱 버전은 /api/health에서 읽는다');
+assert.match(html, /'editorkim\.ai', 'editorkim\.aiChoice'/, '옛 AI 설정 키(localStorage)는 한 번 청소한다');
+assert.doesNotMatch(serverSource, /\/api\/chat|font-recommend|\/api\/setup|\/api\/session\/reset|ai-providers|EDITORKIM_FAKE_AUTH_ERROR|code: 'auth'/,
+  'server.js에 AI 라우트·공급자 참조·인증 만료 분기가 없다');
+assert.doesNotMatch(serverSource, /claude|codex|chatgpt/i, 'server.js에 Claude/Codex/ChatGPT 언급이 없다');
+assert.match(serverSource, /url\.pathname === '\/api\/health'\) return json\(res, 200, \{ appVersion: APP_VERSION \}\)/, '/api/health는 앱 버전만 돌려준다');
+assert.doesNotMatch(fontEditorSource, /fontRecommend|font-recommend|ensureAi|autoRecommend|AI 후보|editorKimAuthError/, '폰트 맞추기 창에 AI 추천 버튼·로그인 처리가 없다');
+assert.match(fontEditorSource, /\/api\/pdf\/font-preview/, '폰트 맞추기 미리보기는 그대로 있다');
+assert.match(fontEditorSource, /\/api\/pdf\/font-apply/, '폰트 맞추기 적용은 그대로 있다');
+assert.match(fontEditorSource, /비슷한 글꼴을 고르세요/, '원래 글꼴을 쓸 수 없으면 사람이 고르도록 안내한다');
+const pkg = require('../package.json');
+assert.doesNotMatch(pkg.description + ' ' + pkg.keywords.join(' '), /claude|codex|chatgpt/i, 'package.json 설명·키워드에 AI 공급자가 없다');
+assert.doesNotMatch(pkg.description, /&/, 'package.json 설명에 & 없음(appx 설명서가 깨진다)');
+assert.doesNotMatch(pkg.scripts.test, /ai-providers|claude-provider/, 'npm test가 지운 테스트를 부르지 않는다');
+assert.match(pkg.scripts.test, /ui-wiring\.test\.js/, 'npm test가 ui-wiring.test.js를 부른다');
+
+console.log('OK — AI 제거 단언 통과');
+
+// 2026-10-03: CRLF Markdown은 화면 안에서 LF로 다루고 저장할 때 원래 줄바꿈으로 되돌린다(입력 뒤 되돌려도 미저장 표시가 남던 문제)
+assert.match(script, /mdEol = \/\\r\\n\/\.test\(text\)/, 'Markdown 원래 줄바꿈을 기억한다');
+assert.match(script, /savedText = text\.replace\(\/\\r\\n\/g, '\\n'\)/, '비교 기준(savedText)은 LF로 정규화한다');
+assert.match(script, /if \(mdEol === '\\r\\n'\) text = text\.replace/, '저장할 때 CRLF로 되돌린다');
+// 2026-10-03: 여러 조각으로 된 줄도 폰트 맞추기가 된다 — 나머지 조각 idx를 remove로 넘긴다
+assert.doesNotMatch(script, /fontButton\.disabled = selectedObj\.objs\.length !== 1/, '폰트 맞추기가 조각 하나짜리 줄로 묶여 있지 않다');
+assert.match(script, /openPdfFontEditor\(\{[^}]*remove: selection\.objs\.slice\(1\)/, '폰트 창에 나머지 조각을 넘긴다');
+console.log('OK — CRLF Markdown·여러 조각 줄 폰트 맞추기 단언 통과');
+
+
+// 2026-10-03: 앱 이름 EDITOR_KIM → Retext PDF(4.0.0). 보이는 이름만 바꾸고 내부 식별자는 호환을 위해 그대로 둔다
+assert.strictEqual(pkg.version, '4.0.0', '버전은 4.0.0이다');
+assert.strictEqual(pkg.productName, 'Retext PDF', 'package.json productName은 Retext PDF다');
+assert.strictEqual(pkg.build.productName, 'Retext PDF', 'build.productName은 Retext PDF다');
+assert.strictEqual(pkg.build.appx.displayName, 'Retext PDF', 'Store 표시 이름은 Retext PDF다');
+assert.strictEqual(pkg.build.nsis.shortcutName, 'Retext PDF', '바로가기 이름은 Retext PDF다');
+for (const name of [pkg.build.artifactName, pkg.build.portable.artifactName, pkg.build.nsis.artifactName, pkg.build.appx.artifactName]) {
+  assert.match(name, /^Retext-PDF-\S+$/, '산출물 이름은 공백 없는 Retext-PDF-...다: ' + name);
+}
+assert.strictEqual(pkg.name, 'editor-kim', '패키지 이름(name)은 옛 값 그대로다');
+assert.strictEqual(pkg.build.appId, 'com.kindsusu.editorkim', 'appId는 옛 값 그대로다');
+assert.strictEqual(pkg.build.appx.identityName, 'susukim.EDITORKIM', 'Store identityName은 옛 값 그대로다');
+assert.strictEqual(pkg.build.appx.applicationId, 'EDITORKIM', 'Store applicationId는 옛 값 그대로다');
+assert.match(mainSource, /app\.setPath\('userData', path\.join\(app\.getPath\('appData'\), 'EDITOR_KIM'\)\)/, 'userData는 옛 EDITOR_KIM 폴더로 고정한다');
+assert.ok(mainSource.indexOf("app.setPath('userData'") < mainSource.indexOf('requestSingleInstanceLock'), 'userData 고정은 단일 실행 잠금·ready보다 먼저다');
+assert.match(html, /<title>Retext PDF<\/title>/, 'index.html 제목은 Retext PDF다');
+assert.match(html, /<header><b>Retext PDF<\/b>/, '머리줄 브랜드는 Retext PDF다');
+assert.doesNotMatch(html, /EDITOR_KIM/, '화면에 옛 이름이 보이지 않는다');
+assert.match(mainSource, /title: `Retext PDF v\$\{/, '창 제목은 Retext PDF vX.Y.Z다');
+console.log('OK — 앱 이름 변경(Retext PDF 4.0.0) 단언 통과');

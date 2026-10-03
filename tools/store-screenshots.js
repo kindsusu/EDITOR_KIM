@@ -39,7 +39,7 @@ app.whenReady().then(async () => {
   };
   // 반환값(DOM 등)은 복제할 수 없어 버린다
   const js = (code) => win.webContents.executeJavaScript(`Promise.resolve((() => { ${code} })()).then(() => true)`);
-  // 첫 실행 안내·AI 로그인 창 등 떠 있는 대화상자는 닫고 찍는다
+  // 첫 실행 안내 등 떠 있는 대화상자는 닫고 찍는다
   const closeDialogs = () => js(`document.querySelectorAll('dialog[open]').forEach((d) => d.close());`);
   const pdf = path.join(ws, '회의록_초안.pdf'), md = path.join(ws, '회의록_초안.md');
 

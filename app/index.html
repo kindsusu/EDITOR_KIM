@@ -2,22 +2,18 @@
 <html lang="ko">
 <head>
 <meta charset="utf-8">
-<title>EDITOR_KIM</title>
+<title>Retext PDF</title>
 <script src="/vendor/marked.js"></script>
 <script src="/vendor/purify.js"></script>
 <script src="/font-editor.js"></script>
 <script src="/text-grouping.js"></script>
 <style>
-  :root{--bg:#1b1b1f;--panel:#232329;--line:#33333b;--fg:#e8e8ec;--mut:#9a9aa6;--acc:#d97757;--add:#1f4d2e;--del:#5a2323}
-  *{box-sizing:border-box}body{margin:0;height:100vh;display:grid;grid-template-columns:220px 1fr 380px;grid-template-rows:40px minmax(0,1fr);font:13px/1.5 system-ui,'Malgun Gothic',sans-serif;background:var(--bg);color:var(--fg)}
-  body.ai-collapsed{grid-template-columns:220px 1fr 0}body.ai-collapsed .ai{display:none}
-  /* 좁은 창(최대화 아님): 사이드바·AI 패널을 줄여 편집 영역과 도구줄 폭을 확보한다 */
-  @media (max-width:1180px){body{grid-template-columns:180px 1fr 320px}body.ai-collapsed{grid-template-columns:180px 1fr 0}#aiRailToggle{right:320px}body.ai-collapsed #aiRailToggle{right:0}#modelPicker{min-width:120px;max-width:180px}}
-  #modelPicker{min-width:145px;max-width:260px}#aiToggle.on{background:var(--acc);border-color:var(--acc);color:#fff}
-  #aiRailToggle{position:fixed;z-index:8;right:380px;top:50%;width:26px;height:72px;padding:0;border-radius:8px 0 0 8px;transform:translateY(-50%);background:var(--panel);border-right:0;font-size:20px;box-shadow:-2px 2px 8px #0005}
-  body.ai-collapsed #aiRailToggle{right:0}#aiRailToggle:hover{background:#3a3a45}
+  :root{--bg:#1b1b1f;--panel:#232329;--line:#33333b;--fg:#e8e8ec;--mut:#9a9aa6;--acc:#d97757}
+  *{box-sizing:border-box}body{margin:0;height:100vh;display:grid;grid-template-columns:220px 1fr;grid-template-rows:40px minmax(0,1fr);font:13px/1.5 system-ui,'Malgun Gothic',sans-serif;background:var(--bg);color:var(--fg)}
+  /* 좁은 창(최대화 아님): 사이드바를 줄여 편집 영역과 도구줄 폭을 확보한다 */
+  @media (max-width:1180px){body{grid-template-columns:180px 1fr}}
   header{grid-column:1/-1;display:flex;align-items:center;gap:12px;padding:0 14px;border-bottom:1px solid var(--line);background:var(--panel);min-width:0}
-  header>span:not(.sp){white-space:nowrap}header #status{min-width:0;overflow:hidden;text-overflow:ellipsis;flex-shrink:1}header button,header select{flex-shrink:0}
+  header>span:not(.sp){white-space:nowrap}header #status{min-width:0;overflow:hidden;text-overflow:ellipsis;flex-shrink:1}
   header b{color:var(--acc);font-size:15px}header span{color:var(--mut)}header .sp{flex:1}
   aside{border-right:1px solid var(--line);background:var(--panel);padding:8px;overflow:auto;display:flex;flex-direction:column;gap:4px;min-height:0}
   aside h4{margin:4px 6px;color:var(--mut);font-weight:500;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -65,7 +61,7 @@
   main{display:flex;flex-direction:column;min-width:0;min-height:0}
   .bar{display:flex;flex-wrap:wrap;gap:6px 6px;align-items:center;padding:6px 12px;border-bottom:1px solid var(--line);color:var(--mut)}.bar .sp{flex:1}
   #tempBanner{padding:6px 12px;background:#4a3418;color:#e8c98a;border-bottom:1px solid #6b4c22;font-size:12px}
-  .bar>*,.bar span>*{flex-shrink:0}.bar #fname{flex-shrink:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#pdfZoom,#diffbar{display:inline-flex;gap:6px;align-items:center}
+  .bar>*,.bar span>*{flex-shrink:0}.bar #fname{flex-shrink:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#pdfZoom{display:inline-flex;gap:6px;align-items:center}
   button{background:#2e2e37;color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:5px 10px;cursor:pointer;font:inherit;white-space:nowrap}select{white-space:nowrap}button:hover{background:#3a3a45}button.pri{background:var(--acc);border-color:var(--acc);color:#fff}button:disabled{opacity:.5;cursor:default}
   select{background:#2e2e37;color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:4px;font:inherit}
   .split{flex:1;display:grid;grid-template-columns:1fr 1fr;min-height:0}
@@ -73,7 +69,6 @@
   .prev{overflow:auto;padding:18px 26px;background:#fff;color:#222}.prev h1,.prev h2{margin-top:.6em}.prev table{border-collapse:collapse}.prev td,.prev th{border:1px solid #ccc;padding:3px 8px}
   .pdf{position:relative;flex:1;overflow:auto;background:#3a3a40;padding:20px;text-align:center} /* relative: 페이지 offsetTop이 이 스크롤 영역 기준이 되어 확대 시 커서 위치 고정에 쓴다 */
   #zoomPct{display:inline-block;min-width:44px;text-align:center;cursor:pointer}#zoomPct:hover{color:var(--fg)}
-  #stop{background:#5a2323;border-color:#7a3030}#stop:hover{background:#6e2c2c}
   .pdfPage{position:relative;display:inline-block;background:#fff;box-shadow:0 2px 12px #0008;margin-bottom:16px}.pdfPage img{display:block;width:100%;height:100%}
   .pdfBox{position:absolute}.pdfBox:hover{outline:1px solid var(--acc)}
   .pdfBox.editing{outline:2px solid var(--acc)}
@@ -87,27 +82,13 @@
   .pdfEditor textarea{width:100%;min-height:2.6em;resize:vertical;border:1px solid var(--line);border-radius:6px;padding:6px 8px;font:13px/1.4 system-ui,'Malgun Gothic',sans-serif;background:#fff;color:#222}
   .pdfEditor .row{display:flex;gap:6px;margin-top:8px;align-items:center}
   .pdfEditor .tip{color:var(--mut);font-size:11px;margin-top:6px}
-  .diff{flex:1;overflow:auto;padding:12px 18px;font:12px/1.5 Consolas,monospace;white-space:pre-wrap}.diff .a{background:var(--add)}.diff .d{background:var(--del);text-decoration:line-through;opacity:.8}
-  .ai{border-left:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;min-height:0}
-  .ai .bar b{color:var(--fg)}
-  .log{flex:1;overflow:auto;padding:12px;display:flex;flex-direction:column;gap:10px}
-  .msg{padding:8px 11px;border-radius:10px;max-width:95%;white-space:pre-wrap;word-break:break-word}.me{align-self:flex-end;background:#3b3b48}.bot{align-self:flex-start;background:#2a2a32;border:1px solid var(--line)}.bot small{display:block;color:var(--mut);margin-top:6px}
-  .ask{border-top:1px solid var(--line);padding:10px;display:flex;flex-direction:column;gap:8px}
-  .ask textarea{height:70px;border:1px solid var(--line);border-radius:8px;padding:8px;font:inherit}
-  .ask .row{display:flex;gap:6px;align-items:center}.ask label{color:var(--mut);display:flex;gap:4px;align-items:center}
-  .hint{color:var(--mut);font-size:11px;padding:0 12px 8px}
-  #setup{border:0;padding:0;background:transparent;max-width:none;max-height:none}#setup::backdrop{background:#000c}
-  #setup .choice{flex:1;padding:14px 12px;font-size:16px;line-height:1.4;text-align:center}#setup .choice small{display:block;font-size:11px;font-weight:normal;opacity:.85;margin-top:4px;white-space:normal}
-  #setup .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:28px 32px;width:520px;line-height:1.7}
-  #setup h2{margin:0 0 8px;color:var(--acc)}#setup p{color:var(--mut);margin:6px 0}#setup .row{display:flex;gap:8px;margin-top:16px}#setup .st{padding:10px 12px;background:#1b1b1f;border-radius:8px;margin:12px 0;font-family:Consolas,monospace;font-size:12px}
-  .ok{color:#7cc47f}.bad{color:#e07a7a}
   [hidden]{display:none!important}
   #fontEditor{width:min(820px,95vw);max-height:90vh;overflow:auto;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:12px;padding:24px}
   #fontEditor::backdrop{background:#000a}#fontEditor h3{margin-top:0}#fontEditor label{display:flex;gap:8px;align-items:center}
   #fontEditor .fontText{flex:1;min-width:0}#fontEditor .fontControls{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:14px}
-  #fontEditor .fontSelect{max-width:360px}#fontEditor .fontSize{width:80px}#fontEditor .fontDisclosure{color:var(--mut);font-size:12px}
+  #fontEditor .fontSelect{max-width:360px}#fontEditor .fontSize{width:80px}#fontEditor .fontAdvice{color:var(--mut);font-size:12px}
   #fontEditor .fontCompare{display:grid;gap:12px;margin:16px 0}#fontEditor figure{margin:0}#fontEditor figcaption{color:var(--mut);margin-bottom:5px}
-  #fontEditor img{max-width:100%;max-height:180px;object-fit:contain;background:white}#fontEditor .fontCandidates{display:flex;gap:8px;flex-wrap:wrap}
+  #fontEditor img{max-width:100%;max-height:180px;object-fit:contain;background:white}
   /* P4 WP-B2: 페이지 메뉴 팝업, 4개 대화상자(추출·병합·내보내기·압축), 이미지 객체 크기 손잡이 */
   .popupMenu{position:absolute;top:100%;left:0;margin-top:4px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:4px;display:flex;flex-direction:column;gap:2px;z-index:9;box-shadow:0 6px 24px #0008;min-width:170px}
   .popupMenu button{text-align:left;background:transparent;border:0;padding:6px 8px;white-space:nowrap}
@@ -130,15 +111,10 @@
   /* P6 WP-B2: 실행 취소 토스트(flash와 별개, 하단 중앙에 5초) */
   #toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:15;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:8px 10px;display:flex;align-items:center;gap:10px;box-shadow:0 6px 24px #0008;max-width:90vw}
   #toast button{white-space:nowrap;flex-shrink:0}
-  /* P6 WP-B3: 로그인 만료 배너(헤더 바로 아래, 어느 화면이든 고정) */
-  #authBanner{position:fixed;left:0;right:0;top:40px;z-index:16;padding:6px 14px;background:#5a2323;color:#f0c0c0;border-bottom:1px solid #7a3030;font-size:12px;display:flex;align-items:center;gap:10px}
-  #authBanner button{flex-shrink:0}
 </style>
 </head>
-<body class="ai-collapsed">
-<header><b>EDITOR_KIM</b><span id="ver" style="color:var(--acc);opacity:.8"></span><span>PDF · Markdown 편집기</span><span class="sp"></span><span id="status">AI 상태 확인 중…</span><select id="modelPicker" title="Claude 또는 ChatGPT(Codex) 모델 선택"><option value="">AI 모델</option></select><button id="aiToggle" aria-controls="aiPanel" aria-expanded="false" title="AI 채팅 패널 열기/닫기 (Ctrl+J)">💬 채팅</button></header>
-<!-- P6 WP-B3: 로그인 만료 배너 — 채팅·폰트 추천 등에서 code:'auth'를 받으면 뜬다 -->
-<div id="authBanner" hidden role="alert"><span id="authBannerText"></span><span class="sp" style="flex:1"></span><button id="authBannerLogin" class="pri">다시 로그인</button><button id="authBannerClose" title="닫기">×</button></div>
+<body>
+<header><b>Retext PDF</b><span id="ver" style="color:var(--acc);opacity:.8"></span><span>PDF · Markdown 편집기</span><span class="sp"></span><span id="status"></span></header>
 <aside>
   <div class="tabs" id="asideTabs">
     <button type="button" class="tabBtn on" data-tab="file">파일</button>
@@ -165,7 +141,6 @@
     <span class="grp" id="groupDoc" hidden><b class="glabel">문서</b><button id="menuMerge" title="병합…">병합…</button> <button id="menuExportImages" title="이미지로 내보내기…">이미지로 내보내기…</button> <button id="menuDownsample" title="용량 줄이기…">용량 줄이기…</button> <button id="menuSplit" title="분할…">분할…</button></span>
     <span class="sp"></span>
     <span class="grp" id="groupSave" hidden><b class="glabel">저장</b><button id="save" title="저장 (Ctrl+S)">저장</button> <button id="saveAs" title="다른 이름으로 저장 (Ctrl+Shift+S)">다른 이름으로…</button></span>
-    <span id="diffbar" hidden><button id="reject">취소</button> <button id="accept" class="pri">변경 적용</button></span>
   </div>
   <div class="bar searchBar" id="searchBar" hidden>
     <input id="searchInput" type="text" placeholder="문서에서 찾기…" autocomplete="off">
@@ -190,7 +165,6 @@
   </div>
   <div class="split" id="md" hidden><textarea id="src" spellcheck="false"></textarea><div class="prev" id="prev"></div></div>
   <div class="pdf" id="pdf" hidden></div>
-  <div class="diff" id="diff" hidden></div>
   <div class="statusbar" id="statusbar" hidden>
     <span class="sb-nav" id="sbPdfNav" hidden><input id="pageNumInput" type="number" min="1" value="1" title="쪽 번호 (Enter로 이동)"><span id="pageCountLabel">/ 0</span></span>
     <span class="sb-nav" id="sbMdInfo" hidden></span>
@@ -199,30 +173,6 @@
   </div>
 </main>
 <div id="dropOverlay" hidden>놓아서 열기</div>
-<button id="aiRailToggle" type="button" aria-controls="aiPanel" aria-expanded="false" title="AI 패널 펼치기">‹</button>
-<section class="ai" id="aiPanel">
-  <div class="bar"><b id="aiTitle">AI</b><span class="sp"></span><button id="newChat" title="이 문서의 대화 기록을 지우고 새로 시작">새 대화</button><button id="aiClose" title="AI 패널 닫기 (Ctrl+J)">×</button></div>
-  <div class="log" id="log"><div class="msg bot">문서를 열고 질문하거나, Markdown이면 <b>편집 모드</b>로 수정을 지시하세요.</div></div>
-  <div class="hint" id="aiHint">구독 로그인으로 호출하며 API 키를 저장하지 않습니다.</div>
-  <div class="ask">
-    <textarea id="q" placeholder="예) 2문단을 더 격식 있게 고쳐줘 / 이 문서 3줄 요약  (Enter 전송 · Shift+Enter 줄바꿈)"></textarea>
-    <div class="row"><label><input type="radio" name="mode" value="chat" checked>질문</label><label><input type="radio" name="mode" value="edit" id="editRadio"><span id="editRadioLabel">편집(MD)</span></label><span class="sp"></span><button id="stop" hidden title="응답 생성 중지 (Esc)">■ 중지</button><button id="send" class="pri">보내기</button></div>
-  </div>
-</section>
-
-<dialog id="setup"><div class="card">
-  <h2 id="setupTitle">AI 기능 사용 준비</h2>
-  <p id="setupIntro"></p>
-  <div id="setupChoice" class="row"><button class="pri choice" data-provider="claude">Claude</button><button class="pri choice" data-provider="codex">ChatGPT</button></div>
-  <div id="setupSteps" hidden>
-    <div class="st" id="setupStatus">확인 중…</div>
-    <p id="setupHelp"></p>
-    <div class="row"><button id="btnInstall" class="pri" hidden>1. 설치</button><button id="btnLogin" class="pri" hidden>2. 로그인</button><button id="btnRecheck">다시 확인</button><button id="btnBack">다른 서비스</button></div>
-    <p style="font-size:11px">설치는 Windows 공식 패키지 관리자(WinGet)로 진행됩니다. PowerShell이나 관리자 권한은 필요 없습니다.</p>
-  </div>
-  <div class="row"><span class="sp"></span><button id="btnSkip">나중에</button></div>
-</div></dialog>
-
 <dialog id="pageExtractDialog" class="panel"><div class="card" style="width:640px">
   <h2>페이지 정리</h2>
   <p class="hint2">축소본을 체크하거나 번호를 입력하세요 (예: 1,3-5). 체크한 페이지 기준으로 아래 버튼을 고릅니다.</p>
@@ -308,13 +258,11 @@
 <script type="module">
 const $ = (s) => document.querySelector(s);
 const escapeHtml = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-// 상단 상태 표시: setStatus는 기본 문구, flash는 잠깐 보였다가 기본 문구로 돌아간다.
-// (flash가 겹치면 이전 flash 문구가 기본 문구인 줄 알고 되돌리던 문제 → 기본 문구를 따로 기억하고 타이머는 하나만 둔다)
-let statusBase = '', statusTimer = 0;
-function setStatus(text) { statusBase = text; if (!statusTimer) $('#status').textContent = text; }
+// 머리줄 알림(#status): flash는 잠깐 보였다가 지워진다. 겹치면 타이머 하나로 마지막 문구만 남긴다
+let statusTimer = 0;
 function flash(text, ms = 1500) {
   clearTimeout(statusTimer); $('#status').textContent = text;
-  statusTimer = setTimeout(() => { statusTimer = 0; $('#status').textContent = statusBase; }, ms);
+  statusTimer = setTimeout(() => { statusTimer = 0; $('#status').textContent = ''; }, ms);
 }
 // 서버 POST 공통: JSON 응답을 돌려주고, HTTP 오류나 {error}면 상태줄에 알린 뒤 예외를 던진다 (조용히 성공한 척하지 않는다)
 async function apiPost(path, payload) {
@@ -323,23 +271,10 @@ async function apiPost(path, payload) {
   if (!r.ok || data.error) { const message = data.error || (r.status === 409 ? '다른 작업이 진행 중입니다 — 끝난 뒤 다시 시도하세요' : `HTTP ${r.status}`); flash('⚠ ' + message, 5000); throw new Error(message); }
   return data;
 }
-// AI 패널은 실행할 때마다 접힌 상태로 시작. 상단 버튼·옆 탭·Ctrl+J로 언제든 토글한다.
-function setAiOpen(open) {
-  document.body.classList.toggle('ai-collapsed', !open);
-  $('#aiToggle').classList.toggle('on', open);
-  $('#aiToggle').setAttribute('aria-expanded', String(open));
-  $('#aiRailToggle').setAttribute('aria-expanded', String(open));
-  $('#aiRailToggle').textContent = open ? '›' : '‹';
-  $('#aiRailToggle').title = open ? 'AI 패널 접기' : 'AI 패널 펼치기';
-}
-setAiOpen(false); localStorage.removeItem('editorkim.ai');
-// 패널을 여는 것은 AI를 쓰려는 뜻 → 로그인된 공급자가 없으면 Claude/ChatGPT 선택·로그인 대화상자를 함께 연다(닫을 때는 열지 않음)
-const toggleAi = () => { const open = document.body.classList.contains('ai-collapsed'); setAiOpen(open); if (open) ensureAi(); };
-$('#aiToggle').onclick = toggleAi;
-$('#aiRailToggle').onclick = toggleAi;
-$('#aiClose').onclick = () => setAiOpen(false);
-document.addEventListener('keydown', (e) => { if (e.ctrlKey && e.key.toLowerCase() === 'j') { e.preventDefault(); $('#aiToggle').click(); } });
-let cur = null, docText = '', savedText = '', pending = null, curTemp = false, curReadOnly = false;
+// AI 기능을 없애기(2026-10) 전에 쓰던 설정 키를 청소한다 — 남아 있어도 해는 없지만 쓰지 않는 값을 남기지 않는다
+for (const key of ['editorkim.ai', 'editorkim.aiChoice']) { try { localStorage.removeItem(key); } catch {} }
+let cur = null, docText = '', savedText = '', curTemp = false, curReadOnly = false;
+let mdEol = '\n'; // 지금 연 Markdown 파일의 원래 줄바꿈('\r\n'이면 저장할 때 되돌린다)
 const ZOOM_MIN = 0.5, ZOOM_MAX = 3, ZOOM_DEFAULT = 1.5;
 const clampZoom = (s) => Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, Math.round((+s || ZOOM_DEFAULT) * 100) / 100));
 let pdfPages = [], pdfObjects = [], pdfScale = clampZoom(localStorage.getItem('editorkim.zoom')), pdfDirty = false, selectedObj = null, selectedMask = null, pdfRenderGeneration = 0;
@@ -350,192 +285,21 @@ let rectMode = false, rectDrag = null;
 // WP-B2: 검색 상태(Ctrl+F) — 페이지 전체 검색 결과·현재 위치·debounce 타이머
 let searchHits = [], searchCur = -1, searchQuery = '', searchDebounce = 0, searchSeq = 0;
 // 미저장 여부·실행취소 스택은 서버(/api/pdf/info)가 정본이다. 새로고침이나 목록에서 닫았다가 다시 열어도 화면이 서버 상태와 어긋나지 않는다
-let aiHealth = null, activeAi = null, setupTarget = null, setupBusy = false, loginPoll = 0; // setupTarget=null이면 대화상자는 서비스 선택 화면
-// P6 WP-B: 작업 진행 창(jobCurrentId·jobPollTimer)·토스트(toastTimer)·로그인 만료 배너(authBannerProvider) 상태
-let jobCurrentId = null, jobPollTimer = 0, toastTimer = 0, authBannerProvider = null;
+// P6 WP-B: 작업 진행 창(jobCurrentId·jobPollTimer)·토스트(toastTimer) 상태
+let jobCurrentId = null, jobPollTimer = 0, toastTimer = 0;
 const dirty = () => cur && (cur.endsWith('.pdf') ? pdfDirty : docText !== savedText);
 window.isDirty = dirty;
 const showDirty = () => { $('#dirty').hidden = !dirty(); };
 // 인터넷·메일에서 바로 열린 임시 파일이거나 읽기전용이면 배너를 띄우고, 저장(Ctrl+S/버튼)은 다른 이름으로 저장으로 유도한다(WP-B1)
 const updateTempBanner = () => { $('#tempBanner').hidden = !(curTemp || curReadOnly); };
 
-// ---- AI 공급자·모델 선택과 설치·로그인 검사 ----
-const providerName = (provider) => provider === 'codex' ? 'ChatGPT (Codex)' : 'Claude Code';
-const providerShort = (provider) => provider === 'codex' ? 'ChatGPT' : 'Claude'; // 헤더 상태줄용 짧은 이름(WP-B1)
-const choiceValue = (provider, model) => `${provider}:${model}`;
-function readChoice(value) {
-  const at = value.indexOf(':');
-  return at < 0 ? null : { provider: value.slice(0, at), model: value.slice(at + 1) };
-}
-function activeProvider() { return activeAi && aiHealth?.providers?.[activeAi.provider]; }
-// WP-B1: 헤더 문구는 "AI: Claude · Sonnet 5" 식으로 짧게(버전·"API 키 없음" 제거). 로그인 전이면 "AI 미설정" — 자세한 안내는 💬 채팅 패널에서
-function syncAiState() {
-  const state = activeProvider(), ready = !!state?.loggedIn;
-  $('#send').disabled = !cur; // 로그인 전에도 누를 수 있다 — 누르면 선택·로그인 대화상자가 열린다
-  // P6 WP-B3: code:'auth' 배너가 뜬 공급자를 쓰는 중이면 상태줄에 재로그인 필요를 알린다.
-  // 만료된 공급자는 checkHealth → renderModelPicker가 activeAi를 비울 수 있어(로그인된 모델이 목록에서 빠짐) activeAi가 null이어도 배너 쪽 공급자로 판단한다.
-  const needsRelogin = !!authBannerProvider && (!activeAi || activeAi.provider === authBannerProvider);
-  if (!activeAi) {
-    $('#aiTitle').textContent = needsRelogin ? providerName(authBannerProvider) : 'AI';
-    setStatus(needsRelogin ? `AI: ${providerShort(authBannerProvider)} · 재로그인 필요` : 'AI 미설정');
-    return;
-  }
-  const model = state?.models?.find((item) => item.id === activeAi.model);
-  $('#aiTitle').textContent = `${providerName(activeAi.provider)} · ${model?.name || activeAi.model || '기본 모델'}`;
-  $('#aiHint').textContent = activeAi.provider === 'claude'
-    ? '비용은 API 환산액입니다. Claude 구독으로 호출하며 API 키를 저장하지 않습니다.'
-    : 'PC의 ChatGPT 로그인과 Codex 사용량을 이용하며 API 키를 저장하지 않습니다.';
-  setStatus(needsRelogin ? `AI: ${providerShort(activeAi.provider)} · 재로그인 필요` : (ready ? `AI: ${providerShort(activeAi.provider)} · ${model?.name || activeAi.model || '기본 모델'}` : 'AI 미설정'));
-}
-function renderModelPicker(preferredProvider) {
-  const picker = $('#modelPicker'), saved = localStorage.getItem('editorkim.aiChoice');
-  picker.innerHTML = '<option value="">AI 모델</option>';
-  const available = [];
-  for (const provider of ['claude', 'codex']) {
-    const state = aiHealth?.providers?.[provider] || { models: [] };
-    const group = document.createElement('optgroup'); group.label = providerName(provider);
-    if (state.loggedIn) {
-      const models = state.models?.length ? state.models : [{ id: '', name: '기본 모델', isDefault: true }];
-      for (const model of models) {
-        const option = document.createElement('option'); option.value = choiceValue(provider, model.id);
-        option.textContent = `${model.name}${model.isDefault ? ' (기본)' : ''}`; group.appendChild(option); available.push({ provider, model });
-      }
-    } else {
-      const option = document.createElement('option'); option.value = `setup:${provider}`;
-      option.textContent = state.installed ? '로그인 설정…' : '설치 및 로그인 설정…'; group.appendChild(option);
-    }
-    picker.appendChild(group);
-  }
-  const values = [...picker.options].map((option) => option.value);
-  let selected = preferredProvider && available.find((item) => item.provider === preferredProvider && item.model.isDefault);
-  selected ||= values.includes(saved) ? { value: saved } : null;
-  selected ||= available.find((item) => item.provider === 'claude' && item.model.isDefault);
-  selected ||= available.find((item) => item.model.isDefault) || available[0];
-  const value = selected?.value || (selected ? choiceValue(selected.provider, selected.model.id) : '');
-  picker.value = value; activeAi = value ? readChoice(value) : null;
-  if (value) localStorage.setItem('editorkim.aiChoice', value);
-  syncAiState();
-}
-const setupOpen = () => $('#setup').open;
-function closeSetup() { loginPoll++; setupTarget = null; if (setupOpen()) $('#setup').close(); }
-function renderChoice() {
-  for (const button of document.querySelectorAll('#setupChoice .choice')) {
-    const provider = button.dataset.provider, state = aiHealth?.providers?.[provider];
-    const hint = !state ? '상태 확인 중…' : !state.installed ? '설치 및 로그인 필요' : !state.loggedIn ? '로그인 필요' : `✔ 로그인됨 (${state.authMethod || '구독'})`;
-    button.innerHTML = `${provider === 'codex' ? 'ChatGPT' : 'Claude'}<small>${provider === 'codex' ? 'Codex · ChatGPT 구독' : 'Claude Code · Claude 구독'}<br>${escapeHtml(hint)}</small>`;
-    button.disabled = setupBusy;
-  }
-}
-function renderSetup() {
-  const choosing = !setupTarget;
-  $('#setupChoice').hidden = !choosing; $('#setupSteps').hidden = choosing;
-  $('#setupTitle').textContent = choosing ? 'AI 기능 사용 준비' : `${providerName(setupTarget)} 준비`;
-  $('#setupIntro').textContent = choosing
-    ? 'AI 기능은 API 키 대신 이 PC에 로그인한 구독 계정을 사용합니다. 사용할 서비스를 고르세요. PDF·Markdown 편집은 로그인 없이도 됩니다.'
-    : 'API 키 대신 이 PC에 로그인한 구독 계정을 사용합니다.';
-  if (choosing) return renderChoice();
-  const state = aiHealth?.providers?.[setupTarget] || {};
-  $('#setupStatus').classList.remove('bad');
-  $('#btnInstall').textContent = `1. ${setupTarget === 'codex' ? 'Codex' : 'Claude Code'} 설치`;
-  $('#btnLogin').textContent = `2. ${setupTarget === 'codex' ? 'ChatGPT' : 'Claude'} 로그인`;
-  $('#btnInstall').hidden = !!state.installed; $('#btnLogin').hidden = !state.installed || !!state.loggedIn;
-  $('#btnInstall').disabled = $('#btnLogin').disabled = $('#btnRecheck').disabled = $('#btnBack').disabled = setupBusy;
-  $('#setupStatus').innerHTML = state.installed
-    ? `<span class="ok">✔ 설치됨</span> ${escapeHtml(state.version || '')}<br>${state.loggedIn ? `<span class="ok">✔ 로그인됨</span> (${escapeHtml(state.authMethod || '구독')})` : '<span class="bad">✘ 로그인 안 됨</span>'}`
-      + (state.error ? `<br><span class="bad">모델 목록을 가져오지 못했습니다: ${escapeHtml(state.error)}</span>` : '')
-    : `<span class="bad">✘ ${providerName(setupTarget)}가 설치되어 있지 않습니다</span>`;
-  $('#setupHelp').textContent = !state.installed ? '[설치]를 누르면 WinGet이 공식 패키지를 설치합니다.'
-    : !state.loggedIn ? (setupTarget === 'codex'
-      ? '[로그인]을 누른 뒤 브라우저에서 ChatGPT 구독 계정으로 로그인하세요.'
-      : '[로그인]을 누른 뒤 브라우저에서 Claude 구독 계정으로 로그인하세요.') : '사용할 준비가 됐습니다.';
-}
-// AI 기능(채팅 열기·보내기·폰트 추천)을 쓰려는 순간에만 연다 — 시작할 때는 열지 않는다. provider 없이 열면 Claude/ChatGPT 선택 화면부터
-function showSetup(provider = null) { loginPoll++; setupTarget = provider; renderSetup(); if (!setupOpen()) $('#setup').showModal(); }
-// 쓸 수 있는 AI가 선택돼 있으면 true. 아니면 선택·로그인 대화상자를 열고 false
-function ensureAi() { if (activeProvider()?.loggedIn) return true; showSetup(); return false; }
-// P6 WP-B3: 채팅 SSE·폰트 추천 등에서 code:'auth'를 받으면 부른다. 배너는 로그인 완료(기존 폴링, checkHealth)로 스스로 사라진다.
-function showAuthBanner(provider) {
-  if (!provider) return;
-  authBannerProvider = provider;
-  $('#authBannerText').textContent = `${providerName(provider)} 로그인이 만료됐습니다`;
-  $('#authBanner').hidden = false;
-  syncAiState();
-  checkHealth(provider); // 이미 다시 로그인됐을 수도 있으니 즉시 한 번 더 확인
-}
-function hideAuthBanner() { $('#authBanner').hidden = true; authBannerProvider = null; syncAiState(); }
-$('#authBannerLogin').onclick = () => { const provider = authBannerProvider; hideAuthBanner(); if (provider) showSetup(provider); };
-$('#authBannerClose').onclick = hideAuthBanner;
-window.editorKimAuthError = showAuthBanner; // font-editor.js(폰트 추천)가 이 창을 몰라도 배너를 띄울 수 있게
-// only='claude'|'codex'면 그 공급자만 다시 검사하고 나머지는 이전 결과를 유지한다(로그인 대기 중 2초마다 부르므로 CLI 4개를 매번 띄우지 않게)
-async function checkHealth(only) {
-  if (setupTarget) $('#setupStatus').textContent = '확인 중…';
-  let fresh;
-  try { fresh = await (await fetch('/api/health' + (only ? '?provider=' + only : ''))).json(); }
-  catch (error) { setStatus('AI 상태를 확인하지 못했습니다 — ' + error.message); if (setupTarget) $('#setupStatus').textContent = '서버에 연결할 수 없습니다'; return; }
-  const checked = Object.fromEntries(Object.entries(fresh.providers || {}).filter(([, state]) => state));
-  aiHealth = { ...fresh, providers: { ...(aiHealth?.providers || {}), ...checked } };
-  if (aiHealth.appVersion) { $('#ver').textContent = 'v' + aiHealth.appVersion; document.title = `EDITOR_KIM v${aiHealth.appVersion}`; }
-  const target = setupOpen() ? setupTarget : null;
-  const justReady = !!(target && aiHealth.providers?.[target]?.loggedIn);
-  renderModelPicker(justReady ? target : null);
-  if (justReady) { closeSetup(); setAiOpen(true); flash(`${providerName(target)} 준비 완료`, 2500); }
-  else if (setupOpen()) renderSetup();
-  // P6 WP-B3: 배너가 뜬 공급자가 다시 로그인되면(기존 로그인 폴링을 통해서든, 여기서든) 배너를 스스로 지운다
-  if (authBannerProvider && aiHealth.providers?.[authBannerProvider]?.loggedIn) hideAuthBanner();
-}
-$('#modelPicker').onchange = async () => {
-  const value = $('#modelPicker').value;
-  if (value.startsWith('setup:')) { const provider = value.slice(6); renderModelPicker(); showSetup(provider); checkHealth(provider); return; }
-  const next = readChoice(value); if (!next) return;
-  const changed = !activeAi || activeAi.provider !== next.provider || activeAi.model !== next.model;
-  activeAi = next; localStorage.setItem('editorkim.aiChoice', value); syncAiState(); setAiOpen(true);
-  if (changed) { $('#log').innerHTML = ''; add('bot', `${$('#aiTitle').textContent}로 새 대화를 시작합니다.`); }
-};
-$('#setupChoice').onclick = (e) => {
-  const provider = e.target.closest('.choice')?.dataset.provider; if (!provider || setupBusy) return;
-  if (aiHealth?.providers?.[provider]?.loggedIn) { renderModelPicker(provider); closeSetup(); setAiOpen(true); return; } // 이미 로그인됨 → 바로 사용
-  loginPoll++; setupTarget = provider; renderSetup(); checkHealth(provider);
-};
-$('#btnBack').onclick = () => { if (setupBusy) return; loginPoll++; setupTarget = null; renderSetup(); };
-const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-async function waitForLogin(provider) {
-  const token = ++loginPoll;
-  for (let i = 0; i < 150 && token === loginPoll && setupOpen() && setupTarget === provider; i++) {
-    await delay(2000);
-    await checkHealth(provider);
-    if (aiHealth?.providers?.[provider]?.loggedIn) return;
-    $('#setupStatus').innerHTML = '<span class="ok">브라우저 로그인을 기다리는 중…</span>';
-  }
-  if (token === loginPoll && setupOpen()) $('#setupHelp').textContent = '로그인이 끝났다면 [다시 확인]을 누르세요.';
-}
-async function setupAction(action) {
-  if (setupBusy || !setupTarget) return;
-  const provider = setupTarget;
-  setupBusy = true; renderSetup();
-  $('#setupStatus').innerHTML = `<span class="ok">${action === 'install' ? '공식 패키지를 설치하는 중…' : '브라우저 로그인을 여는 중…'}</span>`;
+// ---- 앱 버전 표시(머리줄 #ver) ----
+async function showVersion() {
   try {
-    const response = await fetch('/api/setup', { method: 'POST', body: JSON.stringify({ provider, action }) });
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
-    if (action === 'install') await checkHealth(provider);
-    else await waitForLogin(provider);
-  } catch (error) {
-    $('#setupStatus').textContent = `실패: ${String(error.message || error)}`;
-    $('#setupStatus').classList.add('bad');
-    $('#setupHelp').textContent = '보안 예외를 허용하지 말고, 네트워크 또는 회사 PC의 설치 정책을 확인해 주세요.';
-  } finally {
-    setupBusy = false;
-    if (setupOpen()) $('#btnInstall').disabled = $('#btnLogin').disabled = $('#btnRecheck').disabled = $('#btnBack').disabled = false;
-  }
+    const { appVersion } = await (await fetch('/api/health')).json();
+    if (appVersion) { $('#ver').textContent = 'v' + appVersion; document.title = `Retext PDF v${appVersion}`; }
+  } catch {} // 버전 표시는 없어도 편집에는 지장이 없다
 }
-$('#btnInstall').onclick = () => setupAction('install');
-$('#btnLogin').onclick = () => setupAction('login');
-$('#btnRecheck').onclick = () => checkHealth(setupTarget || undefined);
-$('#btnSkip').onclick = closeSetup;
-// Esc = 나중에. Chromium은 사용자 활성화가 없으면 cancel 이벤트를 건너뛰기도 하므로 keydown에서도 닫고, 어떤 경로로 닫히든 선택 상태를 비운다
-$('#setup').addEventListener('cancel', (e) => { e.preventDefault(); closeSetup(); });
-$('#setup').addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); closeSetup(); } });
-$('#setup').addEventListener('close', () => { loginPoll++; setupTarget = null; });
 
 // ---- 열어 둔 파일 목록 (절대경로, localStorage에 저장) ----
 let files = [];
@@ -610,8 +374,8 @@ async function removeFile(p) {
     cur = null; pdfDocName = null; docText = savedText = ''; selectedObj = null; pdfDirty = false; pdfPages = []; pdfObjects = []; $('#pdf').innerHTML = '';
     curTemp = curReadOnly = false; updateTempBanner();
     $('#fname').textContent = '파일을 선택하세요'; $('#fname').title = '';
-    $('#md').hidden = $('#pdf').hidden = $('#diff').hidden = $('#diffbar').hidden = true;
-    $('#save').hidden = $('#saveAs').hidden = $('#pdfZoom').hidden = $('#dirty').hidden = true; $('#send').disabled = true;
+    $('#md').hidden = $('#pdf').hidden = true;
+    $('#save').hidden = $('#saveAs').hidden = $('#pdfZoom').hidden = $('#dirty').hidden = true;
     $('#rectTool').hidden = true; setRectMode(false);
     $('#undoBtn').hidden = $('#redoBtn').hidden = true;
     renderPageThumbs();
@@ -696,10 +460,10 @@ async function open(name) {
   pdfRenderGeneration++; // 이전 문서·확대 렌더가 늦게 끝나도 새 화면을 건드리지 못하게 무효화
   closeAnyPanel(); clearMulti(); closeSearchBar(); hideToast(); // 토스트의 [실행 취소]는 이전 문서 것이다
   pdfDocName = null; externalWarned = null; // 명시적으로 여는 것이므로 1쪽부터
-  cur = name; pending = null; docText = ''; selectedObj = null; selectedMask = null; pdfDirty = false; $('#send').disabled = true;
+  cur = name; docText = ''; selectedObj = null; selectedMask = null; pdfDirty = false;
   curTemp = curReadOnly = false; updateTempBanner();
   pushRecent(name); renderFiles();
-  $('#fname').textContent = basename(name); $('#fname').title = name; $('#diff').hidden = true; $('#diffbar').hidden = true;
+  $('#fname').textContent = basename(name); $('#fname').title = name;
   const isPdf = name.endsWith('.pdf');
   setRectMode(false);
   updateEmptyState();
@@ -710,7 +474,7 @@ async function open(name) {
   $('#sbPdfNav').hidden = !isPdf; $('#sbMdInfo').hidden = isPdf;
   $('#statusHint').textContent = '';
   setUndoRedoState(0, 0);
-  if (isPdf) { document.querySelector('[value=chat]').checked = true; await renderPdfDoc(name); maybeShowHint(); } // 미저장 여부·실행취소 스택은 서버 info로 채워진다
+  if (isPdf) { await renderPdfDoc(name); maybeShowHint(); } // 미저장 여부·실행취소 스택은 서버 info로 채워진다
   else {
     const r = await fetch('/api/file?name=' + encodeURIComponent(name));
     if (cur !== name) return; // 읽는 동안 다른 파일로 넘어갔다 — 늦은 결과로 다른 문서를 덮어쓰지 않는다
@@ -718,11 +482,14 @@ async function open(name) {
     const text = await r.text();
     if (cur !== name) return;
     curTemp = r.headers.get('X-Editor-Kim-Temp') === '1'; curReadOnly = r.headers.get('X-Editor-Kim-Readonly') === '1'; updateTempBanner();
-    docText = savedText = text; $('#src').value = docText; preview(); updateMdStatus();
+    // 편집 창(textarea)은 CRLF를 LF로 바꿔 담는다 — 원문 그대로 비교하면 한 글자만 입력했다 되돌려도 미저장(●)이 남았다.
+    // 화면 안에서는 LF로 다루고, 저장할 때 원래 줄바꿈(CRLF)으로 되돌려 쓴다
+    mdEol = /\r\n/.test(text) ? '\r\n' : '\n';
+    docText = savedText = text.replace(/\r\n/g, '\n'); $('#src').value = docText; preview(); updateMdStatus();
     renderPageThumbs();
   }
   if (cur !== name) return; // 읽는 동안 다른 파일로 넘어갔다
-  updateEditRadio(); showDirty(); syncAiState();
+  showDirty();
 }
 // 원격 이미지는 자동으로 불러오지 않는다(열람만으로 외부에 요청이 나가는 것을 막음) — 링크로 바꿔 누르면 기본 브라우저로 연다.
 // innerHTML에 바로 넣으면 img가 즉시 요청을 보내므로, 요청이 없는 DOMParser 문서에서 치환한 뒤 옮긴다. data:·상대 경로 이미지는 그대로 둔다.
@@ -740,6 +507,7 @@ function preview() {
 $('#src').oninput = () => { docText = $('#src').value; preview(); showDirty(); updateMdStatus(); };
 // Markdown 저장. 실패(파일 잠김·권한)를 그대로 알리고 미저장 표시를 유지한다 — 조용히 "저장됨"으로 넘어가면 닫을 때 편집을 잃는다
 async function putText(name, text) {
+  if (mdEol === '\r\n') text = text.replace(/\r?\n/g, '\r\n');
   let r; try { r = await fetch('/api/file?name=' + encodeURIComponent(name), { method: 'PUT', body: text }); } catch (error) { throw new Error('서버에 연결할 수 없습니다'); }
   if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `HTTP ${r.status}`);
 }
@@ -806,7 +574,7 @@ function noteExternalChange(r) {
 function closeAnyPanel() {
   $('#pdf').querySelectorAll('.pdfEditor').forEach((el) => el.remove());
   $('#pdf').querySelectorAll('.pdfBox.editing').forEach((el) => el.classList.remove('editing'));
-  selectedObj = null; selectedMask = null; updateEditRadio();
+  selectedObj = null; selectedMask = null;
   $('#maskColor').hidden = !rectMode; // 줄 편집·가림 상자 패널이 닫히면 가림 색 선택도 함께 숨긴다(WP-B1)
 }
 async function undo() {
@@ -975,15 +743,11 @@ async function renderPdfDoc(name) {
     const wrap = $('#pdf').children[i];
     if (wrap && !wrap.querySelector('.pdfBox')) drawOverlay(wrap, i, pdfObjects[i], pdfPages[i]); // 로딩 중 확대했으면 applyZoom이 이미 그렸다
   }
-  rebuildDocText();
   if (!$('#searchBar').hidden && $('#searchInput').value) runSearch(true); // 검색 중이었으면 새 문서 기준으로 다시 찾는다
   // 투명 글자(그림 위 검색용 텍스트)가 있으면 열 때 한 번만 알린다
   const hiddenCount = pdfObjects.reduce((n, objs) => n + objs.filter((o) => o.type === 'text' && o.hidden).length, 0);
   if (hiddenCount) flash(`이 문서의 텍스트 상자 ${hiddenCount}개는 투명합니다 — 수정 시 그림을 덮고 새로 그리며, 글꼴 모양이 달라질 수 있습니다 — 줄 단위로 묶어 보여줍니다`, 6000);
 }
-// 객체 text를 공백으로 이어 붙이면 "9 월   첫 째"처럼 조각 경계가 그대로 드러나 AI에 깨진 글이 간다 →
-// groupLines로 줄을 만들고 그 text(줄 안 이미 올바르게 이어붙임)를 줄바꿈으로 잇는다.
-function rebuildDocText() { docText = pdfObjects.map((objs, i) => `[p.${i + 1}] ` + groupLines(objs).map((line) => line.text).join('\n')).join('\n'); }
 // 상자 = 시각적 줄 하나(기준선으로 묶는다). window.groupLines는 /text-grouping.js가 정의한다 —
 // 근거·상수는 그 파일 머리말 주석을 볼 것. Node 쪽 회귀 검사는 app/text-grouping.test.js.
 const groupLines = (objs) => window.groupLines(objs);
@@ -1130,7 +894,7 @@ async function groupSelected() {
 async function ungroup() {
   const { i, objs } = selectedObj; closeAnyPanel();
   await pdfMutate('/api/pdf/group', { name: cur, i, idxs: objs.map((o) => o.idx), id: null });
-  selectedObj = null; updateEditRadio(); await refreshPage(i); flash('그룹을 풀었습니다');
+  selectedObj = null; await refreshPage(i); flash('그룹을 풀었습니다');
 }
 // 드래그 고스트: 박스가 덮는 페이지 이미지 영역을 캔버스에 그려 마우스를 따라가게 하고, 원래 자리는 흰색으로 덮어 글자가 "들리는" 것처럼 보이게 한다.
 // img의 실제 픽셀 크기와 표시 크기가 다를 수 있어(줌과 무관하게 서버가 다른 배율로 렌더할 수도 있음) 비율로 환산한다.
@@ -1255,7 +1019,6 @@ function checkOverflow(i, editedIdx, boxed) {
 const lineSelection = (i, line, wrap, box) => ({ i, objs: line.objs, seps: line.seps, text: line.text, wrap, box, size: line.size, font: line.font, bounds: line.bounds, group: line.group || null });
 function selectLine(i, line, wrap, box) {
   selectedObj = lineSelection(i, line, wrap, box);
-  updateEditRadio();
   openInlineEditor(line.text);
 }
 // 줄 아래에 뜨는 편집 패널. 페이지 바닥을 넘으면 줄 위로 뒤집고, 페이지 폭 안으로 clamp한다.
@@ -1275,25 +1038,28 @@ function openInlineEditor(initialText, caret) {
   fontHint.textContent = `${fontName} · ${Math.round(size)}pt${hiddenNote}`;
   panel.append(heading, fontHint);
   const fontButton = document.createElement('button'); fontButton.textContent = '폰트 맞추기';
-  fontButton.title = '설치된 TTF 폰트로 이 줄을 다시 그립니다. 투명 글자처럼 직접 편집이 어려운 경우 대화상자에서 AI 후보 추천을 누를 수 있습니다.';
-  fontButton.disabled = selectedObj.objs.length !== 1 || !!selectedObj.group;
+  fontButton.title = '설치된 TTF 폰트로 이 줄을 다시 그립니다. 그림으로 그려진 글자처럼 원래 글꼴을 쓸 수 없으면 비슷한 글꼴을 직접 골라 미리 볼 수 있습니다.';
+  // 여러 조각으로 된 줄도 맞춘다(첫 조각이 줄 전체를 새 폰트로 받고 나머지는 지워진다). 사용자 묶음(group)과
+  // 그림 위 투명 글자가 섞인 여러 조각 줄은 막는다 — 그림 덮기가 첫 조각 자리만 덮어 나머지 그림 글자가 남는다
+  const multi = selectedObj.objs.length > 1;
+  fontButton.disabled = !!selectedObj.group || (multi && selectedObj.objs.some((o) => o.hidden));
+  if (fontButton.disabled) fontButton.title = selectedObj.group ? '묶음을 해제한 뒤 줄마다 맞추세요.' : '그림 위 투명 글자 줄은 조각이 하나일 때만 폰트를 맞출 수 있습니다.';
   panel.appendChild(fontButton);
   const ta = document.createElement('textarea');
   ta.value = initialText; ta.rows = 2;
   panel.appendChild(ta);
-  const openFonts = (autoRecommend = false) => {
+  const openFonts = () => {
     const selection = selectedObj, name = cur;
-    return window.openPdfFontEditor({ name, i: selection.i, idx: selection.objs[0].idx, text: ta.value,
-      ai: () => activeAi, ensureAi, autoRecommend,
+    return window.openPdfFontEditor({ name, i: selection.i, idx: selection.objs[0].idx, remove: selection.objs.slice(1).map((o) => o.idx), text: ta.value,
       onApply: async (result) => {
         if (cur !== name) return;
         mutationSeq++; pdfDirty = true; showDirty(); setUndoRedoState(result.undoLeft, result.redoLeft); maybeFlashUndoTrimmed(result);
-        selectedObj = null; updateEditRadio(); panel.remove();
+        selectedObj = null; panel.remove();
         await refreshPage(selection.i, result.idx);
         flash(`${result.fontLabel} 적용됨 (Ctrl+S로 저장)`);
       } });
   };
-  fontButton.onclick = () => openFonts(false);
+  fontButton.onclick = () => openFonts();
 
   // 정렬 유지(왼/가운데/오른쪽) + 화살표 이동(0.5pt, Shift면 5pt)
   const alignRow = document.createElement('div'); alignRow.className = 'row';
@@ -1333,7 +1099,7 @@ function openInlineEditor(initialText, caret) {
   const maskHint = document.createElement('div'); maskHint.className = 'tip'; maskHint.textContent = '먼저 원문 상태에서 가릴 부분을 선택하세요';
   panel.appendChild(maskHint);
 
-  const tip = document.createElement('div'); tip.className = 'tip'; tip.textContent = 'Shift+Enter로 줄을 나누면 줄마다 아래에 배치됩니다. Claude에게 맡기려면 오른쪽 패널에서 "편집(선택 객체)" 모드로 지시하세요.';
+  const tip = document.createElement('div'); tip.className = 'tip'; tip.textContent = 'Shift+Enter로 줄을 나누면 줄마다 아래에 배치됩니다.';
   panel.appendChild(tip);
   panel.style.visibility = 'hidden';
   wrap.appendChild(panel);
@@ -1367,12 +1133,11 @@ function openInlineEditor(initialText, caret) {
     try {
       // 폰트 대화상자는 투명 글자(그림 속 서체)이거나 이미 폰트를 지정한 줄에서만 자동으로 연다. 원본 폰트에 없는 글자를 넣는 흔한 경우는
       // 예전처럼 맑은 고딕 폴백으로 바로 고친다(대화상자는 [폰트 맞추기] 버튼으로 언제든 열 수 있다).
-      // AI 추천은 대화상자의 버튼을 눌렀을 때만 실행한다 — 선택 영역 이미지 전송과 수십 초 대기를 사용자가 결정한다.
       if (newText !== text && newText.trim() && !/[\r\n]/.test(newText) && objs.length === 1 && !sel.group && (objs[0].hidden || objs[0].fontId)) {
         try {
           const status = await apiPost('/api/pdf/font-status', { name, i, idx: objs[0].idx, text: newText });
           if (sel !== selectedObj || name !== cur || newText !== (ta.value || ' ')) return;
-          if (status.needsAi) { await openFonts(false); return; }
+          if (status.needsAi) { await openFonts(); return; } // 원래 글꼴로 그릴 수 없다 → 사용자가 글꼴을 고른다
         } catch (error) { flash(error.message); return; }
       }
       if (newText === text) { close(); return; } // 변경 없으면 그대로 둔다
@@ -1414,7 +1179,7 @@ function openInlineEditor(initialText, caret) {
     } finally { committing = false; }
     if (!r || cur !== name) return;
     const idxs = r.lineIdxs?.length ? r.lineIdxs : [first.idx]; // 투명 글자를 드러내거나 줄이 늘면 객체 위치가 바뀐다
-    if (selectedObj === sel) { selectedObj = null; updateEditRadio(); }
+    if (selectedObj === sel) { selectedObj = null; }
     await refreshPage(i, idxs[0]);
     const addedLines = (r.results || []).reduce((n, x) => n + (x.inserted || 0), 0);
     const revealed = (r.results || []).some((x) => x.revealed) || r.revealed;
@@ -1444,7 +1209,7 @@ function openInlineEditor(initialText, caret) {
   async function maskParts(parts, maskedText) {
     const { i } = selectedObj, hid = selectedObj.objs.some((o) => o.hidden);
     const r = await pdfMutate('/api/pdf/mask', { name: cur, i, parts, color: maskColor() });
-    selectedObj = null; updateEditRadio();
+    selectedObj = null;
     await refreshPage(i);
     close();
     if (r.ok === false) { flash('가리지 못했습니다 — 이 글자는 가릴 수 없는 형식입니다. 사각형 가리기로 덮으세요'); return; }
@@ -1471,7 +1236,6 @@ async function refreshPage(i, editedIdx) {
   pdfObjects[i] = objs;
   wrap.querySelectorAll('.pdfBox, .pdfEditor, .searchHit').forEach((el) => el.remove());
   const boxed = drawOverlay(wrap, i, objs, pdfPages[i]);
-  rebuildDocText();
   if (searchQuery && !$('#searchBar').hidden) runSearch(true); // 줄이 움직였으면 강조·n/m도 새 위치로(스크롤은 건드리지 않는다)
   if (editedIdx != null) checkOverflow(i, editedIdx, boxed);
   return boxed;
@@ -1508,7 +1272,7 @@ function applyZoom(next, anchor) {
   el.scrollLeft = target.offsetLeft + fx * target.offsetWidth - ax;
   if (editing) {
     const hit = boxedByPage[editing.i].find(({ line }) => line.objs.some((o) => editing.idxs.includes(o.idx)));
-    if (hit) { selectedObj = lineSelection(editing.i, hit.line, wraps[editing.i], hit.box); updateEditRadio(); openInlineEditor(editing.text ?? hit.line.text, editing.caret || undefined); }
+    if (hit) { selectedObj = lineSelection(editing.i, hit.line, wraps[editing.i], hit.box); openInlineEditor(editing.text ?? hit.line.text, editing.caret || undefined); }
   }
   clearTimeout(zoomTimer);
   zoomTimer = setTimeout(() => {
@@ -1541,12 +1305,6 @@ document.addEventListener('keydown', (e) => {
   else if (e.key === '-') { e.preventDefault(); applyZoom(pdfScale / 1.1); }
   else if (e.key === '0') { e.preventDefault(); fitWidth(); }
 });
-function updateEditRadio() {
-  const isPdf = cur && cur.endsWith('.pdf');
-  $('#editRadio').disabled = isPdf ? !selectedObj : false;
-  $('#editRadioLabel').textContent = isPdf ? '편집(선택 객체)' : '편집(MD)';
-  if (isPdf && !selectedObj && document.querySelector('[name=mode]:checked').value === 'edit') document.querySelector('[value=chat]').checked = true;
-}
 
 // ---- P4 WP-B2: 페이지 메뉴(추출·병합·이미지 내보내기·삽입·용량 줄이기) ----
 function currentPageIndex() { // 스크롤 뷰포트 가운데에 가장 가까운 페이지(이미지 삽입·현재 쪽 내보내기 기준)
@@ -2139,83 +1897,7 @@ document.addEventListener('mouseup', async (e) => {
   if (overImage) flash('이미지 위에 덮기만 했습니다 (이미지 안 글자는 남습니다)');
 });
 
-// ---- AI 패널 ----
-function add(cls, text) { const d = document.createElement('div'); d.className = 'msg ' + cls; d.textContent = text; $('#log').appendChild(d); $('#log').scrollTop = 1e9; return d; }
-$('#newChat').onclick = async () => { if (cur && activeAi) await apiPost('/api/session/reset', { name: cur, provider: activeAi.provider }).catch(() => {}); $('#log').innerHTML = ''; add('bot', '새 대화를 시작합니다.'); };
-// Enter 전송, Shift+Enter 줄바꿈 (Ctrl+Enter도 전송). 한글 조합 중(isComposing)의 Enter는 조합 확정이므로 보내지 않는다
-$('#q').addEventListener('keydown', (e) => {
-  if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return;
-  if (e.shiftKey && !e.ctrlKey) return;
-  e.preventDefault(); $('#send').click();
-});
-let chatAbort = null; // 응답 생성 중이면 AbortController — [중지] 버튼·Esc가 끊는다(서버는 연결이 끊기면 CLI 호출도 중단)
-$('#stop').onclick = () => chatAbort?.abort();
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && chatAbort && document.activeElement === $('#q')) chatAbort.abort(); });
-$('#send').onclick = async () => {
-  const q = $('#q').value.trim(); if (!q || !cur || chatAbort) return;
-  if (!ensureAi()) return; // 로그인된 AI가 없으면 Claude/ChatGPT 선택·로그인 대화상자를 열고 입력은 그대로 둔다
-  let mode = document.querySelector('[name=mode]:checked').value;
-  const isPdf = cur.endsWith('.pdf');
-  if (mode === 'edit' && isPdf) mode = 'editText'; // PDF에서는 선택 객체 텍스트만 고침
-  const sendDoc = mode === 'editText' && selectedObj ? selectedObj.text : docText;
-  // 보낸 시점의 문서·선택 줄·본문을 기억한다 — 답이 오는 동안 바뀌었으면 수정안을 엉뚱한 곳에 적용하지 않는다
-  const sentCur = cur, sentDoc = docText, lineKey = (o) => o && `${o.i}:${o.objs.map((x) => x.idx).join(',')}`, sentLine = lineKey(selectedObj);
-  add('me', (mode !== 'chat' ? '✏️ ' : '') + q); $('#q').value = ''; $('#send').disabled = true;
-  const bot = add('bot', mode === 'chat' ? '…' : '문서를 수정하는 중…'); let out = '';
-  chatAbort = new AbortController(); $('#stop').hidden = false;
-  try {
-    const r = await fetch('/api/chat', { method: 'POST', body: JSON.stringify({ mode, doc: sendDoc, name: cur, q, provider: activeAi.provider, model: activeAi.model }), signal: chatAbort.signal });
-    if (!r.ok || !r.body) throw new Error((await r.json().catch(() => null))?.error || `HTTP ${r.status}`);
-    const rd = r.body.getReader(), dec = new TextDecoder(); let buf = '';
-    while (true) {
-      const { value, done } = await rd.read(); if (done) break;
-      buf += dec.decode(value, { stream: true });
-      for (const line of buf.split('\n\n').slice(0, -1)) {
-        if (!line.startsWith('data: ')) continue; const ev = JSON.parse(line.slice(6));
-        if (ev.delta) { out += ev.delta; bot.textContent = mode === 'chat' ? out : `문서를 수정하는 중… ${out.length}자`; }
-        if (ev.notice) flash(ev.notice, 4000);
-        if (ev.error) { bot.textContent = '오류: ' + ev.error; if (ev.code === 'auth') showAuthBanner(activeAi.provider); } // P6 WP-B3: 로그인 만료
-        if (ev.done) {
-          out = ev.done.text || out;
-          const seconds = Number.isFinite(ev.done.ms) ? `${(ev.done.ms / 1000).toFixed(1)}s` : '';
-          const billing = Number.isFinite(ev.done.cost) ? `API 환산 $${ev.done.cost.toFixed(3)}` : (ev.done.billing || '구독');
-          const meta = document.createElement('small'); meta.textContent = [ev.done.model, seconds, billing].filter(Boolean).join(' · ');
-          const clean = out.replace(/^```(?:markdown|md)?\n|\n```$/g, '').trim();
-          const stale = mode !== 'chat' && (cur !== sentCur || (mode === 'edit' ? docText !== sentDoc : lineKey(selectedObj) !== sentLine));
-          if (stale) bot.textContent = `${out}\n\n(다른 문서(또는 다른 줄)로 바뀌어 수정안을 적용하지 않았습니다.)`;
-          else if (mode === 'edit') { bot.textContent = '수정안을 만들었습니다. 왼쪽에서 변경 내용을 확인하고 적용하세요.'; showDiff(docText, clean); }
-          else if (mode === 'editText' && selectedObj) { bot.textContent = '수정안을 만들었습니다. 문서에서 확인하고 Enter로 확정하세요.'; openInlineEditor(clean); }
-          else bot.textContent = out;
-          bot.appendChild(meta);
-        }
-      }
-      buf = buf.split('\n\n').slice(-1)[0];
-    }
-  } catch (error) { bot.textContent = error.name === 'AbortError' ? (out ? `${out}\n\n(중지됨)` : '중지됨') : '오류: ' + error.message; }
-  finally { chatAbort = null; $('#stop').hidden = true; syncAiState(); }
-};
-
-// ---- 줄 단위 diff (LCS) ----
-function lineDiff(a, b) {
-  const A = a.split('\n'), B = b.split('\n'), n = A.length, m = B.length;
-  const L = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
-  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) L[i][j] = A[i] === B[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
-  const out = []; let i = 0, j = 0;
-  while (i < n && j < m) { if (A[i] === B[j]) out.push([' ', A[i++]]), j++; else if (L[i + 1][j] >= L[i][j + 1]) out.push(['-', A[i++]]); else out.push(['+', B[j++]]); }
-  while (i < n) out.push(['-', A[i++]]); while (j < m) out.push(['+', B[j++]]);
-  return out;
-}
-let pendingFor = null; // 수정안을 만든 문서 — 적용은 같은 문서일 때만
-function showDiff(oldT, newT) {
-  pending = newT; pendingFor = cur; const esc = (s) => s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
-  $('#diff').innerHTML = lineDiff(oldT, newT).map(([k, l]) => `<div class="${k === '+' ? 'a' : k === '-' ? 'd' : ''}">${k} ${esc(l) || ' '}</div>`).join('');
-  $('#md').hidden = true; $('#diff').hidden = false; $('#diffbar').hidden = false;
-}
-$('#accept').onclick = () => { if (pending == null || pendingFor !== cur) { pending = null; $('#diff').hidden = $('#diffbar').hidden = true; return flash('다른 문서로 바뀌어 수정안을 적용하지 않았습니다', 4000); } $('#src').value = docText = pending; preview(); closeDiff(); showDirty(); updateMdStatus(); flash('변경 적용됨 (Ctrl+S로 저장)'); };
-$('#reject').onclick = closeDiff;
-function closeDiff() { pending = null; $('#diff').hidden = true; $('#diffbar').hidden = true; $('#md').hidden = false; }
-
-checkHealth(); initFiles();
+showVersion(); initFiles();
 </script>
 </body>
 </html>

@@ -1,12 +1,12 @@
 # Microsoft Store 제출서 문안 (Partner Center에 붙여 넣을 내용)
 
-작성 2026-10-02 · 기준 버전 3.1.2 · 언어: 한국어(ko-KR), 영어(en-US)
+작성 2026-10-02(2026-10-03 AI 기능 제거·앱 이름 변경 반영) · 기준 버전 4.0.0 · 언어: 한국어(ko-KR), 영어(en-US)
 
 ## 기본 정보
 
 | 항목 | 값 |
 |---|---|
-| 앱 이름(예약) | EDITOR_KIM |
+| 앱 이름(예약) | Retext PDF |
 | 가격 | 무료 |
 | 범주 | 생산성(Productivity) |
 | 개인정보 처리방침 URL | https://github.com/kindsusu/EDITOR_KIM/blob/main/PRIVACY.md |
@@ -19,7 +19,7 @@
 
 Partner Center가 묻는 "이 기능을 사용하는 이유"에 넣는다. 영어로 쓴다(심사자용).
 
-> EDITOR_KIM is an Electron desktop app. runFullTrust is required to read and write the user's local PDF and Markdown files, to run its built-in local HTTP server bound to 127.0.0.1 that renders and edits PDFs, and, only when the user invokes AI features, to launch the Claude Code or Codex command-line tools the user has installed and signed in to separately.
+> Retext PDF is an Electron desktop app. runFullTrust is required to read and write the user's local PDF and Markdown files, to run its built-in local HTTP server bound to 127.0.0.1 that renders and edits PDFs. The app does not send documents or any other data off the user's PC.
 
 ## 연령 등급(IARC 설문) 권장 답
 
@@ -30,8 +30,6 @@ Partner Center가 묻는 "이 기능을 사용하는 이유"에 넣는다. 영�
 - 디지털 상품 구매: 없음
 - 무제한 인터넷 접근(웹 브라우저 기능): 없음. 링크는 기본 브라우저로 넘긴다
 - 예상 등급: 전체 이용가(3+)
-
-> AI 응답이 사용자 생성 콘텐츠로 분류되는지 묻는 문항이 나오면 "아니오 — AI는 사용자가 연 문서에 대해 그 사용자에게만 답하고 공유 기능이 없다"로 답한다.
 
 ## 추가 라이선스 조항
 
@@ -55,7 +53,7 @@ PDF 글자를 직접 고치고, 개인정보를 실제로 지워서 가리는 PC
 
 ### 설명
 
-EDITOR_KIM은 PDF를 그림처럼 덮어쓰는 대신 문서 안의 글자를 직접 고치는 PC용 편집기입니다.
+Retext PDF는 PDF를 그림처럼 덮어쓰는 대신 문서 안의 글자를 직접 고치는 PC용 편집기입니다.
 
 글줄을 누르면 그 줄 전체가 편집 창에 들어옵니다. 고친 글자는 원래 글꼴로 다시 그립니다. 원래 글꼴에 없는 글자는 맑은 고딕으로 그리며 [폰트 맞추기]로 다른 글꼴을 지정할 수 있습니다. 줄이 넘치면 줄바꿈하거나 글자를 줄여 폭에 맞춥니다.
 
@@ -65,9 +63,7 @@ EDITOR_KIM은 PDF를 그림처럼 덮어쓰는 대신 문서 안의 글자를 �
 
 Markdown 문서는 왼쪽에서 고치고 오른쪽에서 바로 결과를 봅니다.
 
-문서는 PC 안에서만 처리합니다. 개발자는 어떤 데이터도 수집하지 않습니다.
-
-AI 기능(선택): 문서에 대해 질문하거나 수정을 맡길 수 있습니다. 이 기능을 쓰려면 Claude Code(Anthropic) 또는 Codex(OpenAI)를 PC에 따로 설치하고 본인 계정으로 로그인해야 합니다. API 키는 필요 없습니다. AI 기능을 쓸 때만 현재 문서의 텍스트가 고른 공급자에게 전송됩니다. AI 없이도 모든 편집 기능을 쓸 수 있습니다.
+문서는 PC 안에서만 처리하며 PC 밖으로 보내지 않습니다. 계정이나 인터넷 연결 없이 모든 기능을 쓸 수 있고, 개발자는 어떤 데이터도 수집하지 않습니다.
 
 개인의 비상업적 사용은 무료입니다. 회사·기관의 업무 사용은 사전 승인이 필요합니다(추가 라이선스 조항 참고).
 
@@ -86,7 +82,6 @@ AI 기능(선택): 문서에 대해 질문하거나 수정을 맡길 수 있습�
 11. Markdown 편집과 실시간 미리보기
 12. 긴 작업 진행 표시와 취소, 실행 취소·다시 실행
 13. 문서는 PC 안에서만 처리, 데이터 수집 없음
-14. 선택 사항: Claude Code·Codex로 문서 질문과 수정 맡기기(별도 설치·로그인 필요)
 
 ### 검색어 (최대 7개)
 
@@ -102,7 +97,7 @@ A desktop PDF and Markdown editor that edits the real text in PDFs and redacts b
 
 ### Description
 
-EDITOR_KIM edits the text inside a PDF instead of painting over it.
+Retext PDF edits the text inside a PDF instead of painting over it.
 
 Click a line and the whole line opens in the editor. Edited text is redrawn in the original font. Characters the original font lacks are drawn in Malgun Gothic, and Match Font lets you pick another font. Lines that grow too long are wrapped or shrunk to fit.
 
@@ -112,9 +107,7 @@ Extract, delete, rotate and reorder pages, split and merge PDFs, export pages as
 
 Markdown documents are edited on the left with a live preview on the right.
 
-Documents are processed only on your PC. The developer collects no data.
-
-AI features (optional): ask questions about a document or let AI make edits. These require Claude Code (Anthropic) or Codex (OpenAI) installed separately on your PC and signed in with your own account. No API key is needed. The current document's text is sent to the provider you chose only when you use an AI feature. Every editing feature works without AI.
+Documents are processed only on your PC and never leave it. Every feature works without an account or an internet connection, and the developer collects no data.
 
 Free for personal, non-commercial use. Work use by companies or institutions requires prior approval (see additional license terms).
 
@@ -133,7 +126,6 @@ Free for personal, non-commercial use. Work use by companies or institutions req
 11. Markdown editing with live preview
 12. Progress and cancel for long operations, undo and redo
 13. Documents stay on your PC; no data collection
-14. Optional: ask Claude Code or Codex about a document or let it edit (separate install and sign-in required)
 
 ### Search terms (up to 7)
 

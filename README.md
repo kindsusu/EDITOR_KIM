@@ -1,10 +1,12 @@
-# EDITOR_KIM
+# Retext PDF
+
+> Formerly named EDITOR_KIM (renamed in v4.0.0). The repository URL, settings and your workspace folder keep the old name so nothing breaks for existing users.
 
 [![Release](https://img.shields.io/github/v/release/kindsusu/EDITOR_KIM?label=release)](https://github.com/kindsusu/EDITOR_KIM/releases/latest) [![CI](https://github.com/kindsusu/EDITOR_KIM/actions/workflows/ci.yml/badge.svg)](https://github.com/kindsusu/EDITOR_KIM/actions/workflows/ci.yml) ![Windows 10/11 x64](https://img.shields.io/badge/Windows-10%20%7C%2011%20x64-0078D4) [![License](https://img.shields.io/badge/license-personal%20use-lightgrey)](LICENSE)
 
-![EDITOR_KIM](assets/hero.png)
+![Retext PDF](assets/hero.png)
 
-A local Windows editor that changes PDF text objects directly and removes sensitive text for real. It also includes Markdown editing and an optional AI assistant powered by Claude Code or ChatGPT through Codex, with no API key required.
+A local Windows editor that changes PDF text objects directly and removes sensitive text for real, with Markdown editing on the side. Everything runs on your PC — your documents never leave it.
 
 [한국어](README.ko.md) · [Plan](PLAN.md) · [Releases](https://github.com/kindsusu/EDITOR_KIM/releases)
 
@@ -14,10 +16,10 @@ Get the latest build from **[Releases](https://github.com/kindsusu/EDITOR_KIM/re
 
 | File | Use it when |
 |---|---|
-| `EDITOR_KIM-<version>-setup.exe` | You want a normal install (per user, no admin rights). Adds EDITOR_KIM to the PDF "Open with" list and a Start-menu shortcut. |
-| `EDITOR_KIM-<version>-portable.exe` | You want to run it from a folder or USB stick without installing. |
+| `Retext-PDF-<version>-setup.exe` | You want a normal install (per user, no admin rights). Adds Retext PDF to the PDF "Open with" list and a Start-menu shortcut. |
+| `Retext-PDF-<version>-portable.exe` | You want to run it from a folder or USB stick without installing. |
 
-Requirements: Windows 10 or 11 (x64), about 400 MB of disk space. No account, API key, or internet connection is needed for PDF and Markdown editing.
+Requirements: Windows 10 or 11 (x64), about 400 MB of disk space. No account or internet connection is needed.
 
 **First launch and SmartScreen.** The builds are not code-signed yet, so Windows may show "Windows protected your PC". Check that the file came from this repository's Releases page, then choose **More info → Run anyway**. Alternatively, right-click the downloaded file → **Properties** → tick **Unblock** → OK. Do not turn off Microsoft Defender to get past the warning.
 
@@ -44,9 +46,7 @@ Full notes: [v3.0.0 release](https://github.com/kindsusu/EDITOR_KIM/releases/tag
 - Safe editing: every line edit is applied, saved, reopened, and checked before it replaces the document; anything that fails is rolled back
 - A progress dialog with a cancel button for long document tools (size reduction, export, split, merge, page cleanup), which restores the document or reports how many files were saved when cancelled
 - An undo toast after page deletion, size reduction, rotation, or reordering, separate from the status-bar flash message
-- A banner that offers re-sign-in when the AI provider's login expires mid-session (chat, font recommendation)
 - Markdown editing with a sanitized live preview
-- AI assistant (Claude Code or ChatGPT via Codex) with per-document conversations and font recommendations — sign-in is only requested the first time an AI feature is used
 
 | Before | After |
 |---|---|
@@ -63,15 +63,11 @@ npm start
 
 Double-clicking `run-editor-kim.bat` runs the same source without opening a terminal. Use `npm run serve` for the browser-only mode at <http://localhost:4747>; native file dialogs and PNG insertion are Electron-only there.
 
-## AI sign-in
-
-Nothing is requested at launch — PDF and Markdown editing work without any account. The first time you use the chat panel, press **Send**, or ask for a font recommendation, EDITOR_KIM opens a chooser for **Claude** (Claude Code) or **ChatGPT** (Codex) and walks you through installing and signing in for that provider only. Installation uses WinGet's official packages (`Anthropic.ClaudeCode` or `OpenAI.Codex`); sign-in happens through the provider's own browser flow with your existing subscription. EDITOR_KIM never stores API keys or tokens itself. Once you use an AI feature, the current document text (or the selected region's image, for font recommendations) is sent to the provider you chose.
-
 ## PDF editing
 
 ![Architecture](assets/architecture.svg)
 
-Click a line, edit it, and press Enter to confirm. PDFs exported from Excel, Hangul or Chromium split one line into many text objects (per font run, sometimes per character); fragments that share a baseline and sit next to each other are merged into one editable box, while table cells stay separate (gap size plus a vertical-rule check). Text keeps its original embedded font where possible; characters missing from that font fall back to Malgun Gothic. The **폰트 맞추기** (font match) dialog opens for image-backed hidden text or a text box where you've already chosen a font — pick an installed font or import a TTF, preview the result, and apply with undo support. An AI font recommendation runs only when you press the recommend button in the dialog; only plain TTF fonts are supported, not OTF or variable fonts.
+Click a line, edit it, and press Enter to confirm. PDFs exported from Excel, Hangul or Chromium split one line into many text objects (per font run, sometimes per character); fragments that share a baseline and sit next to each other are merged into one editable box, while table cells stay separate (gap size plus a vertical-rule check). Text keeps its original embedded font where possible; characters missing from that font fall back to Malgun Gothic. The **폰트 맞추기** (font match) dialog opens for image-backed hidden text or a text box where you've already chosen a font — pick an installed font or import a TTF, preview the result, and apply with undo support. When the original font cannot be reused (for example, text drawn as an image), the dialog says so and you choose the closest-looking font yourself; only plain TTF fonts are supported, not OTF or variable fonts.
 
 ![Redaction pipeline](assets/redaction.svg)
 
@@ -79,8 +75,7 @@ Text redaction removes the selected characters from the PDF object, adds a cover
 
 ## Privacy and safety
 
-- Documents never leave your PC unless you use an AI feature. The built-in server listens on `127.0.0.1` only and rejects requests from other sites (host and origin checks).
-- AI requests send only the current document's text, or the selected region's image for font recommendations, to the provider you signed in with.
+- Documents never leave your PC. There is no account, cloud service, or AI connection; the built-in server listens on `127.0.0.1` only and rejects requests from other sites (host and origin checks).
 - Markdown links open in your default browser, and remote images in Markdown are not loaded automatically.
 - Redaction removes characters from the file itself, then re-extracts the page text to confirm; scanned images can only be covered.
 
@@ -106,15 +101,12 @@ Rotated pages keep their text, redaction, search, and drag-to-move overlays alig
 | `Ctrl+S` | Save |
 | `Ctrl+Shift+S` | Save as |
 | `Ctrl+Z` / `Ctrl+Y` | Undo / redo |
-| `Ctrl+J` | Toggle AI panel |
 | `Ctrl+F` | Open the search bar |
 | `Enter` / `Shift+Enter` (in the search box) | Next / previous match |
 | `Esc` (in the search box) | Close the search bar |
 | `PageUp` / `PageDown` / `Home` / `End` | Jump a page / to the first / last page |
 | `Ctrl` + mouse wheel | Zoom the PDF around the cursor |
 | `Ctrl+=` / `Ctrl+-` / `Ctrl+0` | Zoom in / out / fit page width |
-| `Enter` / `Shift+Enter` | Send AI request / new line in the prompt |
-| `Esc` (in the prompt) | Stop the streaming AI reply |
 | `F12` | Developer tools |
 
 ## FAQ
@@ -136,7 +128,7 @@ npm run dist   # release builds
 ```
 
 ```text
-app/                    UI, local server, AI adapters, PDF engine, tests
+app/                    UI, local server, PDF engine, tests
 assets/                 README artwork and diagrams
 tools/                  fixture and icon regeneration tools
 workspace/              fictional test documents
@@ -148,7 +140,6 @@ workspace/              fictional test documents
 - Does not directly edit text inside scanned images.
 - Complex CJK ligatures, vertical text, and unusual fonts may require fallback.
 - Password-protected PDFs are not supported.
-- Files remain local, but document text included in an AI request is sent to the selected provider.
 - Review the license before business or commercial use.
 
 ## License
